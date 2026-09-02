@@ -39,6 +39,41 @@ window.SW = window.SW || {};
     return (Math.abs(paise) / 100).toFixed(2);
   };
 
+  /* ======================= splitting ================================== */
+
+  // Divide a total across n people so the parts sum to the total EXACTLY.
+  // ₹1000 across 3 is 333.34 + 333.33 + 333.33, never 3 × 333.33 = ₹999.99.
+  // The odd paise go to the earliest participants (largest-remainder).
+  SW.splitEqually = function (totalPaise, n) {
+    if (n <= 0) return [];
+    const sign = totalPaise < 0 ? -1 : 1;
+    const total = Math.abs(totalPaise);
+    const base = Math.floor(total / n);
+    let remainder = total - base * n;
+
+    const parts = [];
+    for (let i = 0; i < n; i++) {
+      const extra = remainder > 0 ? 1 : 0;
+      if (remainder > 0) remainder--;
+      parts.push(sign * (base + extra));
+    }
+    return parts;
+  };
+
+  SW.splitEquallyAmong = function (totalPaise, ids) {
+    const parts = SW.splitEqually(totalPaise, ids.length);
+    const out = {};
+    ids.forEach(function (id, i) { out[id] = parts[i]; });
+    return out;
+  };
+
+  // Paise -> the JSON shape create_expense() expects.
+  SW.splitsPayload = function (byUser) {
+    return Object.keys(byUser).map(function (id) {
+      return { user_id: id, amount: SW.rupees(byUser[id]) };
+    });
+  };
+
   /* ======================= generated avatars ========================== */
 
   // Deterministic abstract art from a user id, in the spirit of the
@@ -100,7 +135,7 @@ window.SW = window.SW || {};
     const db = SW.db;
     const me = SW.user.id;
 
-    const [friendRes, expRes, setRes, grpRes] = await Promise.all([
+    const [friendRes, expRes, setRes, grpRes, memRes] = await Promise.all([
       db.from('friendships').select('user_a, user_b'),
       db.from('expenses').select(
         'id, group_id, payer_id, amount, description, emoji, category, ' +
@@ -109,10 +144,12 @@ window.SW = window.SW || {};
       db.from('settlements').select(
         'id, group_id, from_user, to_user, amount, note, settled_on, created_at'
       ).order('settled_on', { ascending: false }),
-      db.from('groups').select('id, name, emoji'),
+      db.from('groups').select('id, name, emoji, simplify_debts'),
+      db.from('group_members').select('group_id, user_id'),
     ]);
 
-    const firstError = friendRes.error || expRes.error || setRes.error || grpRes.error;
+    const firstError = friendRes.error || expRes.error || setRes.error ||
+                       grpRes.error || memRes.error;
     if (firstError) throw firstError;
 
     // Friend ids, from whichever side of the pair I am on.
@@ -131,6 +168,7 @@ window.SW = window.SW || {};
       involved.add(s.from_user);
       involved.add(s.to_user);
     });
+    memRes.data.forEach(function (m) { involved.add(m.user_id); });
     involved.delete(me);
 
     let profiles = [];
@@ -150,11 +188,18 @@ window.SW = window.SW || {};
     const groupsById = {};
     grpRes.data.forEach(function (g) { groupsById[g.id] = g; });
 
+    // group id -> member ids, which is what a group expense splits across.
+    const membersByGroup = {};
+    memRes.data.forEach(function (m) {
+      (membersByGroup[m.group_id] = membersByGroup[m.group_id] || []).push(m.user_id);
+    });
+
     SW.ledger = {
       me: me,
       friendIds: friendIds,
       people: peopleById,
       groups: groupsById,
+      members: membersByGroup,
       expenses: expRes.data,
       settlements: setRes.data,
     };

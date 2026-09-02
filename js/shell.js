@@ -11,13 +11,17 @@ window.SW = window.SW || {};
 
   // Per-view chrome. `tab` is which bottom tab stays lit; `chrome` false
   // means the view supplies its own header (detail pages do).
+  // `tab` is which bottom tab stays lit, or null to leave whichever was lit
+  // alone (an expense can be reached from either Friends or Groups).
+  // `chrome` false means the view supplies its own header.
   const VIEWS = {
-    friends:         { tab: 'friends',  action: 'Add friends',  summary: true,  chrome: true },
-    groups:          { tab: 'groups',   action: 'Create group', summary: true,  chrome: true },
-    activity:        { tab: 'activity', action: null,           summary: false, chrome: true },
-    account:         { tab: 'account',  action: null,           summary: false, chrome: true },
-    'friend-detail': { tab: 'friends',  action: null,           summary: false, chrome: false },
-    'group-detail':  { tab: 'groups',   action: null,           summary: false, chrome: false },
+    friends:          { tab: 'friends',  action: 'Add friends',  summary: true,  chrome: true,  fab: true },
+    groups:           { tab: 'groups',   action: 'Create group', summary: true,  chrome: true,  fab: true },
+    activity:         { tab: 'activity', action: null,           summary: false, chrome: true,  fab: true },
+    account:          { tab: 'account',  action: null,           summary: false, chrome: true,  fab: false },
+    'friend-detail':  { tab: 'friends',  action: null,           summary: false, chrome: false, fab: true },
+    'group-detail':   { tab: 'groups',   action: null,           summary: false, chrome: false, fab: true },
+    'expense-detail': { tab: null,       action: null,           summary: false, chrome: false, fab: false },
   };
 
   // Views register their renderer here; showView calls it on every entry.
@@ -67,11 +71,13 @@ window.SW = window.SW || {};
     document.querySelectorAll('[data-view]').forEach(function (el) {
       el.classList.toggle('is-active', el.getAttribute('data-view') === view);
     });
-    document.querySelectorAll('.tab').forEach(function (t) {
-      const on = t.getAttribute('data-tab') === cfg.tab;
-      t.classList.toggle('is-active', on);
-      t.setAttribute('aria-current', on ? 'page' : 'false');
-    });
+    if (cfg.tab) {
+      document.querySelectorAll('.tab').forEach(function (t) {
+        const on = t.getAttribute('data-tab') === cfg.tab;
+        t.classList.toggle('is-active', on);
+        t.setAttribute('aria-current', on ? 'page' : 'false');
+      });
+    }
 
     // Detail views bring their own header.
     document.getElementById('app-header').hidden = !cfg.chrome;
@@ -82,8 +88,7 @@ window.SW = window.SW || {};
 
     document.getElementById('summary').hidden = !cfg.summary;
 
-    // The FAB adds an expense; it has no meaning on Account.
-    document.getElementById('fab').hidden = (view === 'account');
+    document.getElementById('fab').hidden = !cfg.fab;
 
     activeView = view;
     activeParam = param || null;

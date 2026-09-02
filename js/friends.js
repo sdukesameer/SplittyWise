@@ -33,6 +33,24 @@ window.SW = window.SW || {};
 
   /* ======================= ledger refresh ============================= */
 
+  // Recompute and repaint from the ledger already in memory. Kept separate
+  // from refreshLedger so an optimistic change (deleting an expense with an
+  // undo window) can be reflected without a refetch that would undo it.
+  SW.recompute = function () {
+    nets = SW.friendBalances();
+    renderSummary();
+    renderFriends();
+    const view = SW.activeView();
+    if (view === 'friend-detail') renderFriendDetail(SW.currentFriendId);
+    if (view === 'expense-detail' && SW.renderExpenseDetail) {
+      SW.renderExpenseDetail(SW.currentExpenseId);
+    }
+  };
+
+  SW.friendNet = function (id) {
+    return (nets[id] || { net: 0 }).net;
+  };
+
   SW.refreshLedger = async function () {
     try {
       await SW.loadLedger();
@@ -41,10 +59,7 @@ window.SW = window.SW || {};
       SW.toast('Could not load balances: ' + (err.message || err), 'error');
       return;
     }
-    nets = SW.friendBalances();
-    renderSummary();
-    renderFriends();
-    if (SW.activeView() === 'friend-detail') renderFriendDetail(SW.currentFriendId);
+    SW.recompute();
   };
 
   /* ======================= summary ==================================== */
@@ -382,6 +397,10 @@ window.SW = window.SW || {};
 
   document.getElementById('friend-back').addEventListener('click', function () {
     SW.navigate('friends');
+  });
+
+  document.getElementById('friend-add-expense').addEventListener('click', function () {
+    SW.openExpenseSheet({ friendId: SW.currentFriendId });
   });
 
   /* ---- remove a friend ---- */

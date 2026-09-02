@@ -43,6 +43,12 @@
       <stop offset=".55" stop-color="#14B8A6"/>
       <stop offset="1" stop-color="#6366F1"/>
     </linearGradient>
+    <symbol id="ic-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M16.5 3.5l4 4L8 20H4v-4z"/><path d="M13.5 6.5l4 4"/>
+    </symbol>
+    <symbol id="ic-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>
+    </symbol>
     <symbol id="ic-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
       <path d="M15 5l-7 7 7 7"/>
     </symbol>
@@ -490,8 +496,7 @@
         <div class="chip-row">
           <button type="button" class="chip is-primary" id="friend-settle"
                   data-todo="Settling up arrives in phase 6">Settle up</button>
-          <button type="button" class="chip" id="friend-add-expense"
-                  data-todo="Adding expenses arrives in phase 5">Add expense</button>
+          <button type="button" class="chip" id="friend-add-expense">Add expense</button>
           <button type="button" class="chip" id="friend-remove">Remove friend</button>
         </div>
       </header>
@@ -505,9 +510,52 @@
       </div>
     </div>
 
+    <!-- ---------- One expense ---------- -->
+    <div data-view="expense-detail">
+      <header class="detail-header">
+        <div class="detail-bar">
+          <button class="icon-btn round" id="exp-back" aria-label="Back">
+            <svg aria-hidden="true"><use href="#ic-back"/></svg>
+          </button>
+          <span class="grow"></span>
+          <button class="icon-btn round" id="exp-edit" aria-label="Edit this expense">
+            <svg aria-hidden="true"><use href="#ic-edit"/></svg>
+          </button>
+          <button class="icon-btn round" id="exp-delete" aria-label="Delete this expense"
+                  style="margin-left:6px">
+            <svg aria-hidden="true"><use href="#ic-trash"/></svg>
+          </button>
+        </div>
+
+        <div class="exp-hero">
+          <div class="exp-emoji" id="exp-emoji">🧾</div>
+          <div class="exp-desc" id="exp-desc">&nbsp;</div>
+          <div class="exp-amount" id="exp-amount">&nbsp;</div>
+          <div class="exp-meta" id="exp-meta">&nbsp;</div>
+        </div>
+      </header>
+
+      <div class="exp-your-share" id="exp-share" hidden>
+        <span id="exp-share-label"></span>
+        <span class="val" id="exp-share-value"></span>
+      </div>
+
+      <img class="exp-receipt" id="exp-receipt" alt="Receipt photo" hidden>
+
+      <div class="section-label">Split</div>
+      <div class="list" id="exp-splits"></div>
+
+      <div class="empty" id="exp-missing" hidden>
+        <div class="empty-art">🤷</div>
+        <h3>Expense not found</h3>
+        <p>It may have been deleted, or you no longer have access to it.</p>
+        <button type="button" class="btn btn-ghost" id="exp-missing-back">Back to friends</button>
+      </div>
+    </div>
+
   </main>
 
-  <button class="fab" id="fab" data-todo="Adding expenses arrives in phase 5">
+  <button class="fab" id="fab">
     <svg aria-hidden="true"><use href="#ic-receipt"/></svg>
     <span>Add expense</span>
   </button>
@@ -548,6 +596,8 @@
 <script src="js/auth.js"></script>
 <script src="js/balances.js"></script>
 <script src="js/shell.js"></script>
+<script src="js/emoji.js"></script>
 <script src="js/friends.js"></script>
+<script src="js/expense.js"></script>
 </body>
 </html>

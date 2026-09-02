@@ -55,6 +55,50 @@ window.SW = window.SW || {};
     }, life);
   };
 
+  // A toast carrying one action, used for undo. The destructive work is
+  // deferred until the toast expires, so undo cancels rather than reverses —
+  // nothing has to be reconstructed, and no notifications get re-sent.
+  SW.toastAction = function (message, actionLabel, onAction, onExpire, ms) {
+    const host = document.getElementById('toast-host');
+    if (!host) return;
+
+    const el = document.createElement('div');
+    el.className = 'toast';
+
+    const text = document.createElement('span');
+    text.textContent = message;
+    el.appendChild(text);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'toast-action';
+    btn.textContent = actionLabel;
+    el.appendChild(btn);
+
+    host.appendChild(el);
+
+    let settled = false;
+    function dismiss() {
+      el.classList.add('is-out');
+      setTimeout(function () { el.remove(); }, 220);
+    }
+
+    const timer = setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      dismiss();
+      if (onExpire) onExpire();
+    }, ms || 5000);
+
+    btn.addEventListener('click', function () {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      dismiss();
+      if (onAction) onAction();
+    });
+  };
+
   /* ---- buttons --------------------------------------------------------- */
 
   SW.busy = function (btn, on) {
@@ -127,11 +171,13 @@ window.SW = window.SW || {};
   const contentEl = document.getElementById('sheet-content');
   const actionsEl = document.getElementById('sheet-actions');
 
-  // opts: { title, body, rawBody, confirm, cancel, onOpen, onConfirm }
+  // opts: { title, body, rawBody, confirm, cancel, onOpen, onConfirm, onClose }
   //   body     — markup wrapped in .sheet-body padding
   //   rawBody  — markup inserted as-is, for content that owns its own layout
   //   onConfirm(btn) — return false to keep the sheet open (e.g. on a
   //                    validation failure); anything else closes it
+  //   onClose()      — fires however the sheet closes: confirmed, cancelled,
+  //                    backdrop, or Escape. Used to return to a parent sheet.
   SW.sheet = function (opts) {
     active = opts;
 
@@ -185,11 +231,15 @@ window.SW = window.SW || {};
   };
 
   SW.closeSheet = function () {
+    const closing = active;
     scrim.classList.remove('is-open');
     document.body.style.overflow = '';
     contentEl.innerHTML = '';
     actionsEl.innerHTML = '';
     active = null;
+    // Called last, and after `active` is cleared, so the handler is free to
+    // open another sheet without it being torn down immediately.
+    if (closing && closing.onClose) closing.onClose();
   };
 
   // Tapping the backdrop closes; tapping inside the sheet must not.

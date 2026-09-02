@@ -1155,3 +1155,347 @@ button { font: inherit; color: inherit; }
 .opt .tick { margin-left: auto; color: var(--teal); opacity: 0; flex: none; }
 .opt.is-on .tick { opacity: 1; }
 .opt.is-on { color: var(--teal); }
+
+/* ==========================================================================
+   PHASE 5 — expenses
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Amount + description, the top of the add-expense form
+   -------------------------------------------------------------------------- */
+
+.amount-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0 2px;
+}
+
+.emoji-btn {
+  flex: none;
+  width: 58px; height: 58px;
+  border-radius: var(--r-md);
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  font-size: 27px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: border-color 0.14s ease, transform 0.1s ease;
+}
+.emoji-btn:hover { border-color: var(--teal); }
+.emoji-btn:active { transform: scale(0.94); }
+
+.amount-field { flex: 1; display: flex; align-items: baseline; gap: 4px; min-width: 0; }
+.amount-field .cur {
+  font-size: 27px;
+  font-weight: 800;
+  color: var(--muted);
+  flex: none;
+}
+.amount-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid var(--line);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  padding: 4px 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.amount-input:focus { outline: none; border-bottom-color: var(--teal); }
+.amount-input::placeholder { color: var(--faint); font-weight: 700; }
+.amount-input::-webkit-outer-spin-button,
+.amount-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* --------------------------------------------------------------------------
+   Tappable picker rows (who paid, which group, what date)
+   -------------------------------------------------------------------------- */
+
+.picker-group {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 12px 14px;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--line);
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.picker-row:first-child { border-top: 0; }
+.picker-row:hover { background: var(--surface-2); }
+.picker-row .pr-label {
+  font-size: 13.5px;
+  color: var(--muted);
+  flex: none;
+  min-width: 74px;
+  font-weight: 700;
+}
+.picker-row .pr-value {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.picker-row .pr-value.is-empty { color: var(--faint); font-weight: 600; }
+.picker-row .chev { color: var(--faint); flex: none; }
+
+/* The date row holds a real date input so the OS picker appears. */
+.picker-row input[type='date'] {
+  flex: 1;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: right;
+  padding: 0;
+}
+.picker-row input[type='date']:focus { outline: none; }
+.picker-row input[type='date']::-webkit-calendar-picker-indicator {
+  filter: invert(0.6);
+  cursor: pointer;
+}
+
+/* --------------------------------------------------------------------------
+   Split editor
+   -------------------------------------------------------------------------- */
+
+.split-block {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+.split-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.split-head .seg { flex: 1; }
+
+.split-list { display: flex; flex-direction: column; }
+
+.split-person {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 13px;
+  border-top: 1px solid var(--line);
+}
+.split-person:first-child { border-top: 0; }
+.split-person .avatar { width: 34px; height: 34px; font-size: 16px; }
+.split-person .sp-name {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.split-person .sp-fixed {
+  font-size: 15px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.sp-amount {
+  flex: none;
+  width: 106px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--surface-2);
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 5px 9px;
+}
+.sp-amount:focus-within { border-color: var(--teal); }
+.sp-amount .cur { color: var(--muted); font-size: 14px; font-weight: 700; flex: none; }
+.sp-amount input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  padding: 0;
+}
+.sp-amount input:focus { outline: none; }
+.sp-amount input::-webkit-outer-spin-button,
+.sp-amount input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+.split-foot {
+  padding: 10px 13px;
+  border-top: 1px solid var(--line);
+  font-size: 13.5px;
+  font-weight: 700;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--surface-2);
+}
+.split-foot .sf-state.is-ok { color: var(--owed); }
+.split-foot .sf-state.is-off { color: var(--owe); }
+.split-foot .sf-total { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* --------------------------------------------------------------------------
+   Receipt attachment
+   -------------------------------------------------------------------------- */
+
+.receipt-row { display: flex; align-items: center; gap: 11px; }
+.receipt-thumb {
+  width: 46px; height: 46px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  object-fit: cover;
+  flex: none;
+}
+.receipt-drop {
+  flex: 1;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  background: none;
+  color: var(--muted);
+  padding: 12px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+}
+.receipt-drop:hover { border-color: var(--teal); color: var(--teal); }
+
+/* --------------------------------------------------------------------------
+   Expense detail page
+   -------------------------------------------------------------------------- */
+
+.exp-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 22px 20px;
+  text-align: center;
+}
+.exp-hero .exp-emoji {
+  width: 72px; height: 72px;
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  font-size: 35px;
+}
+.exp-hero .exp-desc {
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+.exp-hero .exp-amount {
+  font-size: 31px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.exp-hero .exp-meta { font-size: 14px; color: var(--muted); }
+
+.exp-your-share {
+  margin: 0 14px 14px;
+  padding: 12px 16px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.exp-your-share .val { font-variant-numeric: tabular-nums; font-weight: 800; }
+.exp-your-share.is-owed .val { color: var(--owed); }
+.exp-your-share.is-owe .val { color: var(--owe); }
+.exp-your-share.is-flat .val { color: var(--settled); }
+
+.exp-receipt {
+  display: block;
+  margin: 0 14px 14px;
+  width: calc(100% - 28px);
+  max-height: 320px;
+  object-fit: contain;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+/* --------------------------------------------------------------------------
+   Toast with an action (undo)
+   -------------------------------------------------------------------------- */
+
+.toast .toast-action {
+  background: none;
+  border: 0;
+  color: var(--teal);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  padding: 2px 2px 2px 8px;
+  margin-left: 2px;
+  border-left: 1px solid var(--line-strong);
+}
+.toast .toast-action:hover { color: var(--text); }
+
+/* Native selects inside picker rows: the OS wheel on mobile beats any
+   custom dropdown, so these stay real <select> elements. */
+.picker-row select {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: right;
+  padding: 0 2px 0 0;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  direction: rtl;            /* keeps the text against the chevron */
+}
+.picker-row select:focus { outline: none; }
+.picker-row select option { direction: ltr; background: var(--surface); color: var(--text); }
+.picker-row select:invalid { color: var(--faint); font-weight: 600; }
