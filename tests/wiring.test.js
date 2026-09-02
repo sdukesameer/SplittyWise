@@ -274,7 +274,26 @@ check('every SW.* reference is assigned somewhere',
   unresolvedCalls.length === 0, unresolvedCalls);
 console.log('  ' + swDefined.size + ' names defined, ' + called.size + ' referenced');
 
-/* ---------------- 10. no leftover placeholders ---------------- */
+/* ---------------- 10. stacked text actually stacks ---------------- */
+
+// These are rendered as <span> pairs inside a flex item. The parent gets
+// blockified but the children do not, so without an explicit display they
+// flow inline and the subtitle lands beside the title instead of under it.
+console.log('\n--- stacked title/subtitle pairs ---');
+const mustBlock = ['row-title', 'row-sub', 'ledger-title', 'ledger-sub',
+                   'pl-text', 'pl-sub', 'set-title', 'set-sub'];
+const notBlock = mustBlock.filter(cls => {
+  const rule = new RegExp('\\.' + cls + '\\b[^{]*\\{([^}]*)\\}', 'g');
+  let found = false;
+  for (const m of css.matchAll(rule)) if (/display:\s*block/.test(m[1])) found = true;
+  return !found;
+});
+check('every stacked pair is display:block', notBlock.length === 0, notBlock);
+
+// And a check switched on by its own class must have a rule for that.
+check('.sp-check.is-on is styled', /\.sp-check\.is-on/.test(css));
+
+/* ---------------- 11. no leftover placeholders ---------------- */
 
 console.log('\n--- placeholders ---');
 const stale = [];
