@@ -393,6 +393,10 @@ window.SW = window.SW || {};
     activityLoaded = false;
     if (activeView === 'activity') loadActivity(true);
 
+    // Redeem first, so a friend or group gained from an invite is already
+    // there when the ledger loads.
+    if (SW.redeemPendingInvite) await SW.redeemPendingInvite();
+
     // The ledger drives Friends, Groups and the balance summary.
     if (SW.refreshLedger) await SW.refreshLedger();
 

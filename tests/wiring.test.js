@@ -39,8 +39,15 @@ for (const m of schema.matchAll(/create or replace function public\.(\w+)\s*\(([
 }
 
 console.log('--- schema ---');
-check('8 tables parsed', Object.keys(tables).length === 8, Object.keys(tables));
-check('15 functions parsed', Object.keys(functions).length === 15, Object.keys(functions));
+const NEEDED_TABLES = ['profiles','friendships','groups','group_members','expenses',
+  'expense_splits','expense_payers','settlements','notifications','invites'];
+check('every expected table parsed',
+  NEEDED_TABLES.every(t => tables[t]), NEEDED_TABLES.filter(t => !tables[t]));
+const NEEDED_FNS = ['create_expense','update_expense','create_group',
+  'add_friend_by_email','add_group_member_by_email','add_group_members',
+  'create_invite','redeem_invite','mark_all_notifications_read'];
+check('every callable function parsed',
+  NEEDED_FNS.every(f => functions[f]), NEEDED_FNS.filter(f => !functions[f]));
 
 /* ---------------- 1. every RPC exists, with the args passed ---------------- */
 

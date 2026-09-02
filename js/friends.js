@@ -246,11 +246,22 @@ window.SW = window.SW || {};
           '<input class="input" id="add-friend-email" type="email" inputmode="email" ' +
                  'autocomplete="off" autocapitalize="off" spellcheck="false" ' +
                  'placeholder="friend@example.com">' +
-          '<span class="hint">They need a SplittyWise account already.</span>' +
+          '<span class="hint">They need a SplittyWise account already. ' +
+            'If they do not, send them a link instead.</span>' +
           '<div class="field-error" id="add-friend-error"></div>' +
+        '</div>' +
+        '<div class="sheet-actions" style="padding-top:0">' +
+          '<button type="button" class="btn-text" id="add-friend-link" ' +
+                  'style="align-self:center;padding:8px">🔗 Invite with a link instead</button>' +
         '</div>',
       confirm: 'Add friend',
-      onOpen: function () { document.getElementById('add-friend-email').focus(); },
+      onOpen: function () {
+        document.getElementById('add-friend-email').focus();
+        document.getElementById('add-friend-link').addEventListener('click', function () {
+          SW.closeSheet();
+          SW.shareInvite(null);
+        });
+      },
       onConfirm: async function (btn) {
         const input = document.getElementById('add-friend-email');
         const email = input.value.trim().toLowerCase();

@@ -4,7 +4,7 @@
 //  Bump CACHE when shipping, so the old shell is thrown away.
 // ---------------------------------------------------------------------------
 
-const CACHE = 'splittywise-v2';
+const CACHE = 'splittywise-v3';
 
 const SHELL = [
   './',
@@ -19,6 +19,7 @@ const SHELL = [
   './js/balances.js',
   './js/shell.js',
   './js/emoji.js',
+  './js/invite.js',
   './js/friends.js',
   './js/scan.js',
   './js/expense.js',

@@ -79,6 +79,27 @@ create table if not exists public.expense_splits (
   unique (expense_id, user_id)
 );
 
+-- Who actually put money in. Written for every expense, including the
+-- ordinary one-payer case, so the balance engine has a single code path.
+-- expenses.payer_id stays as the primary payer, for "Ali paid ₹1,200" labels
+-- and for rows written before this table existed.
+create table if not exists public.expense_payers (
+  expense_id  uuid not null references public.expenses(id) on delete cascade,
+  user_id     uuid not null references public.profiles(id) on delete cascade,
+  amount      numeric(12,2) not null check (amount > 0),
+  primary key (expense_id, user_id)
+);
+
+-- A share link. Random token rather than an encoded user id, so an invite
+-- cannot be forged to make someone your friend without their say.
+create table if not exists public.invites (
+  token       text primary key,
+  created_by  uuid not null references public.profiles(id) on delete cascade,
+  group_id    uuid references public.groups(id) on delete cascade,
+  created_at  timestamptz not null default now(),
+  expires_at  timestamptz not null default now() + interval '14 days'
+);
+
 -- A payback. Never edits an expense; balances are (expenses - settlements).
 create table if not exists public.settlements (
   id          uuid primary key default gen_random_uuid(),
@@ -127,6 +148,9 @@ create index if not exists idx_expenses_group      on public.expenses(group_id);
 create index if not exists idx_expenses_payer      on public.expenses(payer_id);
 create index if not exists idx_expenses_date       on public.expenses(expense_date desc);
 create index if not exists idx_splits_expense      on public.expense_splits(expense_id);
+create index if not exists idx_payers_expense      on public.expense_payers(expense_id);
+create index if not exists idx_payers_user         on public.expense_payers(user_id);
+create index if not exists idx_invites_creator     on public.invites(created_by);
 create index if not exists idx_splits_user         on public.expense_splits(user_id);
 create index if not exists idx_settle_from         on public.settlements(from_user);
 create index if not exists idx_settle_to           on public.settlements(to_user);
@@ -212,6 +236,8 @@ alter table public.groups         enable row level security;
 alter table public.group_members  enable row level security;
 alter table public.expenses       enable row level security;
 alter table public.expense_splits enable row level security;
+alter table public.expense_payers enable row level security;
+alter table public.invites        enable row level security;
 alter table public.settlements    enable row level security;
 alter table public.notifications  enable row level security;
 
@@ -336,6 +362,34 @@ create policy splits_write on public.expense_splits
   for all to authenticated
   using (public.can_see_expense(expense_id, auth.uid()))
   with check (public.can_see_expense(expense_id, auth.uid()));
+
+-- ---- expense_payers --------------------------------------------------------
+drop policy if exists payers_select on public.expense_payers;
+create policy payers_select on public.expense_payers
+  for select to authenticated
+  using (user_id = auth.uid() or public.can_see_expense(expense_id, auth.uid()));
+
+drop policy if exists payers_write on public.expense_payers;
+create policy payers_write on public.expense_payers
+  for all to authenticated
+  using (public.can_see_expense(expense_id, auth.uid()))
+  with check (public.can_see_expense(expense_id, auth.uid()));
+
+-- ---- invites ---------------------------------------------------------------
+-- Only your own invites are listable. Redeeming goes through
+-- redeem_invite(), which is security definer, so a recipient never needs to
+-- read the table and tokens cannot be enumerated.
+drop policy if exists invites_select on public.invites;
+create policy invites_select on public.invites
+  for select to authenticated using (created_by = auth.uid());
+
+drop policy if exists invites_insert on public.invites;
+create policy invites_insert on public.invites
+  for insert to authenticated with check (created_by = auth.uid());
+
+drop policy if exists invites_delete on public.invites;
+create policy invites_delete on public.invites
+  for delete to authenticated using (created_by = auth.uid());
 
 -- ---- settlements -----------------------------------------------------------
 drop policy if exists settlements_select on public.settlements;
@@ -520,12 +574,164 @@ begin
   );
 end $$;
 
+-- Add several friends to a group at once, so nobody has to retype an email
+-- address they already have as a friend.
+create or replace function public.add_group_members(
+  p_group_id uuid,
+  p_user_ids uuid[]
+) returns json language plpgsql security definer set search_path = public as $$
+declare
+  me       uuid := auth.uid();
+  my_name  text;
+  gname    text;
+  uid      uuid;
+  added    int := 0;
+  skipped  int := 0;
+begin
+  if me is null then raise exception 'Not authenticated'; end if;
+  if not public.is_group_member(p_group_id, me) then
+    raise exception 'You are not a member of this group';
+  end if;
+
+  select full_name into my_name from public.profiles where id = me;
+  select name      into gname   from public.groups   where id = p_group_id;
+
+  foreach uid in array coalesce(p_user_ids, '{}'::uuid[])
+  loop
+    -- Only people you already know: a friend, or someone already sharing a
+    -- group with you. Otherwise this would be a way to pull in strangers.
+    if uid = me
+       or public.is_group_member(p_group_id, uid)
+       or not (public.are_friends(me, uid)
+               or exists (select 1 from public.group_peers(me) g where g = uid))
+    then
+      skipped := skipped + 1;
+      continue;
+    end if;
+
+    insert into public.group_members (group_id, user_id) values (p_group_id, uid)
+    on conflict do nothing;
+
+    if not public.are_friends(me, uid) then
+      insert into public.friendships (user_a, user_b, created_by)
+      values (least(me, uid), greatest(me, uid), me)
+      on conflict do nothing;
+    end if;
+
+    insert into public.notifications (user_id, actor_id, type, title, body, group_id)
+    values (uid, me, 'group_added',
+            my_name || ' added you to ' || gname, 'Tap to see the group.', p_group_id);
+
+    added := added + 1;
+  end loop;
+
+  return json_build_object('ok', true, 'added', added, 'skipped', skipped);
+end $$;
+
+-- ============================================================================
+--  7b. INVITE LINKS
+-- ============================================================================
+
+-- Mint a share link. Optionally tied to a group, so opening it both befriends
+-- the inviter and joins the group.
+create or replace function public.create_invite(
+  p_group_id uuid default null
+) returns json language plpgsql security definer set search_path = public as $$
+declare
+  me    uuid := auth.uid();
+  tok   text;
+begin
+  if me is null then raise exception 'Not authenticated'; end if;
+
+  if p_group_id is not null and not public.is_group_member(p_group_id, me) then
+    raise exception 'You are not a member of this group';
+  end if;
+
+  -- 12 random bytes, base64 made URL-safe. Random rather than an encoded
+  -- user id, so a link cannot be forged to make someone your friend.
+  tok := rtrim(replace(replace(encode(gen_random_bytes(12), 'base64'), '/', '_'), '+', '-'), '=');
+
+  insert into public.invites (token, created_by, group_id)
+  values (tok, me, p_group_id);
+
+  return json_build_object('ok', true, 'token', tok,
+                           'expires_at', (now() + interval '14 days')::text);
+end $$;
+
+-- Redeem one. Security definer because the recipient has no read access to
+-- invites at all, which is what stops tokens being enumerated.
+create or replace function public.redeem_invite(
+  p_token text
+) returns json language plpgsql security definer set search_path = public as $$
+declare
+  me       uuid := auth.uid();
+  inv      public.invites;
+  inviter  public.profiles;
+  my_name  text;
+  gname    text;
+  joined   boolean := false;
+begin
+  if me is null then raise exception 'Not authenticated'; end if;
+
+  select * into inv from public.invites where token = trim(p_token);
+  if inv.token is null then
+    return json_build_object('ok', false, 'error', 'invalid');
+  end if;
+  if inv.expires_at < now() then
+    return json_build_object('ok', false, 'error', 'expired');
+  end if;
+  if inv.created_by = me then
+    return json_build_object('ok', false, 'error', 'self');
+  end if;
+
+  select * into inviter from public.profiles where id = inv.created_by;
+  select full_name into my_name from public.profiles where id = me;
+
+  if not public.are_friends(me, inv.created_by) then
+    insert into public.friendships (user_a, user_b, created_by)
+    values (least(me, inv.created_by), greatest(me, inv.created_by), inv.created_by)
+    on conflict do nothing;
+  end if;
+
+  if inv.group_id is not null and not public.is_group_member(inv.group_id, me) then
+    insert into public.group_members (group_id, user_id) values (inv.group_id, me)
+    on conflict do nothing;
+    select name into gname from public.groups where id = inv.group_id;
+    joined := true;
+  end if;
+
+  -- Tell the inviter it worked, so they are not left wondering.
+  insert into public.notifications (user_id, actor_id, type, title, body, group_id)
+  values (inv.created_by, me, 'invite_accepted',
+          my_name || ' joined from your invite',
+          coalesce('Added to ' || gname, 'You are now friends.'), inv.group_id);
+
+  return json_build_object('ok', true,
+                           'inviter', inviter.full_name,
+                           'group', gname,
+                           'joined_group', joined);
+end $$;
+
 -- ============================================================================
 --  8. EXPENSES
 --  Written through an RPC so that the expense row, its splits, and the
 --  notification fan-out either all land or none do. p_splits is
 --  [{"user_id": "...", "amount": 123.45}, ...] and must sum to p_amount.
 -- ============================================================================
+
+-- Adding a parameter changes the signature, and `create or replace` would
+-- leave the old one behind as an overload, making every call ambiguous.
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as sig
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'create_expense'
+  loop
+    execute 'drop function ' || r.sig;
+  end loop;
+end $$;
 
 create or replace function public.create_expense(
   p_amount       numeric,
@@ -538,30 +744,47 @@ create or replace function public.create_expense(
   p_split_mode   text    default 'equal',
   p_expense_date date    default current_date,
   p_notes        text    default null,
-  p_receipt_path text    default null
+  p_receipt_path text    default null,
+  p_payers       jsonb   default null
 ) returns uuid language plpgsql security definer set search_path = public as $$
 declare
   me          uuid := auth.uid();
   payer       uuid := coalesce(p_payer_id, auth.uid());
+  payers      jsonb;
   eid         uuid;
   split_total numeric(12,2);
+  payer_total numeric(12,2);
   n_splits    int;
+  n_payers    int;
   bad         uuid;
   actor_name  text;
   gname       text;
 begin
   if me is null then raise exception 'Not authenticated'; end if;
 
+  -- One payer is just the one-row case of many, so normalise immediately and
+  -- keep a single code path from here on.
+  payers := coalesce(p_payers, jsonb_build_array(
+    jsonb_build_object('user_id', payer, 'amount', round(p_amount, 2))));
+
   -- ---- shape checks --------------------------------------------------------
   if p_splits is null or jsonb_typeof(p_splits) <> 'array' then
     raise exception 'p_splits must be a JSON array';
+  end if;
+  if jsonb_typeof(payers) <> 'array' then
+    raise exception 'p_payers must be a JSON array';
   end if;
 
   select count(*), coalesce(sum((s->>'amount')::numeric), 0)
     into n_splits, split_total
     from jsonb_array_elements(p_splits) s;
 
+  select count(*), coalesce(sum((s->>'amount')::numeric), 0)
+    into n_payers, payer_total
+    from jsonb_array_elements(payers) s;
+
   if n_splits = 0 then raise exception 'An expense needs at least one split'; end if;
+  if n_payers = 0 then raise exception 'An expense needs at least one payer'; end if;
 
   if n_splits <> (
     select count(distinct (s->>'user_id')::uuid) from jsonb_array_elements(p_splits) s
@@ -569,37 +792,52 @@ begin
     raise exception 'The same person is listed twice in the split';
   end if;
 
+  if n_payers <> (
+    select count(distinct (s->>'user_id')::uuid) from jsonb_array_elements(payers) s
+  ) then
+    raise exception 'The same person is listed twice as a payer';
+  end if;
+
   if split_total <> round(p_amount, 2) then
     raise exception 'Splits total %, expense is % — they must match',
       split_total, round(p_amount, 2);
   end if;
 
+  if payer_total <> round(p_amount, 2) then
+    raise exception 'Payments total %, expense is % — they must match',
+      payer_total, round(p_amount, 2);
+  end if;
+
+  -- The primary payer, used for "Ali paid ₹1,200" labels, is whoever put in
+  -- the most.
+  select (s->>'user_id')::uuid into payer
+    from jsonb_array_elements(payers) s
+    order by (s->>'amount')::numeric desc, (s->>'user_id')
+    limit 1;
+
   -- ---- authorisation -------------------------------------------------------
   if p_group_id is not null then
-    -- Group expense: caller, payer and every split participant must be members.
     if not public.is_group_member(p_group_id, me) then
       raise exception 'You are not a member of this group';
     end if;
-    if not public.is_group_member(p_group_id, payer) then
-      raise exception 'The payer is not a member of this group';
-    end if;
-    select (s->>'user_id')::uuid into bad
-      from jsonb_array_elements(p_splits) s
-      where not public.is_group_member(p_group_id, (s->>'user_id')::uuid)
-      limit 1;
+    select u into bad from (
+      select (s->>'user_id')::uuid as u from jsonb_array_elements(p_splits) s
+      union
+      select (s->>'user_id')::uuid from jsonb_array_elements(payers) s
+    ) everyone
+    where not public.is_group_member(p_group_id, u)
+    limit 1;
     if bad is not null then
       raise exception 'User % is not a member of this group', bad;
     end if;
   else
-    -- 1:1 expense: everyone involved must be the caller or a friend of theirs.
-    if payer <> me and not public.are_friends(me, payer) then
-      raise exception 'The payer is not one of your friends';
-    end if;
-    select (s->>'user_id')::uuid into bad
-      from jsonb_array_elements(p_splits) s
-      where (s->>'user_id')::uuid <> me
-        and not public.are_friends(me, (s->>'user_id')::uuid)
-      limit 1;
+    select u into bad from (
+      select (s->>'user_id')::uuid as u from jsonb_array_elements(p_splits) s
+      union
+      select (s->>'user_id')::uuid from jsonb_array_elements(payers) s
+    ) everyone
+    where u <> me and not public.are_friends(me, u)
+    limit 1;
     if bad is not null then
       raise exception 'User % is not one of your friends', bad;
     end if;
@@ -618,8 +856,11 @@ begin
 
   insert into public.expense_splits (expense_id, user_id, amount)
   select eid, (s->>'user_id')::uuid, round((s->>'amount')::numeric, 2)
-  from jsonb_array_elements(p_splits) s
-  on conflict (expense_id, user_id) do update set amount = excluded.amount;
+  from jsonb_array_elements(p_splits) s;
+
+  insert into public.expense_payers (expense_id, user_id, amount)
+  select eid, (s->>'user_id')::uuid, round((s->>'amount')::numeric, 2)
+  from jsonb_array_elements(payers) s;
 
   -- ---- notify everyone but the actor --------------------------------------
   select full_name into actor_name from public.profiles where id = me;
@@ -675,12 +916,15 @@ create or replace function public.update_expense(
   p_split_mode   text default null,
   p_expense_date date default null,
   p_notes        text default null,
-  p_receipt_path text default null
+  p_receipt_path text default null,
+  p_payers       jsonb default null
 ) returns void language plpgsql security definer set search_path = public as $$
 declare
   me          uuid := auth.uid();
   payer       uuid;
+  payers      jsonb;
   split_total numeric(12,2);
+  payer_total numeric(12,2);
   n_splits    int;
   bad         uuid;
 begin
@@ -692,6 +936,9 @@ begin
   select coalesce(p_payer_id, e.payer_id) into payer
     from public.expenses e where e.id = p_expense_id;
 
+  payers := coalesce(p_payers, jsonb_build_array(
+    jsonb_build_object('user_id', payer, 'amount', round(p_amount, 2))));
+
   -- ---- shape checks --------------------------------------------------------
   if p_splits is null or jsonb_typeof(p_splits) <> 'array' then
     raise exception 'p_splits must be a JSON array';
@@ -700,6 +947,9 @@ begin
   select count(*), coalesce(sum((s->>'amount')::numeric), 0)
     into n_splits, split_total
     from jsonb_array_elements(p_splits) s;
+
+  select coalesce(sum((s->>'amount')::numeric), 0) into payer_total
+    from jsonb_array_elements(payers) s;
 
   if n_splits = 0 then raise exception 'An expense needs at least one split'; end if;
 
@@ -714,30 +964,39 @@ begin
       split_total, round(p_amount, 2);
   end if;
 
+  if payer_total <> round(p_amount, 2) then
+    raise exception 'Payments total %, expense is % — they must match',
+      payer_total, round(p_amount, 2);
+  end if;
+
+  select (s->>'user_id')::uuid into payer
+    from jsonb_array_elements(payers) s
+    order by (s->>'amount')::numeric desc, (s->>'user_id')
+    limit 1;
+
   -- ---- authorisation, same rules as creating one ---------------------------
   if p_group_id is not null then
     if not public.is_group_member(p_group_id, me) then
       raise exception 'You are not a member of this group';
     end if;
-    if not public.is_group_member(p_group_id, payer) then
-      raise exception 'The payer is not a member of this group';
-    end if;
-    select (s->>'user_id')::uuid into bad
-      from jsonb_array_elements(p_splits) s
-      where not public.is_group_member(p_group_id, (s->>'user_id')::uuid)
-      limit 1;
+    select u into bad from (
+      select (s->>'user_id')::uuid as u from jsonb_array_elements(p_splits) s
+      union
+      select (s->>'user_id')::uuid from jsonb_array_elements(payers) s
+    ) everyone
+    where not public.is_group_member(p_group_id, u)
+    limit 1;
     if bad is not null then
       raise exception 'User % is not a member of this group', bad;
     end if;
   else
-    if payer <> me and not public.are_friends(me, payer) then
-      raise exception 'The payer is not one of your friends';
-    end if;
-    select (s->>'user_id')::uuid into bad
-      from jsonb_array_elements(p_splits) s
-      where (s->>'user_id')::uuid <> me
-        and not public.are_friends(me, (s->>'user_id')::uuid)
-      limit 1;
+    select u into bad from (
+      select (s->>'user_id')::uuid as u from jsonb_array_elements(p_splits) s
+      union
+      select (s->>'user_id')::uuid from jsonb_array_elements(payers) s
+    ) everyone
+    where u <> me and not public.are_friends(me, u)
+    limit 1;
     if bad is not null then
       raise exception 'User % is not one of your friends', bad;
     end if;
@@ -762,6 +1021,11 @@ begin
   insert into public.expense_splits (expense_id, user_id, amount)
   select p_expense_id, (s->>'user_id')::uuid, round((s->>'amount')::numeric, 2)
   from jsonb_array_elements(p_splits) s;
+
+  delete from public.expense_payers where expense_id = p_expense_id;
+  insert into public.expense_payers (expense_id, user_id, amount)
+  select p_expense_id, (s->>'user_id')::uuid, round((s->>'amount')::numeric, 2)
+  from jsonb_array_elements(payers) s;
 end $$;
 
 -- ============================================================================
@@ -849,10 +1113,13 @@ grant execute on function public.add_friend_by_email(text)              to authe
 grant execute on function public.create_group(text, text, text)         to authenticated;
 grant execute on function public.add_group_member_by_email(uuid, text)  to authenticated;
 grant execute on function public.mark_all_notifications_read()          to authenticated;
+grant execute on function public.add_group_members(uuid, uuid[])        to authenticated;
+grant execute on function public.create_invite(uuid)                    to authenticated;
+grant execute on function public.redeem_invite(text)                    to authenticated;
 grant execute on function public.create_expense(
-  numeric, text, jsonb, uuid, uuid, text, text, text, date, text, text)  to authenticated;
+  numeric, text, jsonb, uuid, uuid, text, text, text, date, text, text, jsonb) to authenticated;
 grant execute on function public.update_expense(
-  uuid, numeric, text, jsonb, uuid, uuid, text, text, text, date, text, text) to authenticated;
+  uuid, numeric, text, jsonb, uuid, uuid, text, text, text, date, text, text, jsonb) to authenticated;
 
 -- Helpers are called from policies, so authenticated needs execute on them.
 grant execute on function public.is_group_member(uuid, uuid)  to authenticated;

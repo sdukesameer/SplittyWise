@@ -303,7 +303,8 @@ window.SW = window.SW || {};
       db.from('friendships').select('user_a, user_b'),
       db.from('expenses').select(
         'id, group_id, payer_id, amount, description, emoji, category, split_mode, ' +
-        'notes, receipt_path, expense_date, created_at, expense_splits(user_id, amount)'
+        'notes, receipt_path, expense_date, created_at, ' +
+        'expense_splits(user_id, amount), expense_payers(user_id, amount)'
       ).order('expense_date', { ascending: false }),
       db.from('settlements').select(
         'id, group_id, from_user, to_user, amount, note, settled_on, created_at'
@@ -327,6 +328,7 @@ window.SW = window.SW || {};
     expRes.data.forEach(function (e) {
       involved.add(e.payer_id);
       (e.expense_splits || []).forEach(function (s) { involved.add(s.user_id); });
+      (e.expense_payers || []).forEach(function (s) { involved.add(s.user_id); });
     });
     setRes.data.forEach(function (s) {
       involved.add(s.from_user);
@@ -380,12 +382,53 @@ window.SW = window.SW || {};
 
   /* ======================= balance maths ============================== */
 
+  // Who paid what on one expense. Written for every expense since phase 12,
+  // but rows created before that have no expense_payers, so the primary
+  // payer is treated as having covered the whole thing.
+  SW.paidMap = function (e) {
+    const paid = {};
+    const rows = e.expense_payers || [];
+    if (rows.length) {
+      rows.forEach(function (r) {
+        paid[r.user_id] = (paid[r.user_id] || 0) + SW.toPaise(r.amount);
+      });
+    } else {
+      paid[e.payer_id] = SW.toPaise(e.amount);
+    }
+    return paid;
+  };
+
+  SW.owedMap = function (e) {
+    const owed = {};
+    (e.expense_splits || []).forEach(function (r) {
+      owed[r.user_id] = (owed[r.user_id] || 0) + SW.toPaise(r.amount);
+    });
+    return owed;
+  };
+
+  // The debts one expense creates, as pairwise edges.
+  //
+  // With a single payer this is trivially "everyone owes the payer their
+  // share". With several payers there is no such shortcut: the only honest
+  // answer is each person's net for that expense, resolved into the fewest
+  // transfers. For one payer the two agree exactly, so this stays one code
+  // path rather than a special case.
+  SW.expenseEdges = function (e) {
+    const paid = SW.paidMap(e);
+    const owed = SW.owedMap(e);
+
+    const nets = {};
+    Object.keys(paid).forEach(function (id) { nets[id] = 0; });
+    Object.keys(owed).forEach(function (id) { nets[id] = 0; });
+    Object.keys(nets).forEach(function (id) {
+      nets[id] = (paid[id] || 0) - (owed[id] || 0);
+    });
+
+    return SW.simplifyDebts(nets);
+  };
+
   // net > 0  → they owe me
   // net < 0  → I owe them
-  //
-  // Within one expense every non-payer participant owes the payer their own
-  // split. That yields the pairwise edges directly, which is what the
-  // friends list needs — the payer's own split is not a debt to anyone.
   SW.friendBalances = function () {
     const L = SW.ledger;
     const me = L.me;
@@ -404,19 +447,11 @@ window.SW = window.SW || {};
     }
 
     L.expenses.forEach(function (e) {
-      const splits = e.expense_splits || [];
-
-      if (e.payer_id === me) {
-        // I paid, so everyone else's split is owed to me.
-        splits.forEach(function (s) {
-          if (s.user_id === me) return;
-          add(s.user_id, e.group_id, SW.toPaise(s.amount));
-        });
-      } else {
-        // Someone else paid; only my own split is a debt, and only to them.
-        const mine = splits.find(function (s) { return s.user_id === me; });
-        if (mine) add(e.payer_id, e.group_id, -SW.toPaise(mine.amount));
-      }
+      SW.expenseEdges(e).forEach(function (edge) {
+        // An edge between two other people says nothing about my balance.
+        if (edge.to === me) add(edge.from, e.group_id, edge.amount);
+        else if (edge.from === me) add(edge.to, e.group_id, -edge.amount);
+      });
     });
 
     L.settlements.forEach(function (s) {
@@ -469,10 +504,10 @@ window.SW = window.SW || {};
 
     L.expenses.forEach(function (e) {
       if ((e.group_id || null) !== groupId) return;
-      bump(paid, e.payer_id, SW.toPaise(e.amount));
-      (e.expense_splits || []).forEach(function (sp) {
-        bump(owed, sp.user_id, SW.toPaise(sp.amount));
-      });
+      const pm = SW.paidMap(e);
+      const om = SW.owedMap(e);
+      Object.keys(pm).forEach(function (id) { bump(paid, id, pm[id]); });
+      Object.keys(om).forEach(function (id) { bump(owed, id, om[id]); });
     });
 
     L.settlements.forEach(function (st) {
@@ -593,20 +628,13 @@ window.SW = window.SW || {};
     const items = [];
 
     L.expenses.forEach(function (e) {
-      const splits = e.expense_splits || [];
+      // Whatever this expense settled between the two of us specifically.
       let delta = 0;
-
-      if (e.payer_id === me) {
-        const theirs = splits.find(function (s) { return s.user_id === friendId; });
-        if (!theirs) return;
-        delta = SW.toPaise(theirs.amount);          // they owe me their share
-      } else if (e.payer_id === friendId) {
-        const mine = splits.find(function (s) { return s.user_id === me; });
-        if (!mine) return;
-        delta = -SW.toPaise(mine.amount);           // I owe them my share
-      } else {
-        return; // neither of us paid: nothing between the two of us
-      }
+      SW.expenseEdges(e).forEach(function (edge) {
+        if (edge.from === friendId && edge.to === me) delta += edge.amount;
+        else if (edge.from === me && edge.to === friendId) delta -= edge.amount;
+      });
+      if (delta === 0) return;
 
       items.push({
         kind: 'expense',
@@ -618,6 +646,7 @@ window.SW = window.SW || {};
         groupId: e.group_id,
         total: SW.toPaise(e.amount),
         payerId: e.payer_id,
+        payerCount: Object.keys(SW.paidMap(e)).length,
         delta: delta,
       });
     });

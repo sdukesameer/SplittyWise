@@ -508,7 +508,8 @@ window.SW = window.SW || {};
         '</div>' +
 
         '<div class="sheet-actions">' +
-          '<button type="button" class="btn btn-ghost" id="grp-add-member">Add someone by email</button>' +
+          '<button type="button" class="btn btn-ghost" id="grp-add-member">Add people</button>' +
+          '<button type="button" class="btn btn-ghost" id="grp-invite">🔗 Invite with a link</button>' +
           '<button type="button" class="btn-text" id="grp-leave" ' +
                   'style="color:var(--danger);align-self:center;padding:10px">Leave this group</button>' +
         '</div>',
@@ -530,6 +531,11 @@ window.SW = window.SW || {};
           openAddMember(gid);
         });
 
+        document.getElementById('grp-invite').addEventListener('click', function () {
+          SW.closeSheet();
+          SW.shareInvite(gid);
+        });
+
         document.getElementById('grp-leave').addEventListener('click', function () {
           SW.closeSheet();
           confirmLeave(gid, g);
@@ -541,43 +547,131 @@ window.SW = window.SW || {};
   SW.openAddMember = function (gid) { openAddMember(gid); };
 
   function openAddMember(gid) {
+    const me = SW.ledger.me;
+    const members = SW.ledger.members[gid] || [];
+    // Friends who are not in this group yet — nobody should have to retype
+    // an email address they already have as a friend.
+    const candidates = SW.ledger.friendIds.filter(function (id) {
+      return members.indexOf(id) === -1;
+    }).sort(function (a, b) {
+      return SW.person(a).full_name.localeCompare(SW.person(b).full_name);
+    });
+
+    let chosen = [];
+
     SW.sheet({
-      title: 'Add someone to the group',
-      body:
-        '<div class="field">' +
-          '<label for="mem-email">Their email address</label>' +
-          '<input class="input" id="mem-email" type="email" inputmode="email" ' +
-                 'autocomplete="off" autocapitalize="off" spellcheck="false" ' +
-                 'placeholder="friend@example.com">' +
-          '<span class="hint">They need a SplittyWise account already. Adding them ' +
-            'here also makes you friends.</span>' +
-          '<div class="field-error" id="mem-error"></div>' +
-        '</div>',
-      confirm: 'Add to group',
-      onOpen: function () { document.getElementById('mem-email').focus(); },
+      title: 'Add people',
+      rawBody:
+        (candidates.length
+          ? '<div class="card-head">Your friends</div><div class="list" id="mem-list">' +
+            candidates.map(function (id) {
+              const pr = SW.person(id);
+              return '<button type="button" class="list-row" data-mem="' + esc(id) + '">' +
+                SW.avatar(id, pr.avatar_emoji) +
+                '<span class="row-main"><span class="row-title">' + esc(pr.full_name) +
+                  '</span>' + (pr.email ? '<span class="row-sub">' + esc(pr.email) +
+                  '</span>' : '') + '</span>' +
+                '<span class="sp-check"><svg aria-hidden="true">' +
+                  '<use href="#ic-check"/></svg></span>' +
+              '</button>';
+            }).join('') + '</div>'
+          : '<div class="search-hint">' +
+            (members.length > 1
+              ? 'All of your friends are already in this group.'
+              : 'You have no friends to add yet.') +
+            '</div>') +
+
+        '<div class="sheet-actions">' +
+          '<button type="button" class="btn btn-ghost" id="mem-link">' +
+            '🔗 Invite with a link</button>' +
+          '<button type="button" class="btn-text" id="mem-email-toggle" ' +
+                  'style="align-self:center;padding:8px">Add by email instead</button>' +
+        '</div>' +
+
+        '<div id="mem-email-wrap" hidden><div class="sheet-body">' +
+          '<div class="field">' +
+            '<label for="mem-email">Their email address</label>' +
+            '<input class="input" id="mem-email" type="email" inputmode="email" ' +
+                   'autocomplete="off" autocapitalize="off" spellcheck="false" ' +
+                   'placeholder="friend@example.com">' +
+            '<span class="hint">They need a SplittyWise account already.</span>' +
+            '<div class="field-error" id="mem-error"></div>' +
+          '</div>' +
+        '</div></div>',
+      confirm: candidates.length ? 'Add to group' : null,
+      onOpen: function () {
+        const list = document.getElementById('mem-list');
+        if (list) {
+          list.addEventListener('click', function (e) {
+            const b = e.target.closest('[data-mem]');
+            if (!b) return;
+            const id = b.getAttribute('data-mem');
+            const at = chosen.indexOf(id);
+            if (at > -1) chosen.splice(at, 1);
+            else chosen.push(id);
+            b.querySelector('.sp-check').classList.toggle('is-on', at === -1);
+          });
+        }
+
+        document.getElementById('mem-link').addEventListener('click', function () {
+          SW.closeSheet();
+          SW.shareInvite(gid);
+        });
+
+        document.getElementById('mem-email-toggle').addEventListener('click', function () {
+          const wrap = document.getElementById('mem-email-wrap');
+          wrap.hidden = !wrap.hidden;
+          this.textContent = wrap.hidden ? 'Add by email instead' : 'Hide the email field';
+          if (!wrap.hidden) document.getElementById('mem-email').focus();
+        });
+      },
       onConfirm: async function (btn) {
-        const email = document.getElementById('mem-email').value.trim().toLowerCase();
-        if (!SW.isEmail(email)) {
-          SW.setError('mem-error', 'That does not look like an email address.');
+        const emailField = document.getElementById('mem-email');
+        const email = emailField && !document.getElementById('mem-email-wrap').hidden
+          ? emailField.value.trim().toLowerCase() : '';
+
+        if (!chosen.length && !email) {
+          SW.toast('Pick a friend, or type an email address', 'error');
           return false;
         }
 
         SW.busy(btn, true);
-        const { data, error } = await db.rpc('add_group_member_by_email', {
-          p_group_id: gid, p_email: email,
-        });
-        SW.busy(btn, false);
 
-        if (error) { SW.setError('mem-error', error.message); return false; }
-        if (!data || !data.ok) {
-          SW.setError('mem-error', data && data.error === 'already'
-            ? 'They are already in this group.'
-            : 'No SplittyWise account uses that email yet. Ask them to sign up first.');
-          return false;
+        if (chosen.length) {
+          const { data, error } = await db.rpc('add_group_members', {
+            p_group_id: gid, p_user_ids: chosen,
+          });
+          if (error) { SW.busy(btn, false); SW.toast(error.message, 'error'); return false; }
+          if (data && data.added === 0) {
+            SW.busy(btn, false);
+            SW.toast('Nobody was added', 'error');
+            return false;
+          }
         }
 
+        if (email) {
+          if (!SW.isEmail(email)) {
+            SW.busy(btn, false);
+            SW.setError('mem-error', 'That does not look like an email address.');
+            return false;
+          }
+          const { data, error } = await db.rpc('add_group_member_by_email', {
+            p_group_id: gid, p_email: email,
+          });
+          if (error) { SW.busy(btn, false); SW.setError('mem-error', error.message); return false; }
+          if (!data || !data.ok) {
+            SW.busy(btn, false);
+            SW.setError('mem-error', data && data.error === 'already'
+              ? 'They are already in this group.'
+              : 'No SplittyWise account uses that email yet. Send them a link instead.');
+            return false;
+          }
+        }
+
+        SW.busy(btn, false);
         await SW.refreshLedger();
-        SW.toast(data.full_name + ' added to the group', 'ok');
+        const n = chosen.length + (email ? 1 : 0);
+        SW.toast(n === 1 ? 'Added to the group' : n + ' people added', 'ok');
         return true;
       },
     });

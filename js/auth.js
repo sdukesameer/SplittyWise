@@ -53,6 +53,17 @@ window.SW = window.SW || {};
     }
   }
 
+  // An invite link is not a route: take the token, clean the URL, and let
+  // normal routing carry on. It is redeemed once there is an account to
+  // attach it to, which may be after a fresh signup.
+  function captureInvite() {
+    const m = (window.location.hash || '').match(/^#\/join\/([A-Za-z0-9_-]{8,64})/);
+    if (!m) return false;
+    if (SW.storePendingInvite) SW.storePendingInvite(m[1]);
+    window.history.replaceState(null, '', window.location.pathname);
+    return true;
+  }
+
   function routeFromHash() {
     const h = window.location.hash || '';
     // An auth callback hash is not a route.
@@ -62,6 +73,15 @@ window.SW = window.SW || {};
   }
 
   window.addEventListener('hashchange', function () {
+    if (captureInvite()) {
+      if (SW.session) {
+        if (SW.redeemPendingInvite) SW.redeemPendingInvite().then(function () {
+          if (SW.refreshLedger) SW.refreshLedger();
+        });
+        return SW.navigate(DEFAULT_VIEW, { replace: true });
+      }
+      return SW.navigate('signup', { replace: true });
+    }
     const r = routeFromHash();
     if (!r) return;
     // Signed-in users have no business on the auth screens, and signed-out
@@ -369,6 +389,8 @@ window.SW = window.SW || {};
   /* ======================= boot ======================================= */
 
   async function boot() {
+    const invited = captureInvite();
+
     // A dead or already-used email link comes back as an error in the hash.
     const errMatch = (SW.initialHash || '').match(/error_description=([^&]+)/);
     if (errMatch) {
@@ -392,6 +414,11 @@ window.SW = window.SW || {};
         : DEFAULT_VIEW;
       SW.navigate(dest, { replace: true });
       await renderApp();
+    } else if (invited) {
+      // Straight to signup: an invite is almost always someone's first visit.
+      SW.navigate('signup', { replace: true });
+      const hint = document.getElementById('signup-invite');
+      if (hint) hint.hidden = false;
     } else {
       const r = routeFromHash();
       SW.navigate(r && AUTH_SCREENS.includes(r.name) ? r.name : 'login', { replace: true });

@@ -30,9 +30,10 @@ window.SW = window.SW || {};
       emoji: '🧾',
       emojiManual: false,
       date: today(),
-      targetKind: null,      // 'friend' | 'group'
-      targetId: null,
-      payerId: SW.user.id,
+      groupId: null,         // null means the expense is not in a group
+      people: [SW.user.id],  // every participant, always including me
+      payerId: SW.user.id,   // the single payer, used when payers is null
+      payers: null,          // userId -> paise, when more than one person paid
       mode: 'equal',
       included: {},          // userId -> false to leave someone out of an equal split
       exact: {},             // userId -> paise
@@ -49,22 +50,32 @@ window.SW = window.SW || {};
   /* ======================= participants =============================== */
 
   function participants() {
-    if (!f || !f.targetId) return [];
-    const me = SW.ledger.me;
-
-    if (f.targetKind === 'friend') return [me, f.targetId];
-
-    const members = (SW.ledger.members[f.targetId] || []).slice();
-    // Belt and braces: I should always be a member of a group I can see.
-    if (members.indexOf(me) === -1) members.unshift(me);
-    return members;
+    return f ? f.people.slice() : [];
   }
 
   function targetLabel() {
-    if (!f.targetId) return '';
-    if (f.targetKind === 'friend') return SW.person(f.targetId).full_name;
-    const g = SW.ledger.groups[f.targetId];
-    return g ? g.name : 'a group';
+    if (f.groupId) {
+      const g = SW.ledger.groups[f.groupId];
+      return g ? 'All of ' + g.name : 'a group';
+    }
+    const others = f.people.filter(function (id) { return id !== SW.ledger.me; });
+    if (!others.length) return 'Just you';
+    if (others.length <= 2) {
+      return others.map(function (id) {
+        return SW.person(id).full_name.split(' ')[0];
+      }).join(' and ');
+    }
+    return others.length + ' people';
+  }
+
+  function payerLabel() {
+    if (f.payers) {
+      const n = Object.keys(f.payers).filter(function (id) { return f.payers[id] > 0; }).length;
+      return n + ' people';
+    }
+    return f.payerId === SW.ledger.me
+      ? 'you'
+      : SW.person(f.payerId).full_name.split(' ')[0];
   }
 
   /* ======================= amount parsing ============================= */
@@ -95,8 +106,11 @@ window.SW = window.SW || {};
       f = fromExpense(e);
     } else {
       f = blankForm();
-      if (opts.friendId) { f.targetKind = 'friend'; f.targetId = opts.friendId; }
-      if (opts.groupId) { f.targetKind = 'group'; f.targetId = opts.groupId; }
+      if (opts.friendId) f.people = [SW.ledger.me, opts.friendId];
+      if (opts.groupId) {
+        f.groupId = opts.groupId;
+        f.people = groupMembers(opts.groupId);
+      }
     }
 
     const friends = SW.ledger.friendIds.slice().sort(function (a, b) {
@@ -115,8 +129,6 @@ window.SW = window.SW || {};
         onConfirm: function () { SW.closeSheet(); SW.addFriendSheet(); return true; },
       });
     }
-
-    const selected = f.targetId ? f.targetKind + ':' + f.targetId : '';
 
     SW.sheet({
       title: f.id ? 'Edit expense' : 'Add an expense',
@@ -141,38 +153,21 @@ window.SW = window.SW || {};
           '</div>' +
 
           '<div class="picker-group">' +
-            '<label class="picker-row" for="exp-f-target">' +
+            '<button type="button" class="picker-row" id="exp-f-target">' +
               '<span class="pr-label">Split with</span>' +
-              '<select id="exp-f-target" required>' +
-                '<option value=""' + (selected ? '' : ' selected') + ' disabled>Choose…</option>' +
-                (friends.length
-                  ? '<optgroup label="Friends">' + friends.map(function (id) {
-                      const v = 'friend:' + id;
-                      return '<option value="' + esc(v) + '"' +
-                             (v === selected ? ' selected' : '') + '>' +
-                             esc(SW.person(id).full_name) + '</option>';
-                    }).join('') + '</optgroup>'
-                  : '') +
-                (groupIds.length
-                  ? '<optgroup label="Groups">' + groupIds.map(function (id) {
-                      const v = 'group:' + id;
-                      const g = SW.ledger.groups[id];
-                      return '<option value="' + esc(v) + '"' +
-                             (v === selected ? ' selected' : '') + '>' +
-                             esc(g.emoji + ' ' + g.name) + '</option>';
-                    }).join('') + '</optgroup>'
-                  : '') +
-              '</select>' +
+              '<span class="pr-value' +
+                (f.groupId || f.people.length > 1 ? '' : ' is-empty') + '">' +
+                esc(targetLabel()) + '</span>' +
               '<svg class="chev" width="17" height="17" aria-hidden="true">' +
                 '<use href="#ic-chev"/></svg>' +
-            '</label>' +
+            '</button>' +
 
-            '<label class="picker-row" for="exp-f-payer">' +
+            '<button type="button" class="picker-row" id="exp-f-payer">' +
               '<span class="pr-label">Paid by</span>' +
-              '<select id="exp-f-payer"></select>' +
+              '<span class="pr-value">' + esc(payerLabel()) + '</span>' +
               '<svg class="chev" width="17" height="17" aria-hidden="true">' +
                 '<use href="#ic-chev"/></svg>' +
-            '</label>' +
+            '</button>' +
 
             '<label class="picker-row" for="exp-f-date">' +
               '<span class="pr-label">Date</span>' +
@@ -210,7 +205,6 @@ window.SW = window.SW || {};
   function wireForm() {
     const amount = document.getElementById('exp-f-amount');
     const desc = document.getElementById('exp-f-desc');
-    const target = document.getElementById('exp-f-target');
     const date = document.getElementById('exp-f-date');
 
     amount.addEventListener('input', function () {
@@ -227,16 +221,18 @@ window.SW = window.SW || {};
       }
     });
 
-    target.addEventListener('change', function () {
-      const [kind, id] = target.value.split(':');
-      f.targetKind = kind;
-      f.targetId = id;
-      // Participants changed, so a previous payer or exact split may no
-      // longer make sense.
-      if (participants().indexOf(f.payerId) === -1) f.payerId = SW.ledger.me;
-      f.included = {}; f.exact = {}; f.percent = {}; f.shares = {}; f.adjust = {};
-      renderPayer();
-      renderSplit();
+    document.getElementById('exp-f-target').addEventListener('click', function () {
+      SW.closeSheet();
+      openTargetPicker();
+    });
+
+    document.getElementById('exp-f-payer').addEventListener('click', function () {
+      if (f.people.length < 2) {
+        return SW.setError('exp-f-error',
+          'Choose who you are splitting this with first.');
+      }
+      SW.closeSheet();
+      openPayerPicker();
     });
 
     date.addEventListener('change', function () { f.date = date.value || today(); });
@@ -247,14 +243,11 @@ window.SW = window.SW || {};
     });
 
     document.getElementById('exp-f-scan').addEventListener('click', function () {
-      if (!f.targetId) {
-        return SW.setError('exp-f-error',
-          'Choose a friend or group first, so the scanner knows who to split between.');
-      }
       const people = participants();
       if (people.length < 2) {
         return SW.setError('exp-f-error',
-          'That group needs at least two people before an itemised split makes sense.');
+          'Choose at least one other person — itemising for yourself alone has ' +
+          'nothing to divide.');
       }
 
       // The form closes while the scanner runs, then comes back with the
@@ -298,31 +291,8 @@ window.SW = window.SW || {};
     });
 
     if (!f.emojiManual && f.description) f.emoji = SW.guessEmoji(f.description);
-    renderPayer();
     renderSplit();
-
-    if (!f.targetId) target.focus();
-    else amount.focus();
-  }
-
-  function renderPayer() {
-    const sel = document.getElementById('exp-f-payer');
-    if (!sel) return;
-    const people = participants();
-
-    if (!people.length) {
-      sel.innerHTML = '<option value="">—</option>';
-      sel.disabled = true;
-      return;
-    }
-    sel.disabled = false;
-    sel.innerHTML = people.map(function (id) {
-      const name = id === SW.ledger.me ? 'You' : SW.person(id).full_name;
-      return '<option value="' + esc(id) + '"' +
-             (id === f.payerId ? ' selected' : '') + '>' + esc(name) + '</option>';
-    }).join('');
-
-    sel.onchange = function () { f.payerId = sel.value; renderSplit(); };
+    amount.focus();
   }
 
   function splitState() {
@@ -515,6 +485,293 @@ window.SW = window.SW || {};
       (SW.money(result.assigned) + ' of ' + SW.money(f.amountPaise));
   }
 
+  /* ======================= who is involved =========================== */
+
+  function groupMembers(gid) {
+    const me = SW.ledger.me;
+    const members = (SW.ledger.members[gid] || []).slice();
+    if (members.indexOf(me) === -1) members.unshift(me);
+    return members;
+  }
+
+  // Everyone an existing expense touches: the people who owe on it and the
+  // people who paid for it.
+  function peopleOn(e) {
+    const seen = {};
+    const out = [];
+    function push(id) { if (id && !seen[id]) { seen[id] = true; out.push(id); } }
+    push(SW.ledger.me);
+    Object.keys(SW.paidMap(e)).forEach(push);
+    (e.expense_splits || []).forEach(function (sp) { push(sp.user_id); });
+    return out;
+  }
+
+  // Only returned when more than one person actually paid; a single payer is
+  // represented by payerId alone.
+  function payersOn(e) {
+    const rows = e.expense_payers || [];
+    if (rows.length < 2) return null;
+    const out = {};
+    rows.forEach(function (r) { out[r.user_id] = SW.toPaise(r.amount); });
+    return out;
+  }
+
+  function pickRow(id, on, sub) {
+    const p = SW.person(id);
+    return '<button type="button" class="list-row" data-pick="' + esc(id) + '">' +
+      SW.avatar(id, p.avatar_emoji) +
+      '<span class="row-main">' +
+        '<span class="row-title">' + esc(id === SW.ledger.me ? 'You' : p.full_name) + '</span>' +
+        (sub ? '<span class="row-sub">' + esc(sub) + '</span>' : '') +
+      '</span>' +
+      '<span class="sp-check' + (on ? ' is-on' : '') + '">' +
+        '<svg aria-hidden="true"><use href="#ic-check"/></svg></span>' +
+    '</button>';
+  }
+
+  function openTargetPicker() {
+    const me = SW.ledger.me;
+    let groupId = f.groupId;
+    let chosen = f.people.filter(function (id) { return id !== me; });
+    let query = '';
+
+    const groupIds = Object.keys(SW.ledger.groups).sort(function (a, b) {
+      return SW.ledger.groups[a].name.localeCompare(SW.ledger.groups[b].name);
+    });
+    const friends = SW.ledger.friendIds.slice().sort(function (a, b) {
+      return SW.person(a).full_name.localeCompare(SW.person(b).full_name);
+    });
+
+    SW.sheet({
+      title: 'Split with',
+      rawBody:
+        '<div class="sheet-body" style="padding-bottom:4px">' +
+          '<input class="input" id="pick-search" type="search" autocomplete="off" ' +
+                 'placeholder="Search friends and groups" aria-label="Search people">' +
+        '</div>' +
+        '<div id="pick-list"></div>',
+      confirm: 'Done',
+      onOpen: function () {
+        document.getElementById('pick-search').addEventListener('input', function () {
+          query = this.value.trim().toLowerCase();
+          paint();
+        });
+        document.getElementById('pick-list').addEventListener('click', function (e) {
+          const b = e.target.closest('[data-pick]');
+          if (!b) return;
+          const id = b.getAttribute('data-pick');
+
+          if (id.indexOf('g:') === 0) {
+            // Picking a group replaces any individual selection: an expense
+            // is either in a group or it is not.
+            const gid = id.slice(2);
+            groupId = (groupId === gid) ? null : gid;
+            chosen = [];
+          } else {
+            groupId = null;
+            const at = chosen.indexOf(id);
+            if (at > -1) chosen.splice(at, 1);
+            else chosen.push(id);
+          }
+          paint();
+        });
+        paint();
+      },
+      onConfirm: function () {
+        if (groupId) {
+          f.groupId = groupId;
+          f.people = groupMembers(groupId);
+        } else {
+          f.groupId = null;
+          f.people = [me].concat(chosen);
+        }
+        // The old payer or per-person amounts may name people who are no
+        // longer involved, so start those over.
+        if (f.people.indexOf(f.payerId) === -1) f.payerId = me;
+        f.payers = null;
+        f.included = {}; f.exact = {}; f.percent = {}; f.shares = {}; f.adjust = {};
+        return true;
+      },
+      onClose: function () { if (f) SW.openExpenseSheet({ keepState: true }); },
+    });
+
+    function paint() {
+      const host = document.getElementById('pick-list');
+      const match = function (text) {
+        return !query || String(text).toLowerCase().indexOf(query) > -1;
+      };
+
+      const gRows = groupIds.filter(function (gid) {
+        return match(SW.ledger.groups[gid].name);
+      }).map(function (gid) {
+        const g = SW.ledger.groups[gid];
+        const n = (SW.ledger.members[gid] || []).length;
+        return '<button type="button" class="list-row" data-pick="g:' + esc(gid) + '">' +
+          '<span class="avatar" style="background:var(--surface-2)">' + esc(g.emoji) + '</span>' +
+          '<span class="row-main"><span class="row-title">' + esc(g.name) + '</span>' +
+            '<span class="row-sub">' + n + (n === 1 ? ' person' : ' people') + '</span></span>' +
+          '<span class="sp-check' + (groupId === gid ? ' is-on' : '') + '">' +
+            '<svg aria-hidden="true"><use href="#ic-check"/></svg></span>' +
+        '</button>';
+      }).join('');
+
+      const fRows = friends.filter(function (id) {
+        const p = SW.person(id);
+        return match(p.full_name) || match(p.email);
+      }).map(function (id) {
+        return pickRow(id, chosen.indexOf(id) > -1, SW.person(id).email);
+      }).join('');
+
+      host.innerHTML =
+        (gRows ? '<div class="card-head">Groups</div>' + gRows : '') +
+        (fRows ? '<div class="card-head">Friends</div>' + fRows : '') +
+        (!gRows && !fRows
+          ? '<div class="search-hint">Nothing matches that.</div>'
+          : '') +
+        '<div class="split-foot" style="border-top:1px solid var(--line)">' +
+          '<span class="sf-state ' + (groupId || chosen.length ? 'is-ok' : 'is-off') + '">' +
+            (groupId ? 'All of ' + esc(SW.ledger.groups[groupId].name)
+                     : (chosen.length
+                         ? chosen.length + (chosen.length === 1 ? ' person' : ' people') + ' plus you'
+                         : 'Just you')) +
+          '</span>' +
+          '<span class="sf-total">' +
+            (groupId ? (SW.ledger.members[groupId] || []).length : chosen.length + 1) +
+            ' in the split</span>' +
+        '</div>';
+    }
+  }
+
+  /* ======================= who paid ================================== */
+
+  function openPayerPicker() {
+    const me = SW.ledger.me;
+    const people = participants();
+    let multiple = !!f.payers;
+    let single = f.payerId;
+    let amounts = {};
+    people.forEach(function (id) {
+      amounts[id] = (f.payers && f.payers[id]) || 0;
+    });
+
+    SW.sheet({
+      title: 'Who paid',
+      rawBody: '<div id="payer-list"></div>',
+      confirm: 'Done',
+      onOpen: function () {
+        const host = document.getElementById('payer-list');
+
+        host.addEventListener('click', function (e) {
+          const b = e.target.closest('[data-pick]');
+          if (b) {
+            const id = b.getAttribute('data-pick');
+            if (id === '__multi') {
+              multiple = true;
+              // Seed with the single payer covering everything, so the
+              // amounts already add up when the screen opens.
+              const seeded = Object.keys(amounts).some(function (k) { return amounts[k] > 0; });
+              if (!seeded) amounts[single] = f.amountPaise;
+            } else {
+              multiple = false;
+              single = id;
+            }
+            paint();
+          }
+        });
+
+        host.addEventListener('input', function (e) {
+          const input = e.target.closest('[data-paid]');
+          if (!input) return;
+          amounts[input.getAttribute('data-paid')] = parseAmount(input.value);
+          foot();
+        });
+
+        paint();
+      },
+      onConfirm: function () {
+        if (!multiple) {
+          f.payerId = single;
+          f.payers = null;
+          return true;
+        }
+        const total = people.reduce(function (t, id) {
+          return t + Math.max(0, amounts[id] || 0);
+        }, 0);
+        if (total !== f.amountPaise) {
+          SW.toast(total < f.amountPaise
+            ? SW.money(f.amountPaise - total) + ' still unaccounted for'
+            : SW.money(total - f.amountPaise) + ' more than the total', 'error');
+          return false;
+        }
+        const kept = {};
+        people.forEach(function (id) { if (amounts[id] > 0) kept[id] = amounts[id]; });
+        // One payer after all, so store it the simple way.
+        const ids = Object.keys(kept);
+        if (ids.length < 2) {
+          f.payerId = ids[0] || me;
+          f.payers = null;
+        } else {
+          f.payers = kept;
+          f.payerId = ids.reduce(function (a, b) { return kept[a] >= kept[b] ? a : b; });
+        }
+        return true;
+      },
+      onClose: function () { if (f) SW.openExpenseSheet({ keepState: true }); },
+    });
+
+    function paint() {
+      const host = document.getElementById('payer-list');
+      host.innerHTML = multiple
+        ? '<div class="split-blurb">Enter what each person actually put in.</div>' +
+          '<div class="split-list">' +
+            people.map(function (id) {
+              const p = SW.person(id);
+              return '<div class="split-person">' +
+                SW.avatar(id, p.avatar_emoji) +
+                '<span class="sp-name">' +
+                  esc(id === me ? 'You' : p.full_name) + '</span>' +
+                '<span class="sp-amount"><span class="cur">₹</span>' +
+                '<input type="text" inputmode="decimal" data-paid="' + esc(id) + '" ' +
+                'value="' + (amounts[id] ? SW.rupees(amounts[id]) : '') + '" ' +
+                'placeholder="0.00" aria-label="Paid by ' + esc(p.full_name) + '"></span>' +
+              '</div>';
+            }).join('') +
+          '</div>' +
+          '<div class="split-foot" id="payer-foot"></div>' +
+          '<div style="padding:10px 14px 0">' +
+            '<button type="button" class="btn-text" data-pick="' + esc(single) +
+              '">Back to a single payer</button></div>'
+        : '<div class="list">' +
+            people.map(function (id) { return pickRow(id, id === single, null); }).join('') +
+            '<button type="button" class="list-row" data-pick="__multi">' +
+              '<span class="avatar" style="background:var(--surface-2)">👥</span>' +
+              '<span class="row-main"><span class="row-title">Multiple people</span>' +
+                '<span class="row-sub">Split the payment too</span></span>' +
+              '<svg class="chev" width="17" height="17" aria-hidden="true">' +
+                '<use href="#ic-chev"/></svg>' +
+            '</button>' +
+          '</div>';
+      if (multiple) foot();
+    }
+
+    function foot() {
+      const el = document.getElementById('payer-foot');
+      if (!el) return;
+      const total = people.reduce(function (t, id) {
+        return t + Math.max(0, amounts[id] || 0);
+      }, 0);
+      const diff = f.amountPaise - total;
+      el.innerHTML =
+        '<span class="sf-state ' + (diff === 0 && total > 0 ? 'is-ok' : 'is-off') + '">' +
+          (f.amountPaise === 0 ? 'Enter the amount first'
+            : (diff === 0 ? 'Adds up'
+              : (diff > 0 ? SW.money(diff) + ' left' : SW.money(diff) + ' over'))) +
+        '</span>' +
+        '<span class="sf-total">' + SW.money(total) + ' of ' +
+          SW.money(f.amountPaise) + '</span>';
+    }
+  }
+
   /* ======================= emoji sub-sheet ============================ */
 
   function openEmojiPicker() {
@@ -572,9 +829,6 @@ window.SW = window.SW || {};
     if (!f.description.trim()) {
       return fail('Add a short description.');
     }
-    if (!f.targetId) {
-      return fail('Choose a friend or a group to split this with.');
-    }
 
     const people = participants();
     if (!people.length) {
@@ -583,6 +837,18 @@ window.SW = window.SW || {};
 
     const result = currentSplit();
     if (!result.valid) return fail(result.message + '.');
+
+    if (f.payers) {
+      const paid = Object.keys(f.payers).reduce(function (t, id) {
+        return t + Math.max(0, f.payers[id]);
+      }, 0);
+      if (paid !== f.amountPaise) {
+        const diff = f.amountPaise - paid;
+        return fail(diff > 0
+          ? SW.money(diff) + ' of the payments is unaccounted for.'
+          : 'The payments add up to ' + SW.money(diff) + ' more than the total.');
+      }
+    }
 
     // Anyone on zero is simply not part of this expense, so they are left
     // off it rather than recorded as owing nothing.
@@ -612,11 +878,20 @@ window.SW = window.SW || {};
         p_expense_date: f.date,
         p_notes: f.note || null,
         p_receipt_path: receiptPath,
+        // Omitted entirely for the ordinary one-payer case; the RPC then
+        // treats the single payer as having covered the whole amount.
+        p_payers: f.payers
+          ? Object.keys(f.payers)
+              .filter(function (id) { return f.payers[id] > 0; })
+              .map(function (id) {
+                return { user_id: id, amount: SW.rupees(f.payers[id]) };
+              })
+          : null,
       };
 
       // Always sent, for both create and update: null means the expense is
       // not in a group. Editing the target therefore actually moves it.
-      args.p_group_id = f.targetKind === 'group' ? f.targetId : null;
+      args.p_group_id = f.groupId || null;
 
       let error;
       if (f.id) {
@@ -682,9 +957,10 @@ window.SW = window.SW || {};
       emoji: e.emoji || '🧾',
       emojiManual: true,
       date: e.expense_date,
-      targetKind: e.group_id ? 'group' : 'friend',
-      targetId: e.group_id || otherPartyOf(e),
+      groupId: e.group_id || null,
+      people: peopleOn(e),
       payerId: e.payer_id,
+      payers: payersOn(e),
       mode: mode,
       included: included,
       exact: exact,
@@ -696,14 +972,6 @@ window.SW = window.SW || {};
       receiptFile: null,
       receiptName: e.receipt_path ? 'Receipt attached' : '',
     };
-  }
-
-  function otherPartyOf(e) {
-    const me = SW.ledger.me;
-    const ids = (e.expense_splits || []).map(function (s) { return s.user_id; });
-    ids.push(e.payer_id);
-    const other = ids.find(function (id) { return id !== me; });
-    return other || null;
   }
 
   SW.renderExpenseDetail = function (id) {
@@ -740,9 +1008,14 @@ window.SW = window.SW || {};
     document.getElementById('exp-emoji').textContent = e.emoji || '🧾';
     document.getElementById('exp-desc').textContent = e.description;
     document.getElementById('exp-amount').textContent = SW.money(total);
+    const paid = SW.paidMap(e);
+    const payerIds = Object.keys(paid);
+    const paidLabel = payerIds.length > 1
+      ? payerIds.length + ' people paid'
+      : (e.payer_id === me ? 'You paid' : payer.full_name + ' paid');
+
     document.getElementById('exp-meta').textContent =
-      (e.payer_id === me ? 'You paid' : payer.full_name + ' paid') +
-      ' · ' + SW.formatDate(e.expense_date) +
+      paidLabel + ' · ' + SW.formatDate(e.expense_date) +
       (group ? ' · ' + group.name : ' · not in a group');
 
     // What this expense means for me specifically.
@@ -788,8 +1061,15 @@ window.SW = window.SW || {};
         });
     }
 
-    document.getElementById('exp-splits').innerHTML = splits
-      .slice()
+    // Someone can pay without owing anything, so show every payer too.
+    const shown = splits.slice();
+    payerIds.forEach(function (id) {
+      if (!shown.some(function (x) { return x.user_id === id; })) {
+        shown.push({ user_id: id, amount: '0.00' });
+      }
+    });
+
+    document.getElementById('exp-splits').innerHTML = shown
       .sort(function (a, b) { return SW.toPaise(b.amount) - SW.toPaise(a.amount); })
       .map(function (s) {
         const p = SW.person(s.user_id);
@@ -797,8 +1077,8 @@ window.SW = window.SW || {};
         return '<div class="list-row" style="cursor:default">' +
           SW.avatar(s.user_id, p.avatar_emoji) +
           '<span class="row-main"><span class="row-title">' + esc(name) + '</span>' +
-            (s.user_id === e.payer_id
-              ? '<span class="row-sub">paid ' + SW.money(total) + '</span>' : '') +
+            (paid[s.user_id]
+              ? '<span class="row-sub">paid ' + SW.money(paid[s.user_id]) + '</span>' : '') +
           '</span>' +
           '<span class="row-amount"><span class="val" style="color:var(--text)">' +
             SW.money(SW.toPaise(s.amount)) + '</span></span>' +

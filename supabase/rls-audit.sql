@@ -13,7 +13,8 @@ select
 from pg_tables
 where schemaname = 'public'
   and tablename in ('profiles','friendships','groups','group_members',
-                    'expenses','expense_splits','settlements','notifications');
+                    'expenses','expense_splits','expense_payers','settlements',
+                    'notifications','invites');
 
 -- 2. Which ones, if any, are unprotected.
 select tablename, rowsecurity
@@ -84,7 +85,20 @@ from (
   having e.amount <> coalesce(sum(s.amount), 0)
 ) bad;
 
--- 9. Show any mismatches so they can be corrected.
+-- 9. Payments on an expense must also sum to its total.
+select
+  case when count(*) = 0 then 'PASS' else 'FAIL' end as result,
+  'every expense''s payments sum to its total' as check,
+  count(*) as mismatched_expenses
+from (
+  select e.id
+  from public.expenses e
+  join public.expense_payers pp on pp.expense_id = e.id
+  group by e.id, e.amount
+  having e.amount <> sum(pp.amount)
+) bad;
+
+-- 10. Show any mismatches so they can be corrected.
 select e.id, e.description, e.amount as expense_total,
        coalesce(sum(s.amount), 0) as splits_total
 from public.expenses e
