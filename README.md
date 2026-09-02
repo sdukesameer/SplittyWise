@@ -28,15 +28,27 @@ Amounts are in **INR (₹)** throughout.
 
 ## 1. What works today
 
-**Phases 1 and 2 of 10 are complete.** Sign up, log in, log out, email
+**Phases 1, 2 and 3 of 10 are complete.** Sign up, log in, log out, email
 confirmation and password reset all work end to end. Signing in lands on the
 app shell: four tabs (Friends, Groups, Activity, Account), a bell with an
 unread count, and the Add-expense button.
 
-The **Account** tab is fully working — edit your name, pick an avatar emoji,
-switch between system/light/dark themes, request a password-change link, and
-log out. **Activity** reads live from the database. Friends and Groups show
-empty states until phase 3 and 4 fill them in.
+**Friends** is fully working — add people by email, see your net balance with
+each of them in red / green / grey, expand the per-group breakdown, filter the
+list, and open any friend for the full history of expenses and payments
+between you. **Account** lets you edit your name, pick an avatar, switch
+themes, and change your password. **Activity** reads live from the database.
+Groups shows an empty state until phase 4.
+
+### Running the tests
+
+```bash
+node tests/balances.test.js
+```
+
+Covers the balance engine: pairwise netting, per-group breakdown, exclusion of
+the payer's own split, settlements in both directions, and Indian currency
+formatting. It needs no database and no browser.
 
 The full database — 8 tables, 27 row-level-security policies, 6 write RPCs — is
 already in `supabase/schema.sql` and supports every later phase.
@@ -361,8 +373,12 @@ index.html              every screen, as hidden <section data-screen> blocks
 css/app.css             design tokens + components, dark-first
 js/config.js            your two Supabase values — the only file you edit
 js/db.js                Supabase client
-js/ui.js                screens, toasts, form plumbing
-js/auth.js              signup, login, logout, password reset, session
+js/ui.js                screens, toasts, bottom sheet, form plumbing
+js/auth.js              signup, login, logout, password reset, session, routing
+js/balances.js          money, generated avatars, the balance engine
+js/shell.js             tabs, header, theme, Account tab, Activity feed
+js/friends.js           friends list, add/remove, filters, one friend's page
+tests/balances.test.js  balance engine regression test
 icons/                  app icon: SVG source + 5 rendered PNG sizes
 supabase/schema.sql     tables, RLS policies, RPCs, triggers, storage
 netlify.toml            publish settings, redirects, security headers
@@ -410,8 +426,8 @@ address without exposing the table.
 | 0 | Data model, RLS, app icon | Done |
 | 1 | Auth — signup, login, reset | Done |
 | 2 | Shell, tab bar, theming, Account tab | Done |
-| 3 | Friends and balances | Next |
-| 4 | Groups | |
+| 3 | Friends and balances | Done |
+| 4 | Groups | Next |
 | 5 | Expenses, splits, receipts | |
 | 6 | Settle up | |
 | 7 | Activity and notifications | |

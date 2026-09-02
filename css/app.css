@@ -706,10 +706,10 @@ button { font: inherit; color: inherit; }
 .list-row:active { background: var(--surface-2); }
 
 .avatar {
+  display: grid;
   width: 44px; height: 44px;
   border-radius: 50%;
   flex: none;
-  display: grid;
   place-items: center;
   font-size: 20px;
   overflow: hidden;
@@ -935,3 +935,223 @@ button { font: inherit; color: inherit; }
 .emoji-grid button:hover { border-color: var(--line-strong); }
 .emoji-grid button:active { transform: scale(0.92); }
 .emoji-grid button.is-on { border-color: var(--teal); background: var(--teal-soft); }
+
+/* ==========================================================================
+   PHASE 3 — friends, balances, detail pages
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Balance breakdown — the indented per-group lines hanging off a friend row,
+   on an L-connector dropping from the avatar's centre.
+   -------------------------------------------------------------------------- */
+
+.breakdown {
+  position: relative;
+  padding: 0 18px 10px 66px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.breakdown::before {
+  content: '';
+  position: absolute;
+  left: 39px;
+  top: -8px;
+  bottom: 18px;
+  width: 1.5px;
+  background: var(--line-strong);
+  border-radius: 2px;
+}
+.bd-row {
+  position: relative;
+  font-size: 13.5px;
+  color: var(--muted);
+  padding: 2px 0;
+  line-height: 1.45;
+}
+.bd-row::before {
+  content: '';
+  position: absolute;
+  left: -25px;
+  top: 13px;
+  width: 17px;
+  height: 1.5px;
+  background: var(--line-strong);
+}
+.bd-row .bd-owed { color: var(--owed); font-weight: 700; }
+.bd-row .bd-owe { color: var(--owe); font-weight: 700; }
+
+/* --------------------------------------------------------------------------
+   Bottom-of-list call to action
+   -------------------------------------------------------------------------- */
+
+.list-cta { padding: 20px 30px 8px; display: flex; justify-content: center; }
+.list-cta .btn { max-width: 320px; }
+
+/* --------------------------------------------------------------------------
+   Detail pages (a friend, later a group)
+   -------------------------------------------------------------------------- */
+
+.detail-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  padding-top: var(--safe-top);
+  background:
+    linear-gradient(180deg, var(--surface-2) 0%, var(--bg) 100%);
+  border-bottom: 1px solid var(--line);
+}
+
+.detail-bar {
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+}
+.detail-bar .grow { flex: 1; }
+
+.icon-btn.round {
+  background: var(--surface-3);
+  width: 38px;
+  height: 38px;
+}
+.icon-btn.round:hover { background: var(--line-strong); }
+
+.detail-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 2px 18px 14px;
+}
+.detail-hero .avatar { width: 56px; height: 56px; font-size: 26px; }
+.detail-hero-text { min-width: 0; flex: 1; }
+.detail-hero h1 {
+  font-size: 25px;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.detail-balance { font-size: 14.5px; font-weight: 700; margin-top: 2px; }
+.detail-balance.is-owed { color: var(--owed); }
+.detail-balance.is-owe { color: var(--owe); }
+.detail-balance.is-settled { color: var(--settled); }
+
+/* Horizontally scrolling action pills, as on the reference group page. */
+.chip-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 0 18px 14px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.chip-row::-webkit-scrollbar { display: none; }
+
+.chip {
+  flex: none;
+  border: 1.5px solid var(--line-strong);
+  background: transparent;
+  color: var(--text);
+  border-radius: var(--r-pill);
+  padding: 8px 15px;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+}
+.chip:hover { border-color: var(--teal); color: var(--teal); }
+.chip.is-primary { border-color: var(--teal); background: var(--teal); color: var(--on-teal); }
+.chip.is-primary:hover { background: var(--teal-press); }
+
+/* --------------------------------------------------------------------------
+   Ledger rows (one expense or payment between two people)
+   -------------------------------------------------------------------------- */
+
+.month-head {
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--faint);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 18px 18px 6px;
+}
+
+.ledger-row {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 10px 18px;
+  width: 100%;
+  background: none;
+  border: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  /* No cursor:pointer and no hover — these become tappable in phase 5, when
+     the expense detail page exists to tap through to. */
+}
+
+.ledger-date {
+  flex: none;
+  width: 34px;
+  text-align: center;
+  color: var(--faint);
+  line-height: 1.1;
+}
+.ledger-date .d { font-size: 17px; font-weight: 800; color: var(--muted); }
+.ledger-date .m { font-size: 10.5px; font-weight: 700; text-transform: uppercase; }
+
+.ledger-emoji {
+  flex: none;
+  width: 38px; height: 38px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  display: grid;
+  place-items: center;
+  font-size: 19px;
+}
+.ledger-main { flex: 1; min-width: 0; }
+.ledger-title {
+  font-size: 15.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ledger-sub { font-size: 12.5px; color: var(--muted); }
+.ledger-delta { flex: none; text-align: right; line-height: 1.25; }
+.ledger-delta .lbl { display: block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.ledger-delta .val { font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ledger-delta.is-owed .lbl, .ledger-delta.is-owed .val { color: var(--owed); }
+.ledger-delta.is-owe  .lbl, .ledger-delta.is-owe  .val { color: var(--owe); }
+.ledger-delta.is-flat .lbl, .ledger-delta.is-flat .val { color: var(--settled); }
+
+/* --------------------------------------------------------------------------
+   Filter sheet options
+   -------------------------------------------------------------------------- */
+
+.opt-list { display: flex; flex-direction: column; }
+.opt {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: none;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  font-size: 15.5px;
+  font-weight: 700;
+}
+.opt:first-child { border-top: 0; }
+.opt:hover { background: var(--surface-2); }
+.opt .tick { margin-left: auto; color: var(--teal); opacity: 0; flex: none; }
+.opt.is-on .tick { opacity: 1; }
+.opt.is-on { color: var(--teal); }

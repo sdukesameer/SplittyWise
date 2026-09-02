@@ -9,16 +9,22 @@ window.SW = window.SW || {};
 
   const db = SW.db;
 
-  // Per-tab header behaviour, matching the reference screens: a contextual
-  // text action on the right, and whether the big balance summary shows.
-  const TABS = {
-    friends:  { action: 'Add friends',  summary: true  },
-    groups:   { action: 'Create group', summary: true  },
-    activity: { action: null,           summary: false },
-    account:  { action: null,           summary: false },
+  // Per-view chrome. `tab` is which bottom tab stays lit; `chrome` false
+  // means the view supplies its own header (detail pages do).
+  const VIEWS = {
+    friends:         { tab: 'friends',  action: 'Add friends',  summary: true,  chrome: true },
+    groups:          { tab: 'groups',   action: 'Create group', summary: true,  chrome: true },
+    activity:        { tab: 'activity', action: null,           summary: false, chrome: true },
+    account:         { tab: 'account',  action: null,           summary: false, chrome: true },
+    'friend-detail': { tab: 'friends',  action: null,           summary: false, chrome: false },
+    'group-detail':  { tab: 'groups',   action: null,           summary: false, chrome: false },
   };
 
+  // Views register their renderer here; showView calls it on every entry.
+  SW.viewHooks = {};
+
   let activeView = null;
+  let activeParam = null;
   let activityLoaded = false;
 
   /* ======================= theme ====================================== */
@@ -54,19 +60,21 @@ window.SW = window.SW || {};
 
   /* ======================= views ====================================== */
 
-  SW.showView = function (view) {
-    if (!TABS[view]) view = 'friends';
+  SW.showView = function (view, param) {
+    if (!VIEWS[view]) view = 'friends';
+    const cfg = VIEWS[view];
 
     document.querySelectorAll('[data-view]').forEach(function (el) {
       el.classList.toggle('is-active', el.getAttribute('data-view') === view);
     });
     document.querySelectorAll('.tab').forEach(function (t) {
-      const on = t.getAttribute('data-tab') === view;
+      const on = t.getAttribute('data-tab') === cfg.tab;
       t.classList.toggle('is-active', on);
       t.setAttribute('aria-current', on ? 'page' : 'false');
     });
 
-    const cfg = TABS[view];
+    // Detail views bring their own header.
+    document.getElementById('app-header').hidden = !cfg.chrome;
 
     const action = document.getElementById('header-action');
     action.hidden = !cfg.action;
@@ -74,15 +82,18 @@ window.SW = window.SW || {};
 
     document.getElementById('summary').hidden = !cfg.summary;
 
-    // The FAB is for adding an expense; it has no meaning on Account.
+    // The FAB adds an expense; it has no meaning on Account.
     document.getElementById('fab').hidden = (view === 'account');
 
     activeView = view;
+    activeParam = param || null;
     window.scrollTo(0, 0);
 
-    if (view === 'activity') loadActivity();
-    if (view === 'account') renderAccount();
+    const hook = SW.viewHooks[view];
+    if (hook) hook(param);
   };
+
+  SW.activeView = function () { return activeView; };
 
   document.addEventListener('click', function (e) {
     const tab = e.target.closest('.tab');
@@ -98,9 +109,8 @@ window.SW = window.SW || {};
   }, { passive: true });
 
   document.getElementById('header-action').addEventListener('click', function () {
-    SW.toast(activeView === 'groups'
-      ? 'Creating groups arrives in phase 4'
-      : 'Adding friends arrives in phase 3');
+    if (activeView === 'groups') return SW.toast('Creating groups arrives in phase 4');
+    if (SW.addFriendSheet) SW.addFriendSheet();
   });
 
   document.getElementById('btn-search').addEventListener('click', function () {
@@ -108,7 +118,8 @@ window.SW = window.SW || {};
   });
 
   document.getElementById('btn-filter').addEventListener('click', function () {
-    SW.toast('Filters arrive in phase 3');
+    if (activeView === 'friends' && SW.friendFilterSheet) return SW.friendFilterSheet();
+    SW.toast('Filters for this tab arrive with it');
   });
 
   document.getElementById('btn-bell').addEventListener('click', function () {
@@ -120,15 +131,6 @@ window.SW = window.SW || {};
     const el = e.target.closest('[data-todo]');
     if (el) SW.toast(el.getAttribute('data-todo'));
   });
-
-  /* ======================= balance summary ============================ */
-
-  // Real balances land in phase 3. Until then this states the true position
-  // rather than showing a fake number.
-  function renderSummary() {
-    const el = document.getElementById('summary-text');
-    if (el) el.innerHTML = 'Overall, you are <span class="amt-none">all settled up</span>';
-  }
 
   /* ======================= activity feed ============================== */
 
@@ -370,15 +372,22 @@ window.SW = window.SW || {};
 
   /* ======================= signed-in hook ============================= */
 
+  SW.viewHooks.activity = function () { loadActivity(); };
+  SW.viewHooks.account = function () { renderAccount(); };
+
+  SW.refreshUnread = refreshUnread;
+
   // The inline script in <head> already applied the theme; this syncs the
   // segmented control to match it.
   applyTheme(readTheme());
 
-  SW.onSignedIn = function () {
-    renderSummary();
+  SW.onSignedIn = async function () {
     renderAccount();
     refreshUnread();
     activityLoaded = false;
     if (activeView === 'activity') loadActivity(true);
+
+    // The ledger drives Friends, Groups and the balance summary.
+    if (SW.refreshLedger) await SW.refreshLedger();
   };
 })();

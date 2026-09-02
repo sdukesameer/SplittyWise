@@ -20,12 +20,18 @@ window.SW = window.SW || {};
 
   const AUTH_SCREENS = ['login', 'signup', 'verify', 'forgot', 'forgot-sent', 'reset'];
   const APP_VIEWS = ['friends', 'groups', 'activity', 'account'];
+  // Routes carrying an id, e.g. #/friend/<uuid>. The value is the view name.
+  const PARAM_ROUTES = { friend: 'friend-detail', group: 'group-detail' };
   const DEFAULT_VIEW = 'friends';
 
   SW.APP_VIEWS = APP_VIEWS;
 
+  function isAppRoute(name) {
+    return APP_VIEWS.includes(name) || !!PARAM_ROUTES[name];
+  }
+
   // One route namespace covers both worlds: an auth screen name, or an app
-  // view name (which implies the 'app' screen).
+  // route ('friends', or 'friend/<id>').
   SW.navigate = function (route, opts) {
     const replace = opts && opts.replace;
     const target = '#/' + route;
@@ -33,15 +39,16 @@ window.SW = window.SW || {};
       if (replace) window.history.replaceState(null, '', target);
       else window.location.hash = target;
     }
-    render(route);
+    const parts = String(route).split('/');
+    render(parts[0], parts[1] || null);
   };
 
-  function render(route) {
-    if (APP_VIEWS.includes(route)) {
+  function render(name, param) {
+    if (isAppRoute(name)) {
       SW.show('app');
-      if (SW.showView) SW.showView(route);
+      if (SW.showView) SW.showView(PARAM_ROUTES[name] || name, param);
     } else {
-      SW.show(route);
+      SW.show(name);
     }
   }
 
@@ -49,8 +56,8 @@ window.SW = window.SW || {};
     const h = window.location.hash || '';
     // An auth callback hash is not a route.
     if (h.includes('access_token') || h.includes('error_description')) return null;
-    const m = h.match(/^#\/([a-z-]+)/);
-    return m ? m[1] : null;
+    const m = h.match(/^#\/([a-z-]+)(?:\/([^\/?#]+))?/);
+    return m ? { name: m[1], param: m[2] || null } : null;
   }
 
   window.addEventListener('hashchange', function () {
@@ -58,13 +65,13 @@ window.SW = window.SW || {};
     if (!r) return;
     // Signed-in users have no business on the auth screens, and signed-out
     // users have no business in the app.
-    if (SW.session && AUTH_SCREENS.includes(r) && !recoveryMode) {
+    if (SW.session && AUTH_SCREENS.includes(r.name) && !recoveryMode) {
       return SW.navigate(DEFAULT_VIEW, { replace: true });
     }
-    if (!SW.session && APP_VIEWS.includes(r)) {
+    if (!SW.session && isAppRoute(r.name)) {
       return SW.navigate('login', { replace: true });
     }
-    render(r);
+    render(r.name, r.param);
   });
 
   /* ======================= error messages ============================= */
@@ -353,7 +360,7 @@ window.SW = window.SW || {};
 
     if (session && !recoveryMode) {
       const r = routeFromHash();
-      if (!r || AUTH_SCREENS.includes(r)) SW.navigate(DEFAULT_VIEW, { replace: true });
+      if (!r || AUTH_SCREENS.includes(r.name)) SW.navigate(DEFAULT_VIEW, { replace: true });
       renderApp();
     }
   });
@@ -379,11 +386,14 @@ window.SW = window.SW || {};
       SW.navigate('reset', { replace: true });
     } else if (SW.session) {
       const r = routeFromHash();
-      SW.navigate(APP_VIEWS.includes(r) ? r : DEFAULT_VIEW, { replace: true });
+      const dest = r && isAppRoute(r.name)
+        ? r.name + (r.param ? '/' + r.param : '')
+        : DEFAULT_VIEW;
+      SW.navigate(dest, { replace: true });
       await renderApp();
     } else {
       const r = routeFromHash();
-      SW.navigate(r && AUTH_SCREENS.includes(r) ? r : 'login', { replace: true });
+      SW.navigate(r && AUTH_SCREENS.includes(r.name) ? r.name : 'login', { replace: true });
     }
 
     SW.hideBoot();

@@ -43,6 +43,15 @@
       <stop offset=".55" stop-color="#14B8A6"/>
       <stop offset="1" stop-color="#6366F1"/>
     </linearGradient>
+    <symbol id="ic-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M15 5l-7 7 7 7"/>
+    </symbol>
+    <symbol id="ic-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 12.5l5 5L20 6.5"/>
+    </symbol>
+    <symbol id="ic-person-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="10" cy="8" r="3.6"/><path d="M3.5 20a6.5 6.5 0 0113 0"/><path d="M18 8.5v5M15.5 11h5"/>
+    </symbol>
     <symbol id="ic-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round">
       <circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/>
     </symbol>
@@ -313,14 +322,50 @@
 
     <!-- ---------- Friends ---------- -->
     <div data-view="friends">
-      <div class="empty">
+      <div id="friends-skel">
+        <div class="skel-row"><div class="skel skel-avatar"></div>
+          <div class="skel-lines"><div class="skel skel-line-1"></div><div class="skel skel-line-2"></div></div>
+          <div class="skel skel-amt"></div></div>
+        <div class="skel-row"><div class="skel skel-avatar"></div>
+          <div class="skel-lines"><div class="skel skel-line-1"></div><div class="skel skel-line-2"></div></div>
+          <div class="skel skel-amt"></div></div>
+        <div class="skel-row"><div class="skel skel-avatar"></div>
+          <div class="skel-lines"><div class="skel skel-line-1"></div><div class="skel skel-line-2"></div></div>
+          <div class="skel skel-amt"></div></div>
+      </div>
+
+      <div id="friends-body" hidden>
+        <div class="list" id="friends-list"></div>
+
+        <div id="friends-settled-wrap" hidden>
+          <div class="section-label">
+            <span id="friends-settled-label">Settled up</span>
+            <button type="button" class="btn-text" id="friends-settled-toggle">Hide</button>
+          </div>
+          <div class="list" id="friends-settled-list"></div>
+        </div>
+
+        <div class="list-cta">
+          <button type="button" class="btn btn-ghost" id="friends-add-more">
+            <svg width="19" height="19" aria-hidden="true"><use href="#ic-person-plus"/></svg>
+            Add more friends
+          </button>
+        </div>
+      </div>
+
+      <div class="empty" id="friends-empty" hidden>
         <div class="empty-art">👋</div>
         <h3>No friends yet</h3>
         <p>Add someone by their email address and any expense you split with
            them shows up here.</p>
-        <button type="button" class="btn btn-ghost" data-todo="Adding friends arrives in phase 3">
-          Add a friend
-        </button>
+        <button type="button" class="btn btn-ghost" id="friends-empty-add">Add a friend</button>
+      </div>
+
+      <div class="empty" id="friends-filtered-empty" hidden>
+        <div class="empty-art">🔍</div>
+        <h3>Nobody matches that filter</h3>
+        <p>Try clearing it to see everyone again.</p>
+        <button type="button" class="btn btn-ghost" id="friends-clear-filter">Clear filter</button>
       </div>
     </div>
 
@@ -424,6 +469,42 @@
       </p>
     </div>
 
+    <!-- ---------- One friend ---------- -->
+    <div data-view="friend-detail">
+      <header class="detail-header">
+        <div class="detail-bar">
+          <button class="icon-btn round" id="friend-back" aria-label="Back to friends">
+            <svg aria-hidden="true"><use href="#ic-back"/></svg>
+          </button>
+          <span class="grow"></span>
+        </div>
+
+        <div class="detail-hero">
+          <span id="friend-avatar"></span>
+          <div class="detail-hero-text">
+            <h1 id="friend-name">&nbsp;</h1>
+            <div class="detail-balance" id="friend-balance">&nbsp;</div>
+          </div>
+        </div>
+
+        <div class="chip-row">
+          <button type="button" class="chip is-primary" id="friend-settle"
+                  data-todo="Settling up arrives in phase 6">Settle up</button>
+          <button type="button" class="chip" id="friend-add-expense"
+                  data-todo="Adding expenses arrives in phase 5">Add expense</button>
+          <button type="button" class="chip" id="friend-remove">Remove friend</button>
+        </div>
+      </header>
+
+      <div id="friend-ledger"></div>
+
+      <div class="empty" id="friend-empty" hidden>
+        <div class="empty-art">🧾</div>
+        <h3>Nothing between you yet</h3>
+        <p>Add an expense and split it with them, and every line will show up here.</p>
+      </div>
+    </div>
+
   </main>
 
   <button class="fab" id="fab" data-todo="Adding expenses arrives in phase 5">
@@ -465,6 +546,8 @@
 <script src="js/db.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/auth.js"></script>
+<script src="js/balances.js"></script>
 <script src="js/shell.js"></script>
+<script src="js/friends.js"></script>
 </body>
 </html>

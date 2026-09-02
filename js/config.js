@@ -11,6 +11,6 @@
 // ---------------------------------------------------------------------------
 
 window.SPLITTYWISE_CONFIG = {
-  SUPABASE_URL: 'https://YOUR-PROJECT-REF.supabase.co',
-  SUPABASE_ANON_KEY: 'YOUR-ANON-PUBLIC-KEY',
+  SUPABASE_URL: 'https://zemclxxslmimtrskjcey.supabase.co',
+  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InplbWNseHhzbG1pbXRyc2tqY2V5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgzMzk2NTMsImV4cCI6MjEwMzkxNTY1M30.zFzmqCC4x8oPaCNTdap2mKCnY7AvaCLBvXrRdXeW6y8',
 };
