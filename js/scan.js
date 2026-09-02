@@ -72,12 +72,42 @@ window.SW = window.SW || {};
     return Math.round(n * 100);
   }
 
+  // "12 x 70 g" is a pack size; "x2" is how many were ordered. Telling them
+  // apart is the whole difficulty: a count is never followed by a unit, and
+  // an "N x" count is never followed by another number.
+  function quantityCandidates(line) {
+    const found = [];
+
+    // "x2" — the near-universal marker, so it wins.
+    const after = /(?:^|\s)x\s*(\d{1,2})(?=\s|$)/gi;
+    let m;
+    while ((m = after.exec(line)) !== null) {
+      const rest = line.slice(m.index + m[0].length).trim();
+      if (UNIT_AFTER.test(rest)) continue;          // "x 70 g" is a pack size
+      found.push({ n: parseInt(m[1], 10), at: m.index, form: 'after' });
+    }
+    if (found.length) return found;
+
+    // "2 x Dairy Milk" — only when what follows is neither a unit nor
+    // another number, which is what "12 x 70 g" looks like.
+    const before = /(?:^|\s)(\d{1,2})\s*x(?=\s|$)/gi;
+    while ((m = before.exec(line)) !== null) {
+      const rest = line.slice(m.index + m[0].length).trim();
+      if (UNIT_AFTER.test(rest) || /^\d/.test(rest)) continue;
+      found.push({ n: parseInt(m[1], 10), at: m.index, form: 'before' });
+    }
+    return found;
+  }
+
   function quantityIn(line) {
-    // "x2", "2 x", "(2)", "2 nos", "Qty 2"
-    let m = line.match(/(?:^|\s)x\s*(\d{1,2})(?:\s|$)/i) ||
-            line.match(/(?:^|\s)(\d{1,2})\s*x(?:\s|$)/i) ||
-            line.match(/\bqty\.?\s*[:\-]?\s*(\d{1,2})\b/i) ||
-            line.match(/\((\d{1,2})\)\s*$/);
+    const candidates = quantityCandidates(line);
+    if (candidates.length) {
+      const q = candidates[candidates.length - 1].n;
+      if (q >= 1 && q <= 99) return q;
+    }
+
+    const m = line.match(/\bqty\.?\s*[:\-]?\s*(\d{1,2})\b/i) ||
+              line.match(/\((\d{1,2})\)\s*$/);
     if (!m) return 1;
     const q = parseInt(m[1], 10);
     return q >= 1 && q <= 99 ? q : 1;
@@ -87,10 +117,17 @@ window.SW = window.SW || {};
     return text
       // Currency-marked amounts first.
       .replace(/(?:₹|₨|rs\.?|inr|r5)\s*[\d,]+(?:\.\d{1,2})?/gi, ' ')
-      // Then quantities — BEFORE the trailing-number pass, which would
-      // otherwise eat the digits of "x2" and leave a stray "x" behind.
-      .replace(/(?:^|\s)x\s*\d{1,2}(?=\s|$)/gi, ' ')
-      .replace(/(?:^|\s)\d{1,2}\s*x(?=\s|$)/gi, ' ')
+      // Then the quantity — BEFORE the trailing-number pass, which would
+      // otherwise eat the digits of "x2" and leave a stray "x" behind. Only
+      // a real count is removed, so "12 x 70 g" stays in the name.
+      .replace(/(?:^|\s)x\s*\d{1,2}(?=\s|$)/gi, function (match, offset, whole) {
+        const rest = whole.slice(offset + match.length).trim();
+        return UNIT_AFTER.test(rest) ? match : ' ';
+      })
+      .replace(/(?:^|\s)\d{1,2}\s*x(?=\s|$)/gi, function (match, offset, whole) {
+        const rest = whole.slice(offset + match.length).trim();
+        return (UNIT_AFTER.test(rest) || /^\d/.test(rest)) ? match : ' ';
+      })
       .replace(/\bqty\.?\s*[:\-]?\s*\d{1,2}\b/gi, ' ')
       .replace(/\(\d{1,2}\)\s*$/, ' ')
       // Finally a bare amount sitting in the last column.
@@ -329,8 +366,13 @@ window.SW = window.SW || {};
           '<p>A Zepto, Blinkit or Swiggy order screenshot works best. It is read ' +
              'on this phone and never uploaded or saved.</p>' +
           '<input type="file" id="scan-file" accept="image/*" hidden>' +
-          '<button type="button" class="btn btn-primary" id="scan-pick" ' +
-                  'style="max-width:280px">Choose an image</button>' +
+          '<button type="button" class="btn btn-primary" id="scan-paste" ' +
+                  'style="max-width:280px">Paste the order text</button>' +
+          '<button type="button" class="btn btn-ghost" id="scan-pick" ' +
+                  'style="max-width:280px">Read a screenshot instead</button>' +
+          '<span class="hint" style="max-width:32ch;text-align:center">Pasted text ' +
+            'is read exactly. A screenshot has to be guessed at, so expect to ' +
+            'correct a row or two.</span>' +
           '<button type="button" class="btn-text" id="scan-manual">' +
             'Or itemise by hand</button>' +
         '</div>';
@@ -346,6 +388,64 @@ window.SW = window.SW || {};
       document.getElementById('scan-manual').addEventListener('click', function () {
         rows = [];
         renderItemise({ merged: 0, manual: true });
+      });
+      document.getElementById('scan-paste').addEventListener('click', renderPaste);
+    }
+
+    /* ---- stage 1b: paste it instead ---- */
+
+    // A Zepto or Blinkit order confirmation is selectable text. Pasting it
+    // skips OCR entirely, so nothing has to be guessed at — the same parser
+    // does the work, just on characters instead of pixels.
+    function renderPaste() {
+      stage().innerHTML =
+        '<div class="sheet-body">' +
+          '<p style="color:var(--muted);font-size:14.5px">Copy the order from ' +
+            'Zepto, Blinkit, Swiggy or an email and paste it here. Long-press ' +
+            'the item list in the app and choose Copy.</p>' +
+          '<textarea class="input" id="scan-text" rows="8" ' +
+                    'placeholder="Onion 1 kg  ₹42&#10;Amul Butter 500 g  ₹265&#10;' +
+                    'Handling Fee  ₹12" ' +
+                    'style="resize:vertical;line-height:1.5;font-size:14px"></textarea>' +
+          '<div class="field-error" id="scan-text-error"></div>' +
+        '</div>' +
+        '<div class="sheet-actions">' +
+          '<button type="button" class="btn btn-primary" id="scan-text-go">' +
+            'Read it</button>' +
+          '<button type="button" class="btn-text" id="scan-text-back" ' +
+                  'style="align-self:center;padding:8px">Back</button>' +
+        '</div>';
+
+      const box = document.getElementById('scan-text');
+      box.focus();
+
+      // Offer what is already on the clipboard, where the browser allows it.
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        navigator.clipboard.readText().then(function (text) {
+          if (text && text.trim() && !box.value) box.value = text;
+        }).catch(function () { /* refused, which is normal */ });
+      }
+
+      document.getElementById('scan-text-back').addEventListener('click', renderPick);
+      document.getElementById('scan-text-go').addEventListener('click', function () {
+        const text = box.value;
+        if (!text.trim()) {
+          return SW.setError('scan-text-error', 'Paste the order first.');
+        }
+
+        const parsed = SW.parseReceipt(text);
+        if (!parsed.rows.length) {
+          return SW.setError('scan-text-error',
+            'No priced rows in that. Each line needs a name and an amount.');
+        }
+
+        rows = parsed.rows.map(function (r) {
+          return {
+            name: r.name, qty: r.qty, totalPaise: r.totalPaise, kind: r.kind,
+            who: r.kind === 'fee' ? [] : people.slice(),
+          };
+        });
+        renderItemise({ merged: parsed.merged });
       });
     }
 

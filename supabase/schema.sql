@@ -145,6 +145,23 @@ create table if not exists public.expense_comments (
   created_at  timestamptz not null default now()
 );
 
+-- Your own categories, and a monthly cap on any of them. Rows exist for
+-- two reasons: to add a category the built-in list does not cover, and to
+-- hang a budget on one that it does. `expenses.category` stays plain text,
+-- so nothing has to be migrated when a category is renamed or removed.
+create table if not exists public.user_categories (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null references public.profiles(id) on delete cascade,
+  name          text not null check (length(trim(name)) between 1 and 40),
+  emoji         text not null default '🏷️',
+  -- Paise per month. Null means no cap, which is not the same as zero.
+  budget_paise  bigint check (budget_paise is null or budget_paise > 0),
+  is_custom     boolean not null default true,
+  sort_order    int not null default 0,
+  created_at    timestamptz not null default now(),
+  unique (user_id, name)
+);
+
 -- A payback. Never edits an expense; balances are (expenses - settlements).
 create table if not exists public.settlements (
   id          uuid primary key default gen_random_uuid(),
@@ -216,6 +233,7 @@ create index if not exists idx_recurring_due       on public.recurring_expenses(
   where active;
 create index if not exists idx_recurring_creator   on public.recurring_expenses(created_by);
 create index if not exists idx_comments_expense    on public.expense_comments(expense_id, created_at);
+create index if not exists idx_user_categories     on public.user_categories(user_id, sort_order);
 create index if not exists idx_splits_user         on public.expense_splits(user_id);
 create index if not exists idx_settle_from         on public.settlements(from_user);
 create index if not exists idx_settle_to           on public.settlements(to_user);
@@ -305,6 +323,7 @@ alter table public.expense_payers enable row level security;
 alter table public.invites        enable row level security;
 alter table public.recurring_expenses enable row level security;
 alter table public.expense_comments enable row level security;
+alter table public.user_categories enable row level security;
 alter table public.settlements    enable row level security;
 alter table public.notifications  enable row level security;
 
@@ -510,6 +529,13 @@ create policy comments_insert on public.expense_comments
 drop policy if exists comments_delete on public.expense_comments;
 create policy comments_delete on public.expense_comments
   for delete to authenticated using (author_id = auth.uid());
+
+-- ---- user_categories -------------------------------------------------------
+-- Entirely private: a budget is nobody else's business, even inside a group.
+drop policy if exists categories_all on public.user_categories;
+create policy categories_all on public.user_categories
+  for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 -- ---- settlements -----------------------------------------------------------
 drop policy if exists settlements_select on public.settlements;

@@ -116,6 +116,43 @@ check('items first, then fees', brief(r), [
   'Tip|1|2000|fee',
 ]);
 
+console.log('\n--- pasted order text, which is exact rather than guessed at ---');
+// A real Zepto order copied out of the app: tabs, rupee signs, a struck MRP,
+// quantity badges, and the fee block at the end.
+r = SW.parseReceipt([
+  'Order summary',
+  'Onion (Peeled)\t1 kg\t₹42',
+  'Amul Butter\t500 g\t₹265',
+  'Maggi Masala Noodles\t12 x 70 g\tx2\t₹336',
+  'Tata Salt\t1 kg\t₹28',
+  'Item total\t₹671',
+  'Handling charge\t₹12',
+  'Delivery charge\t₹0',
+  'Grand total\t₹683',
+].join('\n'));
+check('four items and one real fee', brief(r), [
+  'Onion (Peeled) 1 kg|1|4200|item',
+  'Amul Butter 500 g|1|26500|item',
+  'Maggi Masala Noodles 12 x 70 g|2|33600|item',
+  'Tata Salt 1 kg|1|2800|item',
+  'Handling charge|1|1200|fee',
+]);
+console.log('  a ₹0 delivery charge is dropped, since it splits to nothing');
+
+console.log('\n--- a pack size is not a quantity ---');
+check('"12 x 70 g" alone is one item',
+  SW.parseReceipt('Maggi 12 x 70 g ₹336').rows.map(x => x.qty + '|' + x.name),
+  ['1|Maggi 12 x 70 g']);
+check('"x2" after a pack size is the count',
+  SW.parseReceipt('Maggi 12 x 70 g x2 ₹336').rows.map(x => x.qty + '|' + x.name),
+  ['2|Maggi 12 x 70 g']);
+check('"2 x Name" is still a count',
+  SW.parseReceipt('2 x Dairy Milk ₹90').rows.map(x => x.qty + '|' + x.name),
+  ['2|Dairy Milk']);
+check('"6 x 250 ml" is a pack, not six',
+  SW.parseReceipt('Real Juice 6 x 250 ml ₹390').rows.map(x => x.qty),
+  [1]);
+
 console.log('\n--- the scenario from the request ---');
 // 5 items across 4 people: 2 shared by all, 2 by three of them, 1 by one.
 const P = ['p1', 'p2', 'p3', 'p4'];

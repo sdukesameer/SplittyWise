@@ -52,7 +52,12 @@ all — it queues on the phone and syncs later.
 
 The amount field takes arithmetic (`240+80*2`), the accent colour and a
 true-black theme are yours to pick, and a balance can be shared as text
-straight into WhatsApp. Groups carry a cover photo, a whiteboard, a settle-up date and
+straight into WhatsApp.
+
+An order can be pasted as text rather than scanned, which parses exactly
+instead of being guessed at. Things you enter twice become one-tap
+templates. Categories are yours to add, and any of them can carry a monthly
+cap. Groups carry a cover photo, a whiteboard, a settle-up date and
 your own default split. Invite links let someone join by signing up.
 
 ### Running the tests
@@ -61,7 +66,7 @@ your own default split. Invite links let someone join by signing up.
 for t in tests/*.test.js; do node "$t"; done
 ```
 
-Thirteen suites, no database and no browser needed:
+Fourteen suites, no database and no browser needed:
 
 | Suite | Covers |
 |---|---|
@@ -76,6 +81,7 @@ Thirteen suites, no database and no browser needed:
 | `payers.test.js` | Multiple payers: one payer still behaves identically, and several net into the fewest transfers |
 | `history.test.js` | Folding away settled history, shared groups, and scoping charts and exports by group, friend and month |
 | `upi.test.js` | UPI link building, and recurrence dates that must not drift |
+| `templates.test.js` | Templates built from habit, and what is deliberately left out |
 | `calc.test.js` | Arithmetic in the amount field, including what it must refuse |
 | `wiring.test.js` | That the app is actually connected: every RPC exists with the arguments passed, every column selected exists, every button has a handler, every screen can render, every CSS token is defined at the base, the accessibility floor holds, and the offline shell is complete |
 

@@ -235,6 +235,37 @@ window.SW = window.SW || {};
     if (!any) return;
 
     SW.renderChartBlock(host, {}, { ofLabel: 'everything recorded' });
+
+    // Caps come first: what is left this month matters more than what has
+    // already gone.
+    const status = SW.budgetStatus();
+    const budgets = document.getElementById('ins-budgets');
+    if (!status.length) { budgets.innerHTML = ''; return; }
+
+    const over = status.filter(function (s) { return s.over; });
+    budgets.innerHTML =
+      '<div class="budget-card">' +
+        '<h3>Budgets this month</h3>' +
+        '<div class="bc-sub">' +
+          (over.length
+            ? '<span style="color:var(--owe);font-weight:800">' + over.length +
+              (over.length === 1 ? ' category over' : ' categories over') + '</span>'
+            : 'All within budget') +
+        '</div>' +
+        status.map(function (s) {
+          return '<div class="budget-line">' +
+            '<div class="bl-top">' +
+              '<span class="bl-name">' + esc(s.name) + '</span>' +
+              '<span class="bl-num' + (s.over ? ' is-over' : '') + '">' +
+                (s.over ? SW.money(-s.left) + ' over' : SW.money(s.left) + ' left') +
+              '</span>' +
+            '</div>' +
+            '<div class="budget-track' +
+              (s.over ? ' is-over' : (s.pct >= 80 ? ' is-close' : '')) + '">' +
+              '<span style="width:' + s.pct + '%"></span></div>' +
+          '</div>';
+        }).join('') +
+      '</div>';
   }
 
   SW.viewHooks.insights = renderInsights;

@@ -135,5 +135,51 @@ check('inner quotes doubled', csv2.indexOf('""quotes""') > -1, true);
 check('embedded newline is quoted, not a new row',
   csv2.replace(/^﻿/, '').trim().split('\r\n').length, 7);
 
+console.log('\n--- categories of your own, and monthly caps ---');
+// Reset to a known month so the budget maths is deterministic.
+const nowMonth = new Date().toISOString().slice(0, 7);
+SW.ledger.categories = [
+  { id: 'c1', name: 'Groceries', emoji: null, budget_paise: 50000, is_custom: false, sort_order: 0 },
+  { id: 'c2', name: 'Cigarettes', emoji: '🚬', budget_paise: 20000, is_custom: true, sort_order: 1 },
+  { id: 'c3', name: 'Travel', emoji: null, budget_paise: null, is_custom: false, sort_order: 2 },
+];
+SW.ledger.expenses = [
+  { id: 'b1', group_id: null, payer_id: ME, amount: '600.00', description: 'Big shop',
+    emoji: '🛒', category: 'Groceries', notes: null,
+    expense_date: nowMonth + '-04', created_at: 'a',
+    expense_splits: [{ user_id: ME, amount: '600.00' }] },
+  { id: 'b2', group_id: null, payer_id: ME, amount: '250.00', description: 'Smokes',
+    emoji: '🏷️', category: 'Cigarettes', notes: null,
+    expense_date: nowMonth + '-06', created_at: 'b',
+    expense_splits: [{ user_id: ME, amount: '250.00' }] },
+  // Last month: must not count against this month's cap.
+  { id: 'b3', group_id: null, payer_id: ME, amount: '900.00', description: 'Old shop',
+    emoji: '🛒', category: 'Groceries', notes: null,
+    expense_date: '2020-01-04', created_at: 'c',
+    expense_splits: [{ user_id: ME, amount: '900.00' }] },
+];
+
+check('a category of your own resolves', SW.categoryOf(SW.ledger.expenses[1]), 'Cigarettes');
+check('built-ins plus your own', SW.categoryList().map(c => c.name),
+  ['Groceries', 'Food & drink', 'Home & bills', 'Travel', 'Life & fun', 'Other', 'Cigarettes']);
+check('a cap is attached to its category',
+  SW.categoryList().filter(c => c.name === 'Groceries')[0].budget, 50000);
+
+const status = SW.budgetStatus();
+check('only capped categories appear', status.map(s => s.name), ['Cigarettes', 'Groceries']);
+check('over budget is flagged', status[0].over, true);
+check('by how much', status[0].left, -5000);
+check('and the bar is capped at 100', status[0].pct, 100);
+check('within budget', [status[1].spent, status[1].left, status[1].over],
+  [60000, -10000, true]);
+// Sorted by how much of the cap is used, so the overspent one leads —
+// assert by name rather than by position.
+const byName = {};
+SW.budgetStatus('2020-01').forEach(s => { byName[s.name] = s.spent; });
+check('another month counts only its own expenses', byName,
+  { Groceries: 90000, Cigarettes: 0 });
+check('worst overspend is listed first',
+  SW.budgetStatus('2020-01')[0].name, 'Groceries');
+
 console.log('\n' + (fails ? fails + ' FAILURE(S)' : 'all checks passed'));
 process.exit(fails ? 1 : 0);

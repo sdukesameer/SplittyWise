@@ -42,6 +42,7 @@ window.SW = window.SW || {};
       adjust: {},            // userId -> paise owed on top
       note: '',              // typed, or written by the itemised scanner
       repeat: null,          // 'weekly' | 'monthly' | 'yearly'
+      category: null,        // null means derive it from the icon
       receiptPath: null,
       receiptFile: null,
       receiptName: '',
@@ -137,6 +138,8 @@ window.SW = window.SW || {};
       rawBody:
         '<div class="sheet-body">' +
 
+          (f.id ? '' : templateChips()) +
+
           '<div class="amount-row">' +
             '<button type="button" class="emoji-btn" id="exp-f-emoji" ' +
                     'aria-label="Change the icon">' + esc(f.emoji) + '</button>' +
@@ -182,6 +185,15 @@ window.SW = window.SW || {};
 
           '<div id="exp-f-split"></div>' +
 
+          '<button type="button" class="picker-row" id="exp-f-category" ' +
+                  'style="border:1px solid var(--line);border-radius:var(--r-md)">' +
+            '<span class="pr-label">Category</span>' +
+            '<span class="pr-value">' +
+              esc(f.category || SW.categoryForEmoji(f.emoji)) + '</span>' +
+            '<svg class="chev" width="17" height="17" aria-hidden="true">' +
+              '<use href="#ic-chev"/></svg>' +
+          '</button>' +
+
           '<button type="button" class="picker-row" id="exp-f-repeat" ' +
                   'style="border:1px solid var(--line);border-radius:var(--r-md)">' +
             '<span class="pr-label">Repeats</span>' +
@@ -220,6 +232,47 @@ window.SW = window.SW || {};
       onConfirm: save,
     });
   };
+
+  // Built from habit, so this row is empty until something has been entered
+  // twice — a template nobody asked for is just clutter.
+  function templateChips() {
+    const list = SW.frequentExpenses(5);
+    if (!list.length) return '';
+
+    return '<div class="split-modes" id="exp-f-templates" ' +
+             'style="border-bottom:0;padding:0 0 2px" aria-label="Enter again">' +
+      list.map(function (t, i) {
+        return '<button type="button" data-template="' + i + '">' +
+          esc(t.emoji) + ' ' + esc(t.description) + ' · ' +
+          SW.money(t.amountPaise) + '</button>';
+      }).join('') +
+    '</div>';
+  }
+
+  function applyTemplate(t) {
+    f.description = t.description;
+    f.amountPaise = t.amountPaise;
+    f.amountText = SW.rupees(t.amountPaise);
+    f.emoji = t.emoji;
+    f.emojiManual = true;
+    f.groupId = t.groupId;
+    f.mode = SW.SPLIT_MODES.some(function (m) { return m.key === t.splitMode; })
+      ? t.splitMode : 'equal';
+
+    // The people from last time, minus anyone no longer reachable — a friend
+    // you have since removed should not silently reappear on an expense.
+    const reachable = t.groupId
+      ? groupMembers(t.groupId)
+      : [SW.ledger.me].concat(SW.ledger.friendIds);
+    f.people = t.people.filter(function (id) { return reachable.indexOf(id) > -1; });
+    if (f.people.indexOf(SW.ledger.me) === -1) f.people.unshift(SW.ledger.me);
+
+    if (f.people.indexOf(f.payerId) === -1) f.payerId = SW.ledger.me;
+    f.payers = null;
+    f.included = {}; f.exact = {}; f.percent = {}; f.shares = {}; f.adjust = {};
+
+    SW.openExpenseSheet({ keepState: true });
+  }
 
   function wireForm() {
     const amount = document.getElementById('exp-f-amount');
@@ -282,6 +335,19 @@ window.SW = window.SW || {};
     document.getElementById('exp-f-emoji').addEventListener('click', function () {
       SW.closeSheet();
       openEmojiPicker();
+    });
+
+    const templates = document.getElementById('exp-f-templates');
+    if (templates) templates.addEventListener('click', function (e) {
+      const b = e.target.closest('[data-template]');
+      if (!b) return;
+      const t = SW.frequentExpenses(5)[parseInt(b.getAttribute('data-template'), 10)];
+      if (t) applyTemplate(t);
+    });
+
+    document.getElementById('exp-f-category').addEventListener('click', function () {
+      SW.closeSheet();
+      openCategorySheet();
     });
 
     document.getElementById('exp-f-repeat').addEventListener('click', function () {
@@ -544,6 +610,41 @@ window.SW = window.SW || {};
     const mine = (SW.ledger.myMembership || {})[gid];
     const mode = mine && mine.default_split_mode;
     return SW.SPLIT_MODES.some(function (m) { return m.key === mode; }) ? mode : 'equal';
+  }
+
+  function openCategorySheet() {
+    const derived = SW.categoryForEmoji(f.emoji);
+    const chosen = f.category || derived;
+
+    SW.sheet({
+      title: 'Category',
+      rawBody:
+        '<div class="split-blurb">Used by the charts and by any monthly cap. ' +
+          'Left alone it follows the icon.</div>' +
+        '<div class="opt-list">' +
+          SW.categoryList().map(function (c) {
+            return '<button type="button" class="opt' +
+              (c.name === chosen ? ' is-on' : '') +
+              '" data-cat="' + esc(c.name) + '">' + esc(c.name) +
+              (c.name === derived ? ' · from the icon' : '') +
+              (c.budget ? ' · capped at ' + SW.money(c.budget) : '') +
+              '<svg class="tick" width="19" height="19" aria-hidden="true">' +
+              '<use href="#ic-check"/></svg></button>';
+          }).join('') +
+        '</div>',
+      confirm: null,
+      onOpen: function () {
+        document.querySelector('.opt-list').addEventListener('click', function (e) {
+          const b = e.target.closest('[data-cat]');
+          if (!b) return;
+          const name = b.getAttribute('data-cat');
+          // Matching the icon's own category means no override is needed.
+          f.category = (name === derived) ? null : name;
+          SW.closeSheet();
+        });
+      },
+      onClose: function () { if (f) SW.openExpenseSheet({ keepState: true }); },
+    });
   }
 
   function openRepeatSheet() {
@@ -984,9 +1085,9 @@ window.SW = window.SW || {};
         p_splits: SW.splitsPayload(split),
         p_payer_id: f.payerId,
         p_emoji: f.emoji,
-        // Derived from the emoji, so the picker and the charts can never
-        // disagree about what counts as groceries.
-        p_category: SW.categoryForEmoji(f.emoji),
+        // Follows the icon unless it was set by hand, so the picker and the
+        // charts can never disagree about what counts as groceries.
+        p_category: f.category || SW.categoryForEmoji(f.emoji),
         p_split_mode: f.mode,
         p_expense_date: f.date,
         p_notes: f.note || null,
@@ -1144,6 +1245,7 @@ window.SW = window.SW || {};
       payerId: e.payer_id,
       payers: payersOn(e),
       mode: mode,
+      category: (e.category && e.category !== 'general') ? e.category : null,
       included: included,
       exact: exact,
       percent: percent,

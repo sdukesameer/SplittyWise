@@ -489,6 +489,13 @@
       </div>
 
       <div class="card">
+        <button class="set-row" id="row-categories">
+          <span class="grow">
+            <span class="set-title">Categories and budgets</span>
+            <span class="set-sub" id="sub-categories">Cap what you spend, per month</span>
+          </span>
+          <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
+        </button>
         <button class="set-row" id="row-recurring">
           <span class="grow">
             <span class="set-title">Repeating expenses</span>
@@ -868,6 +875,35 @@
       </div>
     </div>
 
+    <!-- ---------- Categories and budgets ---------- -->
+    <div data-view="categories">
+      <header class="detail-header">
+        <div class="detail-bar">
+          <button class="icon-btn round" id="cat-back" aria-label="Back">
+            <svg aria-hidden="true"><use href="#ic-back"/></svg>
+          </button>
+          <span class="grow"></span>
+        </div>
+        <div class="detail-hero">
+          <div class="detail-hero-text">
+            <h1>Categories</h1>
+            <div class="detail-balance" style="color:var(--muted)">A monthly cap turns the charts into a warning</div>
+          </div>
+        </div>
+      </header>
+
+      <div id="cat-budget-summary"></div>
+
+      <div class="section-label">Built in</div>
+      <div class="list" id="cat-builtin"></div>
+
+      <div class="section-label">Your own</div>
+      <div class="list" id="cat-custom"></div>
+      <div style="padding:10px 14px 24px">
+        <button type="button" class="btn btn-ghost" id="cat-add">Add a category</button>
+      </div>
+    </div>
+
     <!-- ---------- Insights ---------- -->
     <div data-view="insights">
       <header class="detail-header">
@@ -885,6 +921,7 @@
         </div>
       </header>
 
+      <div id="ins-budgets"></div>
       <div id="ins-charts"></div>
 
       <div style="padding:0 14px 10px">
@@ -969,6 +1006,7 @@
 <script src="js/celebrate.js"></script>
 <script src="js/groupsettings.js"></script>
 <script src="js/recurring.js"></script>
+<script src="js/categories.js"></script>
 <script src="js/insights.js"></script>
 <script src="js/search.js"></script>
 <script src="js/realtime.js"></script>

@@ -2505,3 +2505,65 @@ button.is-loading .spinner { display: block; }
   border-radius: 50%;
   border: 2px solid var(--bg);
 }
+
+/* ==========================================================================
+   Budgets
+   ========================================================================== */
+
+.budget-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 18px;
+  width: 100%;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.budget-row:hover { background: var(--surface); }
+.budget-main { flex: 1; min-width: 0; }
+.budget-name { display: block; font-size: 15.5px; font-weight: 700; }
+.budget-sub { display: block; font-size: 12.5px; color: var(--muted); }
+.budget-cap {
+  flex: none;
+  font-size: 14px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.budget-cap.is-none { color: var(--faint); font-weight: 600; font-size: 13px; }
+
+.budget-track {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  overflow: hidden;
+  margin-top: 6px;
+}
+.budget-track span { display: block; height: 100%; border-radius: 3px; background: var(--teal); }
+.budget-track.is-close span { background: var(--cat-3); }
+.budget-track.is-over span { background: var(--owe); }
+
+.budget-card {
+  margin: 14px;
+  padding: 16px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.budget-card h3 { font-size: 15px; font-weight: 800; margin-bottom: 3px; }
+.budget-card .bc-sub { font-size: 12.5px; color: var(--muted); margin-bottom: 13px; }
+.budget-line { padding: 7px 0; }
+.budget-line .bl-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13.5px;
+}
+.budget-line .bl-name { flex: 1; font-weight: 700; }
+.budget-line .bl-num { font-variant-numeric: tabular-nums; font-weight: 800; }
+.budget-line .bl-num.is-over { color: var(--owe); }

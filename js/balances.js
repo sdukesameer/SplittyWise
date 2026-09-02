@@ -238,6 +238,125 @@ window.SW = window.SW || {};
       blurb: 'Enter who owes extra; the remainder is split equally.' },
   ];
 
+  /* ======================= categories and budgets ==================== */
+
+  // The built-in names from the emoji picker, plus anything you have added,
+  // each with its budget if it has one. Built-ins always appear, so removing
+  // a budget never removes the category.
+  SW.categoryList = function () {
+    const rows = (SW.ledger && SW.ledger.categories) || [];
+    const byName = {};
+    rows.forEach(function (r) { byName[r.name] = r; });
+
+    const builtIn = (SW.CATEGORIES || []).map(function (name) {
+      const row = byName[name];
+      return {
+        name: name,
+        emoji: null,                 // built-ins are identified by their group
+        budget: row ? row.budget_paise : null,
+        custom: false,
+        id: row ? row.id : null,
+      };
+    });
+
+    const custom = rows.filter(function (r) {
+      return r.is_custom && (SW.CATEGORIES || []).indexOf(r.name) === -1;
+    }).map(function (r) {
+      return { name: r.name, emoji: r.emoji, budget: r.budget_paise,
+               custom: true, id: r.id };
+    });
+
+    return builtIn.concat(custom);
+  };
+
+  // Spend against budget for one month, for the categories that have one.
+  // month: 'YYYY-MM', defaulting to the current one.
+  SW.budgetStatus = function (month) {
+    if (!SW.ledger) return [];
+    const key = month || new Date().toISOString().slice(0, 7);
+    const spend = {};
+
+    SW.ledger.expenses.forEach(function (e) {
+      if (String(e.expense_date).slice(0, 7) !== key) return;
+      const mine = SW.myShareOf(e);
+      if (mine <= 0) return;
+      const cat = SW.categoryOf(e);
+      spend[cat] = (spend[cat] || 0) + mine;
+    });
+
+    return SW.categoryList()
+      .filter(function (c) { return c.budget > 0; })
+      .map(function (c) {
+        const spent = spend[c.name] || 0;
+        return {
+          name: c.name,
+          emoji: c.emoji,
+          budget: c.budget,
+          spent: spent,
+          left: c.budget - spent,
+          // Capped for the bar; `over` carries the truth.
+          pct: Math.min(100, Math.round((spent / c.budget) * 100)),
+          over: spent > c.budget,
+        };
+      })
+      .sort(function (a, b) { return b.spent / b.budget - a.spent / a.budget; });
+  };
+
+  /* ======================= what you enter over and over =============== */
+
+  // Templates built from habit rather than configured by hand: the things
+  // you have entered more than once, most-used first, each carrying the
+  // shape of the last time you entered it.
+  //
+  // Only your own entries count — someone else's rent is not your habit.
+  SW.frequentExpenses = function (limit) {
+    const L = SW.ledger;
+    if (!L) return [];
+    const me = L.me;
+    const groups = {};
+
+    L.expenses.forEach(function (e) {
+      if (e.created_by !== me) return;
+      if (e.pending) return;
+      const key = String(e.description || '').trim().toLowerCase();
+      if (!key) return;
+
+      if (!groups[key]) groups[key] = { count: 0, latest: null };
+      groups[key].count++;
+
+      const stamp = e.expense_date + (e.created_at || '');
+      const best = groups[key].latest;
+      if (!best || stamp > (best.expense_date + (best.created_at || ''))) {
+        groups[key].latest = e;
+      }
+    });
+
+    return Object.keys(groups)
+      .map(function (k) { return groups[k]; })
+      // Once is not a habit. Twice is.
+      .filter(function (g) { return g.count >= 2 && g.latest; })
+      .sort(function (a, b) {
+        return (b.count - a.count) ||
+               (b.latest.expense_date < a.latest.expense_date ? -1 : 1);
+      })
+      .slice(0, limit || 5)
+      .map(function (g) {
+        const e = g.latest;
+        const people = Object.keys(SW.paidMap(e))
+          .concat((e.expense_splits || []).map(function (x) { return x.user_id; }));
+        return {
+          description: e.description,
+          amountPaise: SW.toPaise(e.amount),
+          emoji: e.emoji || '🧾',
+          category: e.category,
+          groupId: e.group_id || null,
+          splitMode: e.split_mode || 'equal',
+          people: people.filter(function (id, i) { return people.indexOf(id) === i; }),
+          times: g.count,
+        };
+      });
+  };
+
   /* ======================= amount arithmetic ========================= */
 
   // "240+80*2" in the amount field. Hand-rolled recursive descent rather
@@ -468,7 +587,7 @@ window.SW = window.SW || {};
     const db = SW.db;
     const me = SW.user.id;
 
-    const [friendRes, expRes, setRes, grpRes, memRes] = await Promise.all([
+    const [friendRes, expRes, setRes, grpRes, memRes, catRes] = await Promise.all([
       db.from('friendships').select('user_a, user_b'),
       db.from('expenses').select(
         'id, group_id, payer_id, amount, description, emoji, category, split_mode, ' +
@@ -481,8 +600,13 @@ window.SW = window.SW || {};
       db.from('groups').select(
         'id, name, emoji, group_type, simplify_debts, cover_path, whiteboard, settle_up_on'),
       db.from('group_members').select('group_id, user_id, role, default_split_mode'),
+      db.from('user_categories')
+        .select('id, name, emoji, budget_paise, is_custom, sort_order')
+        .order('sort_order', { ascending: true }),
     ]);
 
+    // Categories are a convenience rather than part of the ledger, so a
+    // failure there degrades to the built-in list instead of breaking.
     const firstError = friendRes.error || expRes.error || setRes.error ||
                        grpRes.error || memRes.error;
     if (firstError) throw firstError;
@@ -539,6 +663,7 @@ window.SW = window.SW || {};
       groups: groupsById,
       members: membersByGroup,
       myMembership: myMembership,   // group id -> my own group_members row
+      categories: (catRes && !catRes.error && catRes.data) || [],
       expenses: expRes.data,
       settlements: setRes.data,
     };

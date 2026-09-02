@@ -26,6 +26,7 @@ window.SW = window.SW || {};
     search:           { tab: null,       action: null,           summary: false, chrome: false, fab: false },
     'group-settings': { tab: 'groups',   action: null,           summary: false, chrome: false, fab: false },
     recurring:        { tab: 'account',  action: null,           summary: false, chrome: false, fab: false },
+    categories:       { tab: 'account',  action: null,           summary: false, chrome: false, fab: false },
   };
 
   // Views register their renderer here; showView calls it on every entry.
@@ -465,6 +466,10 @@ window.SW = window.SW || {};
 
   document.getElementById('row-recurring').addEventListener('click', function () {
     SW.navigate('recurring');
+  });
+
+  document.getElementById('row-categories').addEventListener('click', function () {
+    SW.navigate('categories');
   });
 
   document.getElementById('row-emoji').addEventListener('click', openEmojiPicker);

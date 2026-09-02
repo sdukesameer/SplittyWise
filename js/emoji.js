@@ -111,7 +111,13 @@ window.SW = window.SW || {};
   // categories existed falls back to whatever its emoji implies.
   SW.categoryOf = function (expense) {
     const stored = expense && expense.category;
-    if (stored && stored !== 'general' && SW.CATEGORIES.indexOf(stored) > -1) return stored;
+    if (stored && stored !== 'general') {
+      // A built-in name, or one of your own — both are just text here, so a
+      // category you added is honoured without any migration.
+      if (SW.CATEGORIES.indexOf(stored) > -1) return stored;
+      const mine = (SW.ledger && SW.ledger.categories) || [];
+      if (mine.some(function (c) { return c.name === stored; })) return stored;
+    }
     return BY_EMOJI[(expense && expense.emoji) || ''] || 'Other';
   };
 
