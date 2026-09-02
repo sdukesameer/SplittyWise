@@ -95,6 +95,45 @@ for (const c of rpcCalls) {
 }
 check('every RPC argument is a real parameter', badArgs.length === 0, badArgs);
 
+/* ---------------- 1b. every grant matches its function ---------------- */
+
+// `grant execute on function f(wrong, types)` is a hard error that aborts
+// the whole schema script, and the signatures have changed several times.
+console.log('\n--- grants ---');
+const sigOf = {};
+for (const m of schema.matchAll(
+    /create or replace function public\.(\w+)\s*\(([\s\S]*?)\)\s*returns/g)) {
+  const types = m[2].split(',')
+    .map(x => x.trim())
+    .filter(Boolean)
+    // "p_amount numeric" / "gid uuid" / "p_day int default null"
+    .map(x => (x.split(/\s+/)[1] || '').replace(/,$/, ''))
+    .filter(Boolean);
+  if (!(m[1] in sigOf)) sigOf[m[1]] = types;
+}
+
+const grantProblems = [];
+for (const m of schema.matchAll(
+    /grant execute on function public\.(\w+)\s*\(([^)]*)\)/g)) {
+  const name = m[1];
+  const granted = m[2].replace(/\n/g, ' ').split(',')
+    .map(x => x.trim()).filter(Boolean);
+  if (!(name in sigOf)) { grantProblems.push(name + ' is granted but never defined'); continue; }
+  const defined = sigOf[name];
+  if (granted.join(',') !== defined.join(',')) {
+    grantProblems.push(name + ': granted (' + granted.join(', ') +
+                       ') but defined (' + defined.join(', ') + ')');
+  }
+}
+check('every grant signature matches its function',
+  grantProblems.length === 0, grantProblems);
+console.log('  ' + Object.keys(sigOf).length + ' functions defined');
+
+// Supabase refuses a direct delete from the storage tables, and it aborts
+// the script when it happens.
+check('no direct delete from the storage tables',
+  !/delete\s+from\s+storage\./i.test(schema));
+
 /* ---------------- 2. every selected / written column exists ---------------- */
 
 console.log('\n--- columns the client touches ---');

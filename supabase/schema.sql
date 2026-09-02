@@ -1683,17 +1683,34 @@ $$;
 --  client, which keeps the whole bucket in the tens of megabytes.
 -- ============================================================================
 
--- Remove the old receipts bucket. Its objects must go before it will.
-delete from storage.objects where bucket_id = 'receipts';
-delete from storage.buckets where id = 'receipts';
-
+-- The old receipts bucket has to go through the dashboard: Supabase blocks
+-- deleting from storage.objects and storage.buckets in SQL, to stop a bucket
+-- being orphaned from its files. Its policies are ours, so those go here.
 drop policy if exists receipts_insert on storage.objects;
 drop policy if exists receipts_select on storage.objects;
 drop policy if exists receipts_delete on storage.objects;
 
-insert into storage.buckets (id, name, public)
-values ('avatars', 'avatars', false)
-on conflict (id) do nothing;
+do $$
+begin
+  if exists (select 1 from storage.buckets where id = 'receipts') then
+    raise notice 'A `receipts` bucket still exists. Nothing writes to it any '
+                 'more. Delete it under Storage in the dashboard to reclaim '
+                 'the space — see README section 2.5.';
+  end if;
+end $$;
+
+-- Creating a bucket needs storage privileges the SQL editor usually has but
+-- a restricted role may not. Wrapped so a refusal reports itself instead of
+-- taking the rest of the schema down with it.
+do $$
+begin
+  insert into storage.buckets (id, name, public)
+  values ('avatars', 'avatars', false)
+  on conflict (id) do nothing;
+exception when insufficient_privilege or undefined_table then
+  raise notice 'Could not create the `avatars` bucket from SQL. Create it '
+               'under Storage in the dashboard, private, then re-run.';
+end $$;
 
 -- Upload only under your own uid/ prefix; anyone signed in may read, since
 -- an avatar is shown to whoever you split with. Served through short-lived
@@ -1718,9 +1735,15 @@ create policy avatars_delete on storage.objects
     and (storage.foldername(name))[1] = auth.uid()::text
   );
 
-insert into storage.buckets (id, name, public)
-values ('covers', 'covers', false)
-on conflict (id) do nothing;
+do $$
+begin
+  insert into storage.buckets (id, name, public)
+  values ('covers', 'covers', false)
+  on conflict (id) do nothing;
+exception when insufficient_privilege or undefined_table then
+  raise notice 'Could not create the `covers` bucket from SQL. Create it '
+               'under Storage in the dashboard, private, then re-run.';
+end $$;
 
 drop policy if exists covers_insert on storage.objects;
 create policy covers_insert on storage.objects

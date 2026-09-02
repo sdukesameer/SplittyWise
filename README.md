@@ -124,9 +124,14 @@ without wiping your expenses.
 > is dropped before being recreated, every column is added with
 > `if not exists`, and every policy is dropped before being created.
 >
-> The most recent run removes receipt storage: `expenses.receipt_path` is
-> dropped and the `receipts` bucket and its objects are deleted, freeing
-> whatever they held.
+> The most recent run drops `expenses.receipt_path`. The `receipts` bucket
+> itself has to go through the dashboard — see
+> [Deleting the old receipts bucket](#deleting-the-old-receipts-bucket).
+>
+> Creating the `avatars` and `covers` buckets is wrapped so that a role
+> without storage privileges reports it and the rest of the schema still
+> applies. If you see a notice about either bucket, create it under
+> **Storage** as private and re-run.
 
 ### 2.2 Confirm it worked
 
@@ -212,8 +217,21 @@ picture rather than refusing it: every photo off a phone camera is several
 megabytes, so "too big" would be useless advice. A 4 MB camera photo becomes
 roughly a 40 KB avatar that looks identical at the size it is shown.
 
-If an older run left a `receipts` bucket behind, re-running the schema
-deletes it and its contents.
+### Deleting the old receipts bucket
+
+If you ran an earlier version, a `receipts` bucket may still be there with
+files in it. **The schema cannot remove it** — Supabase refuses a direct
+`delete` from the storage tables, to stop a bucket being orphaned from its
+files. The script notices it and prints a reminder instead.
+
+Remove it by hand, once:
+
+1. **Storage** in the sidebar → select **receipts**.
+2. Select all files inside it and delete them.
+3. Use the bucket's **⋮** menu → **Delete bucket**.
+
+Nothing writes to it any more, so this is purely reclaiming space. If the
+reminder still appears afterwards, the bucket is still there.
 
 ---
 
@@ -502,6 +520,11 @@ that counts everything is a badge people learn to ignore.
 The lock screen always offers **Sign out instead**, which clears it. Being
 permanently locked out of your own ledger would be far worse than the risk
 the lock guards against, so there is always a way past it.
+
+**`Direct deletion from storage tables is not allowed`**
+An older copy of the schema tried to delete the `receipts` bucket in SQL.
+Pull the current version — it prints a reminder instead — and remove the
+bucket by hand as above.
 
 **A picture will not upload**
 It is re-encoded on the device until it fits under 100 KB. A very large or
