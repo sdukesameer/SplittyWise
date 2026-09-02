@@ -142,16 +142,22 @@ window.SW = window.SW || {};
     const file = coverFile.files && coverFile.files[0];
     coverFile.value = '';
     if (!file) return;
-    if (file.size > 8 * 1024 * 1024) {
-      return SW.toast('That image is over 8 MB — try a smaller one', 'error');
+
+    SW.toast('Shrinking the picture…');
+    let blob;
+    try {
+      // A cover is displayed wide but short, so a little more room than an
+      // avatar and the same hard cap.
+      blob = await SW.prepareImage(file, { maxDim: 1000 });
+    } catch (err) {
+      return SW.toast(err.message || 'Could not read that image', 'error');
     }
 
-    SW.toast('Uploading…');
-    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const path = SW.user.id + '/' + gid + '-' + Date.now() + '.' + (ext || 'jpg');
+    const previous = group().cover_path;
+    const path = SW.user.id + '/' + gid + '-' + Date.now() + '.jpg';
 
-    const up = await db.storage.from('covers').upload(path, file, {
-      contentType: file.type || 'image/jpeg', upsert: false,
+    const up = await db.storage.from('covers').upload(path, blob, {
+      contentType: 'image/jpeg', upsert: false,
     });
     if (up.error) return SW.toast(up.error.message, 'error');
 
@@ -159,8 +165,9 @@ window.SW = window.SW || {};
     if (error) return SW.toast(error.message, 'error');
 
     group().cover_path = path;
+    if (previous) db.storage.from('covers').remove([previous]);
     render(gid);
-    SW.toast('Cover updated', 'ok');
+    SW.toast('Cover updated · ' + SW.readableSize(blob.size), 'ok');
   });
 
   /* ======================= name and icon ============================ */

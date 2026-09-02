@@ -57,7 +57,7 @@ straight into WhatsApp.
 An order can be pasted as text rather than scanned, which parses exactly
 instead of being guessed at. Things you enter twice become one-tap
 templates. Categories are yours to add, and any of them can carry a monthly
-cap. Groups carry a cover photo, a whiteboard, a settle-up date and
+cap. People and groups can have a photo, kept under 100 KB. Groups carry a cover photo, a whiteboard, a settle-up date and
 your own default split. Invite links let someone join by signing up.
 
 ### Running the tests
@@ -110,11 +110,14 @@ The script is safe to re-run. Every statement is either `if not exists` or
 `drop … / create …`, so if you edit it later you can paste the whole thing again
 without wiping your expenses.
 
-> **Re-run this if you have run an older copy.** `update_expense` gained a
-> `p_group_id` parameter, so editing an expense can move it between groups.
-> Without the update, changing "Split with" on an existing expense rewrites
-> its splits but leaves it in the old group. The script drops the old version
-> before recreating it, so re-running is safe.
+> **Re-run this whenever you pull.** The schema has changed repeatedly, and
+> the script is written to be re-run: every function whose signature changed
+> is dropped before being recreated, every column is added with
+> `if not exists`, and every policy is dropped before being created.
+>
+> The most recent run removes receipt storage: `expenses.receipt_path` is
+> dropped and the `receipts` bucket and its objects are deleted, freeing
+> whatever they held.
 
 ### 2.2 Confirm it worked
 
@@ -171,7 +174,7 @@ supabase/rls-audit.sql
 Paste it into the SQL Editor and run it. **Every result column must say
 `PASS`.** It checks that RLS is on for all eight tables, that each has
 policies, that security-definer functions pin `search_path`, that the
-receipts bucket is private, that clients cannot write notifications for
+image buckets are private, that clients cannot write notifications for
 other people, and that every expense's splits sum to its total.
 
 Worth re-running after any schema change, and occasionally in normal use.
@@ -180,10 +183,28 @@ checks 11 and 12 list anything in the database this app did not create —
 including an old function left behind as an overload, which is the one thing
 that can make an RPC call ambiguous.
 
-### 2.5 Confirm the storage bucket
+### 2.5 Confirm the storage buckets
 
-Click **Storage** in the sidebar. You should see a bucket called **receipts**,
-marked private. The schema created it. Receipt photos land here in phase 5.
+Click **Storage** in the sidebar. You should see exactly two buckets, both
+marked private:
+
+| Bucket | Holds | Size |
+|---|---|---|
+| `avatars` | One picture per person | ≤ 100 KB each |
+| `covers` | One picture per group | ≤ 100 KB each |
+
+**There is deliberately no bucket for receipts.** A receipt is read on the
+device and the image is thrown away — what gets saved is the itemised split
+and a note, not a photograph. That is what keeps storage in the tens of
+megabytes rather than the gigabytes.
+
+Both caps are enforced on the device before upload, by re-encoding the
+picture rather than refusing it: every photo off a phone camera is several
+megabytes, so "too big" would be useless advice. A 4 MB camera photo becomes
+roughly a 40 KB avatar that looks identical at the size it is shown.
+
+If an older run left a `receipts` bucket behind, re-running the schema
+deletes it and its contents.
 
 ---
 
@@ -454,6 +475,21 @@ blocking `cdn.jsdelivr.net` or `tessdata.projectnaptha.com`.
 iOS in standalone mode blocks downloads a page starts itself. Open the site
 in Safari proper and export from there.
 
+**Something works in desktop Chrome but not on an iPhone**
+Two causes are worth checking first. `color-mix()` needs Safari 16.2, so on
+an older iOS any element relying on it loses that one declaration — every
+such rule now carries a plain colour before it, so the effect is a slightly
+flatter surface rather than an invisible one. And an uncaught script error
+used to be completely silent on a phone; the app now shows it as a red
+toast naming the file and line, which is what to quote if something
+misbehaves.
+
+**A picture will not upload**
+It is re-encoded on the device until it fits under 100 KB. A very large or
+very detailed image can fail that after several attempts, and the toast says
+so. Anything from a phone camera compresses easily; a screenshot of a dense
+page may not.
+
 **A group only has me in it**
 Open the group and tap **Add people**, or the gear icon → *Add someone by
 email*. They need a SplittyWise account already. Adding them to a group also
@@ -483,7 +519,9 @@ js/balances.js          money, generated avatars, the balance engine
 js/shell.js             tabs, header, theme, Account tab, Activity feed
 js/friends.js           friends list, add/remove, filters, one friend's page
 js/emoji.js             description-to-icon guessing, and the picker
-js/expense.js           add/edit form, splitting, receipts, one expense's page
+js/image.js             squeezes a picture under 100 KB before upload
+js/categories.js        your own categories, and monthly caps
+js/expense.js           add/edit form, splitting, one expense's page
 js/groups.js            groups list, one group's page, membership, settings
 js/settle.js            recording payments, and the plan to clear a group
 js/scan.js              on-device OCR, receipt parsing, itemised assignment

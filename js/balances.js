@@ -512,6 +512,16 @@ window.SW = window.SW || {};
   }
 
   SW.avatar = function (id, emoji) {
+    // A photograph beats an emoji, which beats generated art.
+    const person = (SW.ledger && (id === SW.ledger.me
+      ? (SW.profile || {})
+      : (SW.ledger.people[id] || {}))) || {};
+    const url = person.avatar_path && SW.avatarUrls[person.avatar_path];
+    if (url) {
+      return '<span class="avatar"><img src="' + url + '" alt="" ' +
+             'loading="lazy" decoding="async"></span>';
+    }
+
     // A chosen emoji always wins over generated art.
     if (emoji && emoji !== '🙂') {
       return '<span class="avatar" style="background:var(--surface-2)">' + emoji + '</span>';
@@ -591,7 +601,7 @@ window.SW = window.SW || {};
       db.from('friendships').select('user_a, user_b'),
       db.from('expenses').select(
         'id, group_id, payer_id, amount, description, emoji, category, split_mode, ' +
-        'notes, receipt_path, expense_date, created_at, ' +
+        'notes, expense_date, created_at, ' +
         'expense_splits(user_id, amount), expense_payers(user_id, amount)'
       ).order('expense_date', { ascending: false }),
       db.from('settlements').select(
@@ -635,7 +645,7 @@ window.SW = window.SW || {};
     if (involved.size) {
       const profRes = await db
         .from('profiles')
-        .select('id, full_name, email, avatar_emoji, upi_id')
+        .select('id, full_name, email, avatar_emoji, upi_id, avatar_path')
         .in('id', Array.from(involved));
       // A profile we are not permitted to read is not fatal; it shows as
       // "Someone" rather than breaking the whole screen.
@@ -668,8 +678,40 @@ window.SW = window.SW || {};
       settlements: setRes.data,
     };
     SW.bumpLedger();
+    await resolveAvatars();
     return SW.ledger;
   };
+
+  // Avatars are private objects, so each needs a signed URL. Resolved in one
+  // batch here and cached, because SW.avatar() is called inside render loops
+  // and cannot wait on a request per row.
+  SW.avatarUrls = {};
+
+  async function resolveAvatars() {
+    const L = SW.ledger;
+    const paths = [];
+
+    const own = (SW.profile && SW.profile.avatar_path) || null;
+    if (own) paths.push(own);
+    Object.keys(L.people).forEach(function (id) {
+      const p = L.people[id];
+      if (p && p.avatar_path) paths.push(p.avatar_path);
+    });
+
+    const wanted = paths.filter(function (path, i) {
+      return paths.indexOf(path) === i && !SW.avatarUrls[path];
+    });
+    if (!wanted.length) return;
+
+    try {
+      const { data } = await db.storage.from('avatars').createSignedUrls(wanted, 3600);
+      (data || []).forEach(function (row) {
+        if (row && row.path && row.signedUrl) SW.avatarUrls[row.path] = row.signedUrl;
+      });
+    } catch (e) {
+      // Without a URL the generated art stands in, which is fine.
+    }
+  }
 
   SW.person = function (id) {
     if (id === SW.ledger.me) {

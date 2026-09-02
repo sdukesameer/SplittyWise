@@ -134,6 +134,42 @@ window.SW = window.SW || {};
 
   SW.MIN_PASSWORD = 8;
 
+  /* ---- surfacing failures ---------------------------------------------- */
+
+  // On a phone there is no console, so an uncaught error is completely
+  // silent: the button simply does nothing and the user has no idea why.
+  // This is deliberately plain rather than pretty — it is a bug report.
+  let lastShown = 0;
+
+  function surface(what, detail) {
+    const now = Date.now();
+    // One error usually cascades; do not bury the screen in toasts.
+    if (now - lastShown < 4000) return;
+    lastShown = now;
+
+    if (SW.toast) SW.toast(what + ' — ' + detail, 'error');
+    else {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;z-index:999;' +
+        'background:#7f1d1d;color:#fff;padding:10px 12px;border-radius:8px;' +
+        'font:600 13px/1.4 system-ui;';
+      el.textContent = what + ' — ' + detail;
+      document.body.appendChild(el);
+    }
+  }
+
+  window.addEventListener('error', function (e) {
+    const where = e.filename
+      ? String(e.filename).split('/').pop() + ':' + e.lineno
+      : 'somewhere';
+    surface('Something broke', (e.message || 'unknown') + ' at ' + where);
+  });
+
+  window.addEventListener('unhandledrejection', function (e) {
+    const reason = e.reason && (e.reason.message || e.reason);
+    surface('A request failed', String(reason || 'unknown'));
+  });
+
   /* ---- global listeners ------------------------------------------------ */
 
   document.addEventListener('click', function (e) {

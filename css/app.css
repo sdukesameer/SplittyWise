@@ -51,6 +51,11 @@
   --tabbar-h: 58px;
   --header-h: 52px;
 
+  /* The app is designed for a phone. On anything wider it sits as one
+     centred column rather than stretching a phone layout across a monitor,
+     which is what made it look accidental. */
+  --app-max: 560px;
+
   color-scheme: dark;
 }
 
@@ -136,6 +141,37 @@ body {
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior-y: none;
+}
+
+/* Above the column width the page behind it steps back, so the app reads as
+   a deliberate object rather than a stretched screen. */
+@media (min-width: 561px) {
+  /* A plain step down for Safari < 16.2, then the mixed version. */
+  body { background: var(--surface); }
+  body { background: color-mix(in srgb, var(--bg) 82%, #000 18%); }
+
+  .shell, .auth {
+    max-width: var(--app-max);
+    margin-inline: auto;
+    background: var(--bg);
+    border-inline: 1px solid var(--line);
+    min-height: 100dvh;
+  }
+
+  /* Fixed chrome has to follow the column, not the viewport. */
+  .tabbar {
+    left: 0; right: 0;
+    max-width: var(--app-max);
+    margin-inline: auto;
+    border-inline: 1px solid var(--line);
+  }
+  .fab { right: calc(50% - var(--app-max) / 2 + 16px); }
+  .install-banner {
+    left: calc(50% - var(--app-max) / 2 + 12px);
+    right: calc(50% - var(--app-max) / 2 + 12px);
+  }
+  .toast-host, .sheet { max-width: var(--app-max); margin-inline: auto; }
+  .sheet { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 }
 
 h1, h2, h3, h4 { margin: 0; font-weight: 800; letter-spacing: -0.02em; text-wrap: balance; }
@@ -493,6 +529,7 @@ button.is-loading .spinner { display: block; }
 }
 .app-header.is-stuck {
   border-bottom-color: var(--line);
+  background: var(--bg);                                  /* Safari < 16.2 */
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: saturate(1.4) blur(12px);
   -webkit-backdrop-filter: saturate(1.4) blur(12px);
@@ -591,6 +628,7 @@ button.is-loading .spinner { display: block; }
   font-size: 13px;
   font-weight: 800;
   color: var(--muted);
+  letter-spacing: 0.02em;
   padding: 20px 18px 8px;
   display: flex;
   align-items: center;
@@ -608,6 +646,7 @@ button.is-loading .spinner { display: block; }
   z-index: 40;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
+  background: var(--bg);                                  /* Safari < 16.2 */
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   backdrop-filter: saturate(1.4) blur(14px);
   -webkit-backdrop-filter: saturate(1.4) blur(14px);
@@ -794,6 +833,8 @@ button.is-loading .spinner { display: block; }
   overflow: hidden;
   box-shadow: var(--shadow-card);
 }
+/* The last card on a page should not sit flush against the tab bar. */
+.card:last-of-type { margin-bottom: 22px; }
 .card-head {
   padding: 14px 16px 4px;
   font-size: 12.5px;
@@ -1033,6 +1074,16 @@ button.is-loading .spinner { display: block; }
   gap: 14px;
   padding: 2px 18px 14px;
 }
+
+/* No avatar to anchor it, so centre it. */
+[data-view="insights"] .detail-hero,
+[data-view="recurring"] .detail-hero,
+[data-view="categories"] .detail-hero,
+[data-view="group-settings"] .detail-hero {
+  justify-content: center;
+  text-align: center;
+  padding-bottom: 20px;
+}
 .detail-hero .avatar { width: 56px; height: 56px; font-size: 26px; }
 .detail-hero-text { min-width: 0; flex: 1; }
 .detail-hero h1 {
@@ -1057,6 +1108,13 @@ button.is-loading .spinner { display: block; }
   -webkit-overflow-scrolling: touch;
 }
 .chip-row::-webkit-scrollbar { display: none; }
+/* Fades at the edge, so a row with more chips off-screen looks like it. */
+.chip-row {
+  mask-image: linear-gradient(to right, transparent 0, #000 12px,
+              #000 calc(100% - 22px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 12px,
+                      #000 calc(100% - 22px), transparent 100%);
+}
 
 .chip {
   flex: none;
@@ -1377,11 +1435,13 @@ button.is-loading .spinner { display: block; }
 .split-foot .sf-total { color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* --------------------------------------------------------------------------
-   Receipt attachment
+   Photo avatars
    -------------------------------------------------------------------------- */
 
-.receipt-row { display: flex; align-items: center; gap: 11px; }
-.receipt-thumb {
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* A small square preview of a stored picture. */
+.thumb {
   width: 46px; height: 46px;
   border-radius: var(--r-sm);
   background: var(--surface-2);
@@ -1389,20 +1449,6 @@ button.is-loading .spinner { display: block; }
   object-fit: cover;
   flex: none;
 }
-.receipt-drop {
-  flex: 1;
-  border: 1.5px dashed var(--line-strong);
-  border-radius: var(--r-md);
-  background: none;
-  color: var(--muted);
-  padding: 12px;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-  text-align: center;
-}
-.receipt-drop:hover { border-color: var(--teal); color: var(--teal); }
 
 /* --------------------------------------------------------------------------
    Expense detail page
@@ -1457,16 +1503,6 @@ button.is-loading .spinner { display: block; }
 .exp-your-share.is-owe .val { color: var(--owe); }
 .exp-your-share.is-flat .val { color: var(--settled); }
 
-.exp-receipt {
-  display: block;
-  margin: 0 14px 14px;
-  width: calc(100% - 28px);
-  max-height: 320px;
-  object-fit: contain;
-  border-radius: var(--r-md);
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-}
 
 /* --------------------------------------------------------------------------
    Toast with an action (undo)
@@ -1734,7 +1770,10 @@ button.is-loading .spinner { display: block; }
 }
 .item-row:first-child { border-top: 0; }
 .item-row.is-fee { background: var(--surface-2); }
-.item-row.is-orphan { background: color-mix(in srgb, var(--owe) 8%, transparent); }
+.item-row.is-orphan {
+  background: var(--surface-2);                           /* Safari < 16.2 */
+  background: color-mix(in srgb, var(--owe) 8%, transparent);
+}
 
 .ir-top { display: flex; align-items: center; gap: 8px; }
 
@@ -1913,6 +1952,7 @@ button.is-loading .spinner { display: block; }
   margin: 0 14px 12px;
   padding: 10px 13px;
   border-left: 3px solid var(--owe);
+  background: var(--surface-2);                           /* Safari < 16.2 */
   background: color-mix(in srgb, var(--owe) 9%, transparent);
   border-radius: 0 var(--r-sm) var(--r-sm) 0;
   font-size: 13px;
@@ -2331,6 +2371,7 @@ button.is-loading .spinner { display: block; }
 .pending-chip {
   flex: none;
   border: 1.5px solid var(--owe);
+  background: var(--surface-2);                           /* Safari < 16.2 */
   background: color-mix(in srgb, var(--owe) 12%, transparent);
   color: var(--owe);
   border-radius: var(--r-pill);
@@ -2341,7 +2382,11 @@ button.is-loading .spinner { display: block; }
   cursor: pointer;
   white-space: nowrap;
 }
-.pending-chip:hover { background: color-mix(in srgb, var(--owe) 20%, transparent); }
+.pending-chip:hover {
+  background: var(--surface-3);                           /* Safari < 16.2 */
+  background: color-mix(in srgb, var(--owe) 20%, transparent);
+}
+
 
 /* A row that has not reached the server yet. */
 .is-pending { opacity: 0.72; }

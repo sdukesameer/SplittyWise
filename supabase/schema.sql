@@ -18,6 +18,9 @@ create table if not exists public.profiles (
   -- A UPI virtual payment address, so settling up can open a payment app
   -- with the amount already filled instead of only recording one.
   upi_id        text,
+  -- An object in the `avatars` bucket. Capped at 100 KB by the client, so a
+  -- few hundred people still cost only tens of megabytes.
+  avatar_path   text,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
@@ -72,7 +75,6 @@ create table if not exists public.expenses (
   split_mode    text not null default 'equal'
                 check (split_mode in ('equal','exact','percent','shares','adjust')),
   expense_date  date not null default current_date,
-  receipt_path  text,
   notes         text,
   created_by    uuid not null references public.profiles(id),
   created_at    timestamptz not null default now(),
@@ -190,7 +192,13 @@ create table if not exists public.notifications (
 );
 
 -- Columns added after the first release. Safe to re-run.
-alter table public.profiles       add column if not exists upi_id text;
+alter table public.profiles       add column if not exists upi_id      text;
+alter table public.profiles       add column if not exists avatar_path text;
+
+-- Receipt images are no longer stored: a scan happens on the device and the
+-- picture is discarded, so nothing accumulates. The column and its bucket
+-- are removed rather than left to rot.
+alter table public.expenses       drop column if exists receipt_path;
 alter table public.groups        add column if not exists cover_path   text;
 alter table public.groups        add column if not exists whiteboard   text;
 alter table public.groups        add column if not exists settle_up_on date;
@@ -890,7 +898,6 @@ create or replace function public.create_expense(
   p_split_mode   text    default 'equal',
   p_expense_date date    default current_date,
   p_notes        text    default null,
-  p_receipt_path text    default null,
   p_payers       jsonb   default null
 ) returns uuid language plpgsql security definer set search_path = public as $$
 declare
@@ -992,12 +999,12 @@ begin
   -- ---- write ---------------------------------------------------------------
   insert into public.expenses (
     group_id, payer_id, amount, description, emoji, category,
-    split_mode, expense_date, notes, receipt_path, created_by
+    split_mode, expense_date, notes, created_by
   ) values (
     p_group_id, payer, round(p_amount, 2), trim(p_description),
     coalesce(p_emoji, '🧾'), coalesce(p_category, 'general'),
     coalesce(p_split_mode, 'equal'), coalesce(p_expense_date, current_date),
-    nullif(trim(coalesce(p_notes, '')), ''), p_receipt_path, me
+    nullif(trim(coalesce(p_notes, '')), ''), me
   ) returning id into eid;
 
   insert into public.expense_splits (expense_id, user_id, amount)
@@ -1062,7 +1069,6 @@ create or replace function public.update_expense(
   p_split_mode   text default null,
   p_expense_date date default null,
   p_notes        text default null,
-  p_receipt_path text default null,
   p_payers       jsonb default null
 ) returns void language plpgsql security definer set search_path = public as $$
 declare
@@ -1162,7 +1168,6 @@ begin
     split_mode   = coalesce(p_split_mode, split_mode),
     expense_date = coalesce(p_expense_date, expense_date),
     notes        = nullif(trim(coalesce(p_notes, '')), ''),
-    receipt_path = coalesce(p_receipt_path, receipt_path),
     updated_at   = now()
   where id = p_expense_id;
 
@@ -1260,7 +1265,6 @@ begin
         p_split_mode   => r.split_mode,
         p_expense_date => r.next_run,
         p_notes        => r.notes,
-        p_receipt_path => null,
         p_payers       => r.payers
       );
       posted := posted + 1;
@@ -1476,33 +1480,46 @@ returns void language sql security definer set search_path = public as $$
 $$;
 
 -- ============================================================================
---  11. STORAGE — receipt images
+--  11. STORAGE — avatars and group covers
+--
+--  Receipts are deliberately absent: a scan happens on the device and the
+--  image is thrown away, so nothing piles up. What is stored is one small
+--  picture per person and one per group, each capped at 100 KB by the
+--  client, which keeps the whole bucket in the tens of megabytes.
 -- ============================================================================
 
+-- Remove the old receipts bucket. Its objects must go before it will.
+delete from storage.objects where bucket_id = 'receipts';
+delete from storage.buckets where id = 'receipts';
+
+drop policy if exists receipts_insert on storage.objects;
+drop policy if exists receipts_select on storage.objects;
+drop policy if exists receipts_delete on storage.objects;
+
 insert into storage.buckets (id, name, public)
-values ('receipts', 'receipts', false)
+values ('avatars', 'avatars', false)
 on conflict (id) do nothing;
 
--- Upload only under your own uid/ prefix; read anything you hold a link to
--- (the app hands out short-lived signed URLs, never public ones).
-drop policy if exists receipts_insert on storage.objects;
-create policy receipts_insert on storage.objects
+-- Upload only under your own uid/ prefix; anyone signed in may read, since
+-- an avatar is shown to whoever you split with. Served through short-lived
+-- signed URLs rather than publicly.
+drop policy if exists avatars_insert on storage.objects;
+create policy avatars_insert on storage.objects
   for insert to authenticated
   with check (
-    bucket_id = 'receipts'
+    bucket_id = 'avatars'
     and (storage.foldername(name))[1] = auth.uid()::text
   );
 
-drop policy if exists receipts_select on storage.objects;
-create policy receipts_select on storage.objects
-  for select to authenticated
-  using (bucket_id = 'receipts');
+drop policy if exists avatars_select on storage.objects;
+create policy avatars_select on storage.objects
+  for select to authenticated using (bucket_id = 'avatars');
 
-drop policy if exists receipts_delete on storage.objects;
-create policy receipts_delete on storage.objects
+drop policy if exists avatars_delete on storage.objects;
+create policy avatars_delete on storage.objects
   for delete to authenticated
   using (
-    bucket_id = 'receipts'
+    bucket_id = 'avatars'
     and (storage.foldername(name))[1] = auth.uid()::text
   );
 
@@ -1546,9 +1563,9 @@ grant execute on function public.nudge(uuid, uuid, numeric)              to auth
 grant execute on function public.run_due_recurring()                     to authenticated;
 grant execute on function public.next_occurrence(date, text, int)        to authenticated;
 grant execute on function public.create_expense(
-  numeric, text, jsonb, uuid, uuid, text, text, text, date, text, text, jsonb) to authenticated;
+  numeric, text, jsonb, uuid, uuid, text, text, text, date, text, jsonb) to authenticated;
 grant execute on function public.update_expense(
-  uuid, numeric, text, jsonb, uuid, uuid, text, text, text, date, text, text, jsonb) to authenticated;
+  uuid, numeric, text, jsonb, uuid, uuid, text, text, text, date, text, jsonb) to authenticated;
 
 -- Helpers are called from policies, so authenticated needs execute on them.
 grant execute on function public.is_group_member(uuid, uuid)  to authenticated;

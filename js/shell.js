@@ -8,6 +8,14 @@ window.SW = window.SW || {};
   if (!SW.isConfigured) return;
 
   const db = SW.db;
+  // Defined here rather than borrowed: shell.js loads before the modules
+  // that set SW.escapeHtml, and a missing local is a ReferenceError that
+  // kills the whole handler.
+  const esc = function (str) {
+    return String(str == null ? '' : str).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  };
 
   // Per-view chrome. `tab` is which bottom tab stays lit; `chrome` false
   // means the view supplies its own header (detail pages do).
@@ -326,12 +334,30 @@ window.SW = window.SW || {};
 
     document.getElementById('profile-name').textContent = name;
     document.getElementById('profile-email').textContent = email;
-    document.getElementById('profile-emoji').textContent = p.avatar_emoji || '🙂';
     document.getElementById('sub-name').textContent = name;
     document.getElementById('sub-email').textContent = email;
     document.getElementById('sub-upi').textContent = p.upi_id
       ? p.upi_id
       : 'Let friends pay you in one tap';
+
+    const thumb = document.getElementById('photo-thumb');
+    const url = p.avatar_path && SW.avatarUrls[p.avatar_path];
+    thumb.hidden = !url;
+    if (url) thumb.src = url;
+    document.getElementById('sub-photo').textContent = p.avatar_path
+      ? 'Tap to change or remove it'
+      : 'A face is easier to spot than a colour';
+
+    // Show the photo in the header of the tab too, not just the emoji.
+    const big = document.getElementById('profile-emoji');
+    if (url) {
+      big.innerHTML = '<img src="' + esc(url) + '" alt="" ' +
+        'style="width:100%;height:100%;object-fit:cover;border-radius:50%">';
+      big.style.padding = '0';
+    } else {
+      big.textContent = p.avatar_emoji || '🙂';
+      big.style.padding = '';
+    }
   }
 
   /* ---- edit name ---- */
@@ -421,6 +447,88 @@ window.SW = window.SW || {};
         });
       },
     });
+  }
+
+  /* ---- your photo ---- */
+
+  const photoFile = document.getElementById('photo-file');
+
+  document.getElementById('row-photo').addEventListener('click', function () {
+    const p = SW.profile || {};
+    if (!p.avatar_path) return photoFile.click();
+
+    SW.sheet({
+      title: 'Your photo',
+      rawBody: '<div class="scan-state"><img class="avatar" ' +
+        'style="width:110px;height:110px" src="' +
+        esc(SW.avatarUrls[p.avatar_path] || '') + '" alt=""></div>',
+      confirm: 'Choose another',
+      cancel: 'Remove it',
+      onConfirm: function () { SW.closeSheet(); photoFile.click(); return true; },
+      onClose: async function () {
+        // Cancel here means remove, so only act when the photo is still set
+        // and the confirm path did not run.
+        if (!SW.pendingPhotoChange && SW.profile.avatar_path === p.avatar_path) {
+          await removePhoto(p.avatar_path);
+        }
+        SW.pendingPhotoChange = false;
+      },
+    });
+  });
+
+  photoFile.addEventListener('click', function () { SW.pendingPhotoChange = true; });
+
+  photoFile.addEventListener('change', async function () {
+    const file = photoFile.files && photoFile.files[0];
+    photoFile.value = '';
+    SW.pendingPhotoChange = false;
+    if (!file) return;
+
+    SW.toast('Shrinking the photo…');
+    let blob;
+    try {
+      // Squeezed under the cap here rather than refused: every photo off a
+      // phone is far too big, so "too big" is useless advice.
+      blob = await SW.prepareImage(file, { maxDim: 512, square: true });
+    } catch (err) {
+      return SW.toast(err.message || 'Could not read that image', 'error');
+    }
+
+    const path = SW.user.id + '/' + Date.now() + '.jpg';
+    const up = await db.storage.from('avatars').upload(path, blob, {
+      contentType: 'image/jpeg', upsert: false,
+    });
+    if (up.error) return SW.toast(up.error.message, 'error');
+
+    const previous = SW.profile.avatar_path;
+    const { error } = await db.from('profiles')
+      .update({ avatar_path: path, updated_at: new Date().toISOString() })
+      .eq('id', SW.user.id);
+    if (error) return SW.toast(error.message, 'error');
+
+    SW.profile.avatar_path = path;
+    SW.avatarUrls[path] = null;
+    const signed = await db.storage.from('avatars').createSignedUrl(path, 3600);
+    if (signed.data) SW.avatarUrls[path] = signed.data.signedUrl;
+
+    // The old one is dead weight the moment the new one lands.
+    if (previous) db.storage.from('avatars').remove([previous]);
+
+    renderAccount();
+    if (SW.recompute) SW.recompute();
+    SW.toast('Photo updated · ' + SW.readableSize(blob.size), 'ok');
+  });
+
+  async function removePhoto(path) {
+    const { error } = await db.from('profiles')
+      .update({ avatar_path: null, updated_at: new Date().toISOString() })
+      .eq('id', SW.user.id);
+    if (error) return SW.toast(error.message, 'error');
+    if (path) db.storage.from('avatars').remove([path]);
+    SW.profile.avatar_path = null;
+    renderAccount();
+    if (SW.recompute) SW.recompute();
+    SW.toast('Photo removed', 'ok');
   }
 
   document.getElementById('row-upi').addEventListener('click', function () {

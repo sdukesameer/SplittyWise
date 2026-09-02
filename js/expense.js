@@ -1,5 +1,7 @@
 // ---------------------------------------------------------------------------
-//  Expenses — the add/edit form, splitting, receipts, and one expense's page
+//  Expenses — the add/edit form, splitting, and one expense's page
+//
+//  A receipt is read on the device and thrown away; nothing is stored.
 // ---------------------------------------------------------------------------
 
 window.SW = window.SW || {};
@@ -43,9 +45,6 @@ window.SW = window.SW || {};
       note: '',              // typed, or written by the itemised scanner
       repeat: null,          // 'weekly' | 'monthly' | 'yearly'
       category: null,        // null means derive it from the icon
-      receiptPath: null,
-      receiptFile: null,
-      receiptName: '',
     };
   }
 
@@ -217,13 +216,7 @@ window.SW = window.SW || {};
               '<use href="#ic-chev"/></svg>' +
           '</button>' +
 
-          '<div class="receipt-row">' +
-            '<input type="file" id="exp-f-file" accept="image/*" hidden>' +
-            '<button type="button" class="receipt-drop" id="exp-f-receipt">' +
-              (f.receiptName || f.receiptPath ? '📎 ' + esc(f.receiptName || 'Receipt attached')
-                                              : '📷 Attach a photo instead') +
-            '</button>' +
-          '</div>' +
+
 
           '<div class="field-error" id="exp-f-error" role="alert"></div>' +
         '</div>',
@@ -390,22 +383,6 @@ window.SW = window.SW || {};
         },
         onCancel: function () { SW.openExpenseSheet({ keepState: true }); },
       });
-    });
-
-    const file = document.getElementById('exp-f-file');
-    document.getElementById('exp-f-receipt').addEventListener('click', function () {
-      file.click();
-    });
-    file.addEventListener('change', function () {
-      const chosen = file.files && file.files[0];
-      if (!chosen) return;
-      if (chosen.size > 8 * 1024 * 1024) {
-        return SW.setError('exp-f-error', 'That image is over 8 MB. Try a smaller one.');
-      }
-      f.receiptFile = chosen;
-      f.receiptName = chosen.name;
-      document.getElementById('exp-f-receipt').textContent = '📎 ' + chosen.name;
-      SW.setError('exp-f-error', '');
     });
 
     if (!f.emojiManual && f.description) f.emoji = SW.guessEmoji(f.description);
@@ -1020,20 +997,6 @@ window.SW = window.SW || {};
 
   /* ======================= saving ===================================== */
 
-  async function uploadReceipt() {
-    const file = f.receiptFile;
-    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
-    // The storage policy only admits uploads under your own uid prefix.
-    const path = SW.user.id + '/' + Date.now() + '.' + (ext || 'jpg');
-
-    const { error } = await db.storage.from('receipts').upload(path, file, {
-      contentType: file.type || 'image/jpeg',
-      upsert: false,
-    });
-    if (error) throw error;
-    return path;
-  }
-
   async function save(btn) {
     SW.setError('exp-f-error', '');
 
@@ -1076,9 +1039,6 @@ window.SW = window.SW || {};
 
     SW.busy(btn, true);
     try {
-      let receiptPath = f.receiptPath;
-      if (f.receiptFile) receiptPath = await uploadReceipt();
-
       const args = {
         p_amount: SW.rupees(f.amountPaise),
         p_description: f.description.trim(),
@@ -1091,7 +1051,6 @@ window.SW = window.SW || {};
         p_split_mode: f.mode,
         p_expense_date: f.date,
         p_notes: f.note || null,
-        p_receipt_path: receiptPath,
         // Omitted entirely for the ordinary one-payer case; the RPC then
         // treats the single payer as having covered the whole amount.
         p_payers: f.payers
@@ -1128,7 +1087,6 @@ window.SW = window.SW || {};
           category: args.p_category,
           split_mode: f.mode,
           notes: f.note || null,
-          receipt_path: null,
           expense_date: f.date,
           created_at: new Date().toISOString(),
           created_by: SW.user.id,
@@ -1252,9 +1210,6 @@ window.SW = window.SW || {};
       shares: {},
       adjust: {},
       note: e.notes || '',
-      receiptPath: e.receipt_path || null,
-      receiptFile: null,
-      receiptName: e.receipt_path ? 'Receipt attached' : '',
     };
   }
 
@@ -1269,7 +1224,6 @@ window.SW = window.SW || {};
     if (!e) {
       missing.hidden = false;
       document.getElementById('exp-share').hidden = true;
-      document.getElementById('exp-receipt').hidden = true;
       document.getElementById('exp-splits').innerHTML = '';
       document.getElementById('exp-desc').textContent = '';
       document.getElementById('exp-amount').textContent = '';
@@ -1345,19 +1299,6 @@ window.SW = window.SW || {};
       noteEl.hidden = false;
     } else {
       noteEl.hidden = true;
-    }
-
-    // Receipt, behind a short-lived signed URL rather than a public one.
-    const img = document.getElementById('exp-receipt');
-    img.hidden = true;
-    if (e.receipt_path) {
-      db.storage.from('receipts').createSignedUrl(e.receipt_path, 3600)
-        .then(function (res) {
-          if (res.data && res.data.signedUrl && SW.currentExpenseId === id) {
-            img.src = res.data.signedUrl;
-            img.hidden = false;
-          }
-        });
     }
 
     // Someone can pay without owing anything, so show every payer too.

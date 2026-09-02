@@ -58,11 +58,14 @@ where n.nspname = 'public'
     where cfg like 'search_path=%'
   );
 
--- 6. The receipts bucket must not be public, or any URL leaks every receipt.
+-- 6. Image buckets must not be public, or any URL leaks every picture.
+--    Receipts are not stored at all: scanning happens on the device and the
+--    image is discarded, so this should list only avatars and covers.
 select
-  case when not public then 'PASS' else 'FAIL' end as result,
-  'receipts bucket is private' as check
-from storage.buckets where id = 'receipts';
+  case when count(*) filter (where public) = 0 then 'PASS' else 'FAIL' end as result,
+  'image buckets are private' as check,
+  string_agg(id || case when public then ' (PUBLIC!)' else '' end, ', ') as buckets
+from storage.buckets;
 
 -- 7. Nobody should be able to write notifications for another person.
 --    Only the security-definer functions do that.
