@@ -238,6 +238,74 @@ window.SW = window.SW || {};
       blurb: 'Enter who owes extra; the remainder is split equally.' },
   ];
 
+  /* ======================= UPI ======================================== */
+
+  // A virtual payment address: something@bank. Deliberately permissive on the
+  // handle, since banks and apps keep inventing new suffixes.
+  SW.isUpiId = function (value) {
+    return /^[a-zA-Z0-9][a-zA-Z0-9._-]{1,255}@[a-zA-Z][a-zA-Z0-9.]{1,63}$/
+      .test(String(value || '').trim());
+  };
+
+  // The UPI deep link. Opening it hands the phone to GPay, PhonePe, Paytm or
+  // whatever else is installed, with payee and amount already filled.
+  SW.upiUri = function (opts) {
+    // The note field is fussy across apps: keep it short and alphanumeric.
+    const note = String(opts.note || '')
+      .replace(/[^a-zA-Z0-9 ]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 40);
+
+    return 'upi://pay' +
+      '?pa=' + encodeURIComponent(String(opts.vpa).trim()) +
+      '&pn=' + encodeURIComponent(String(opts.name || '').trim()) +
+      '&am=' + SW.rupees(opts.amountPaise) +
+      '&cu=INR' +
+      (note ? '&tn=' + encodeURIComponent(note) : '');
+  };
+
+  /* ======================= recurrence ================================= */
+
+  function pad(n) { return String(n).padStart(2, '0'); }
+
+  // Mirrors next_occurrence() in the schema, for showing "next on 1 Oct"
+  // without a round trip. Adding a month repeatedly would drift — 31 Jan
+  // clamps to 28 Feb and every later month then sticks at the 28th — so the
+  // intended day of the month is carried separately.
+  SW.nextOccurrence = function (fromIso, cadence, dayOfMonth) {
+    const parts = String(fromIso).split('-').map(Number);
+    const y = parts[0], m = parts[1], d = parts[2];
+
+    if (cadence === 'weekly') {
+      const dt = new Date(Date.UTC(y, m - 1, d + 7));
+      return dt.getUTCFullYear() + '-' + pad(dt.getUTCMonth() + 1) + '-' + pad(dt.getUTCDate());
+    }
+
+    if (cadence === 'yearly') {
+      // 29 Feb only exists every fourth year; clamp rather than roll over.
+      const daysIn = new Date(Date.UTC(y + 1, m, 0)).getUTCDate();
+      return (y + 1) + '-' + pad(m) + '-' + pad(Math.min(d, daysIn));
+    }
+
+    const nm = m === 12 ? 1 : m + 1;
+    const ny = m === 12 ? y + 1 : y;
+    const daysIn = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
+    const want = dayOfMonth || d;
+    return ny + '-' + pad(nm) + '-' + pad(Math.min(want, daysIn));
+  };
+
+  SW.CADENCES = [
+    { key: 'weekly',  label: 'Every week' },
+    { key: 'monthly', label: 'Every month' },
+    { key: 'yearly',  label: 'Every year' },
+  ];
+
+  SW.cadenceLabel = function (key) {
+    const found = SW.CADENCES.filter(function (c) { return c.key === key; })[0];
+    return found ? found.label : 'Never';
+  };
+
   /* ======================= generated avatars ========================== */
 
   // Deterministic abstract art from a user id, in the spirit of the
@@ -295,6 +363,34 @@ window.SW = window.SW || {};
   // Everything the balance maths needs, fetched once per refresh.
   SW.ledger = null;
 
+  // Both balance passes walk every expense, and the screens call them a lot:
+  // the group settings page asked for the same group summary six times in one
+  // render, and drawing N group rows meant N full passes over the ledger.
+  //
+  // A memo that relies on every caller remembering to invalidate it is a
+  // stale-data bug waiting to happen, so the stamp below is checked on every
+  // read: the ledger object itself, its row counts, and a counter for edits
+  // that change neither. Any mismatch recomputes.
+  let bumps = 0;
+  let memoFriends = null;
+  let memoGroups = {};
+
+  function stamp() {
+    const L = SW.ledger;
+    if (!L) return 'none';
+    return bumps + ':' + L.expenses.length + ':' + L.settlements.length;
+  }
+
+  function fresh(memo) {
+    return memo && memo.ledger === SW.ledger && memo.stamp === stamp();
+  }
+
+  SW.bumpLedger = function () {
+    bumps++;
+    memoFriends = null;
+    memoGroups = {};
+  };
+
   SW.loadLedger = async function () {
     const db = SW.db;
     const me = SW.user.id;
@@ -342,7 +438,7 @@ window.SW = window.SW || {};
     if (involved.size) {
       const profRes = await db
         .from('profiles')
-        .select('id, full_name, email, avatar_emoji')
+        .select('id, full_name, email, avatar_emoji, upi_id')
         .in('id', Array.from(involved));
       // A profile we are not permitted to read is not fatal; it shows as
       // "Someone" rather than breaking the whole screen.
@@ -373,6 +469,7 @@ window.SW = window.SW || {};
       expenses: expRes.data,
       settlements: setRes.data,
     };
+    SW.bumpLedger();
     return SW.ledger;
   };
 
@@ -434,6 +531,7 @@ window.SW = window.SW || {};
   // net > 0  → they owe me
   // net < 0  → I owe them
   SW.friendBalances = function () {
+    if (fresh(memoFriends)) return memoFriends.value;
     const L = SW.ledger;
     const me = L.me;
     const nets = {};   // friendId -> { net, byGroup: { gid|'none': paise } }
@@ -481,6 +579,7 @@ window.SW = window.SW || {};
       });
     });
 
+    memoFriends = { ledger: SW.ledger, stamp: stamp(), value: nets };
     return nets;
   };
 
@@ -537,6 +636,9 @@ window.SW = window.SW || {};
 
   // My own position in a group, and the total spent in it.
   SW.groupSummary = function (groupId) {
+    const key = groupId === null ? '__none' : groupId;
+    if (fresh(memoGroups[key])) return memoGroups[key].value;
+
     const L = SW.ledger;
     const { nets, paid, owed } = SW.groupMemberNets(groupId);
 
@@ -545,7 +647,7 @@ window.SW = window.SW || {};
       if ((e.group_id || null) === groupId) total += SW.toPaise(e.amount);
     });
 
-    return {
+    const value = {
       groupId: groupId,
       myNet: nets[L.me] || 0,
       nets: nets,
@@ -554,6 +656,8 @@ window.SW = window.SW || {};
       total: total,
       memberIds: Object.keys(nets),
     };
+    memoGroups[key] = { ledger: SW.ledger, stamp: stamp(), value: value };
+    return value;
   };
 
   // Every group I am in, plus the pseudo-group for non-group expenses.

@@ -69,6 +69,11 @@ window.SW = window.SW || {};
     const owner = g.created_by === me;
     document.getElementById('gs-delete').hidden = !owner;
 
+    const anyOutstanding = Object.keys(SW.groupSummary(gid).nets).some(function (k) {
+      return SW.groupSummary(gid).nets[k] !== 0;
+    });
+    document.getElementById('gs-leave').classList.toggle('is-blocked', anyOutstanding);
+
     document.getElementById('gs-members').innerHTML = members.map(function (id) {
       const p = SW.person(id);
       const net = SW.groupSummary(gid).nets[id] || 0;
@@ -213,7 +218,13 @@ window.SW = window.SW || {};
   /* ======================= settle-up date =========================== */
 
   document.getElementById('gs-settle-date').addEventListener('click', function () {
+    SW.openSettleDate(gid);
+  });
+
+  SW.openSettleDate = function (forGid) {
+    gid = forGid || gid;
     const g = group();
+    if (!g) return;
     SW.sheet({
       title: 'Settle-up date',
       body:
@@ -237,15 +248,24 @@ window.SW = window.SW || {};
         group().settle_up_on = value;
         render(gid);
         SW.toast(value ? 'Date set' : 'Date removed', 'ok');
+        if (SW.renderGroupDetail && SW.currentGroupId === gid) {
+          SW.renderGroupDetail(gid);
+        }
         return true;
       },
     });
-  });
+  };
 
   /* ======================= whiteboard =============================== */
 
   document.getElementById('gs-whiteboard').addEventListener('click', function () {
+    SW.openWhiteboard(gid);
+  });
+
+  SW.openWhiteboard = function (forGid) {
+    gid = forGid || gid;
     const g = group();
+    if (!g) return;
     SW.sheet({
       title: 'Whiteboard',
       rawBody:
@@ -273,7 +293,7 @@ window.SW = window.SW || {};
         return true;
       },
     });
-  });
+  };
 
   /* ======================= advanced ================================= */
 
@@ -351,16 +371,33 @@ window.SW = window.SW || {};
   document.getElementById('gs-leave').addEventListener('click', function () {
     const g = group();
     const net = SW.groupSummary(gid).myNet;
+
+    // Refused rather than warned. Leaving with a balance would strand a debt
+    // nobody can settle from either side, and there is no undo for that.
+    if (net !== 0) {
+      return SW.sheet({
+        title: 'You cannot leave yet',
+        body:
+          '<p style="color:var(--owe);font-size:14.5px;font-weight:700">' +
+            (net > 0 ? 'You are owed ' : 'You owe ') + SW.money(net) +
+            ' in this group.</p>' +
+          '<p style="color:var(--muted);font-size:14.5px;margin-top:8px">Settle up ' +
+            'with everyone here first. Leaving now would strand a debt that ' +
+            'neither side could clear.</p>',
+        confirm: 'Settle up',
+        onConfirm: function () {
+          SW.closeSheet();
+          SW.navigate('group/' + gid);
+          setTimeout(function () { document.getElementById('grp-settle').click(); }, 220);
+          return true;
+        },
+      });
+    }
+
     SW.sheet({
       title: 'Leave ' + g.name + '?',
-      body: net !== 0
-        ? '<p style="color:var(--owe);font-size:14.5px;font-weight:700">' +
-          (net > 0 ? 'You are still owed ' : 'You still owe ') + SW.money(net) +
-          ' in this group.</p><p style="color:var(--muted);font-size:14.5px;' +
-          'margin-top:8px">Leaving does not clear that. Settle up first if you ' +
-          'meant to.</p>'
-        : '<p style="color:var(--muted);font-size:14.5px">You are settled up here. ' +
-          'The expenses stay on record for everyone else.</p>',
+      body: '<p style="color:var(--muted);font-size:14.5px">You are settled up ' +
+        'here. The expenses stay on record for everyone else.</p>',
       confirm: 'Leave group',
       onConfirm: async function (btn) {
         SW.busy(btn, true);

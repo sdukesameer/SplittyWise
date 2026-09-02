@@ -25,6 +25,7 @@ window.SW = window.SW || {};
     insights:         { tab: 'account',  action: null,           summary: false, chrome: false, fab: false },
     search:           { tab: null,       action: null,           summary: false, chrome: false, fab: false },
     'group-settings': { tab: 'groups',   action: null,           summary: false, chrome: false, fab: false },
+    recurring:        { tab: 'account',  action: null,           summary: false, chrome: false, fab: false },
   };
 
   // Views register their renderer here; showView calls it on every entry.
@@ -247,6 +248,9 @@ window.SW = window.SW || {};
     document.getElementById('profile-emoji').textContent = p.avatar_emoji || '🙂';
     document.getElementById('sub-name').textContent = name;
     document.getElementById('sub-email').textContent = email;
+    document.getElementById('sub-upi').textContent = p.upi_id
+      ? p.upi_id
+      : 'Let friends pay you in one tap';
   }
 
   /* ---- edit name ---- */
@@ -338,6 +342,51 @@ window.SW = window.SW || {};
     });
   }
 
+  document.getElementById('row-upi').addEventListener('click', function () {
+    const current = (SW.profile && SW.profile.upi_id) || '';
+    SW.sheet({
+      title: 'Your UPI ID',
+      body:
+        '<p style="color:var(--muted);font-size:14.5px">Friends settling up with ' +
+          'you get a <strong style="color:var(--text)">Pay with UPI</strong> button ' +
+          'that opens their payment app with the amount already filled.</p>' +
+        '<div class="field" style="margin-top:12px">' +
+          '<label for="upi-input">UPI ID</label>' +
+          '<input class="input" id="upi-input" type="text" inputmode="email" ' +
+                 'autocapitalize="off" autocomplete="off" spellcheck="false" ' +
+                 'placeholder="yourname@okhdfcbank" value="' + esc(current) + '">' +
+          '<span class="hint">Only people you split with can see it.</span>' +
+          '<div class="field-error" id="upi-error"></div>' +
+        '</div>',
+      confirm: 'Save',
+      cancel: current ? 'Remove it' : 'Cancel',
+      onOpen: function () { document.getElementById('upi-input').focus(); },
+      onConfirm: async function (btn) {
+        const value = document.getElementById('upi-input').value.trim();
+        if (value && !SW.isUpiId(value)) {
+          SW.setError('upi-error', 'That does not look like a UPI ID — try name@bank.');
+          return false;
+        }
+
+        SW.busy(btn, true);
+        const { error } = await db.from('profiles')
+          .update({ upi_id: value || null, updated_at: new Date().toISOString() })
+          .eq('id', SW.user.id);
+        SW.busy(btn, false);
+        if (error) { SW.setError('upi-error', error.message); return false; }
+
+        SW.profile.upi_id = value || null;
+        renderAccount();
+        SW.toast(value ? 'UPI ID saved' : 'UPI ID removed', 'ok');
+        return true;
+      },
+    });
+  });
+
+  document.getElementById('row-recurring').addEventListener('click', function () {
+    SW.navigate('recurring');
+  });
+
   document.getElementById('row-emoji').addEventListener('click', openEmojiPicker);
   document.getElementById('profile-emoji').addEventListener('click', openEmojiPicker);
 
@@ -372,8 +421,10 @@ window.SW = window.SW || {};
     SW.busy(this, true);
     const { error } = await db.auth.signOut();
     SW.busy(this, false);
-    if (error) SW.toast(error.message, 'error');
-    else if (SW.stopRealtime) SW.stopRealtime();
+    if (error) return SW.toast(error.message, 'error');
+    if (SW.stopRealtime) SW.stopRealtime();
+    // Otherwise the next person to sign in on this phone sees these figures.
+    if (SW.cache && SW.user) await SW.cache.clear(SW.user.id);
   });
 
   /* ======================= helpers ==================================== */
@@ -402,14 +453,54 @@ window.SW = window.SW || {};
     activityLoaded = false;
     if (activeView === 'activity') loadActivity(true);
 
+    // Paint the last known balances immediately. Waiting on the network
+    // meant every launch opened on an empty skeleton; this shows real
+    // figures at once and corrects them a moment later.
+    if (SW.cache && SW.recompute) {
+      const cached = await SW.cache.load(SW.user.id);
+      if (cached) {
+        SW.ledger = cached;
+        if (SW.bumpLedger) SW.bumpLedger();
+        if (SW.outbox) await SW.outbox.applyPending();
+        SW.recompute();
+      }
+    }
+
     // Redeem first, so a friend or group gained from an invite is already
     // there when the ledger loads.
     if (SW.redeemPendingInvite) await SW.redeemPendingInvite();
 
+    // Anything queued while offline goes now, before the fetch, so the
+    // ledger that comes back already includes it.
+    if (SW.outbox) await SW.outbox.flush({ quiet: true });
+
     // The ledger drives Friends, Groups and the balance summary.
     if (SW.refreshLedger) await SW.refreshLedger();
 
+    // Post any repeating expense that has come due. Doing it here means
+    // recurring works with no scheduler configured at all — but once a day
+    // is enough, so most launches skip the round trip entirely.
+    try {
+      const stampKey = 'splittywise.recurringChecked';
+      const todayStamp = new Date().toISOString().slice(0, 10);
+      let checked = null;
+      try { checked = localStorage.getItem(stampKey); } catch (e) { /* ignore */ }
+      if (checked === todayStamp) throw new Error('already checked today');
+      try { localStorage.setItem(stampKey, todayStamp); } catch (e) { /* ignore */ }
+
+      const { data } = await db.rpc('run_due_recurring');
+      if (data && data.posted > 0) {
+        SW.toast(data.posted === 1
+          ? 'Added 1 repeating expense'
+          : 'Added ' + data.posted + ' repeating expenses', 'ok');
+        await SW.refreshLedger();
+      }
+    } catch (e) {
+      // Offline, or the function is not deployed yet. Neither is fatal.
+    }
+
     // Live updates, so a friend's expense lands without a refresh.
     if (SW.startRealtime) SW.startRealtime();
+    if (SW.outbox) SW.outbox.render();
   };
 })();

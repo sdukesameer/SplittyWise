@@ -15,6 +15,9 @@ create table if not exists public.profiles (
   email         text not null unique,
   full_name     text not null default '',
   avatar_emoji  text not null default '🙂',
+  -- A UPI virtual payment address, so settling up can open a payment app
+  -- with the amount already filled instead of only recording one.
+  upi_id        text,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
@@ -107,6 +110,41 @@ create table if not exists public.invites (
   expires_at  timestamptz not null default now() + interval '14 days'
 );
 
+-- The shape of an expense plus a cadence. Rent, wifi and the maid never
+-- change, so retyping them monthly is the app's most obvious pointless work.
+-- The splits are stored exactly as create_expense() wants them.
+create table if not exists public.recurring_expenses (
+  id            uuid primary key default gen_random_uuid(),
+  group_id      uuid references public.groups(id) on delete cascade,
+  payer_id      uuid not null references public.profiles(id),
+  amount        numeric(12,2) not null check (amount > 0),
+  description   text not null check (length(trim(description)) > 0),
+  emoji         text not null default '🧾',
+  category      text not null default 'general',
+  split_mode    text not null default 'equal',
+  splits        jsonb not null,
+  payers        jsonb,
+  notes         text,
+  cadence       text not null check (cadence in ('weekly','monthly','yearly')),
+  day_of_month  int check (day_of_month between 1 and 31),
+  next_run      date not null,
+  last_run      date,
+  runs          int not null default 0,
+  active        boolean not null default true,
+  created_by    uuid not null references public.profiles(id) on delete cascade,
+  created_at    timestamptz not null default now()
+);
+
+-- Most disputes about an expense are a conversation, not a number, and that
+-- conversation belongs next to the expense rather than lost in WhatsApp.
+create table if not exists public.expense_comments (
+  id          uuid primary key default gen_random_uuid(),
+  expense_id  uuid not null references public.expenses(id) on delete cascade,
+  author_id   uuid not null references public.profiles(id) on delete cascade,
+  body        text not null check (length(trim(body)) > 0 and length(body) <= 1000),
+  created_at  timestamptz not null default now()
+);
+
 -- A payback. Never edits an expense; balances are (expenses - settlements).
 create table if not exists public.settlements (
   id          uuid primary key default gen_random_uuid(),
@@ -135,6 +173,7 @@ create table if not exists public.notifications (
 );
 
 -- Columns added after the first release. Safe to re-run.
+alter table public.profiles       add column if not exists upi_id text;
 alter table public.groups        add column if not exists cover_path   text;
 alter table public.groups        add column if not exists whiteboard   text;
 alter table public.groups        add column if not exists settle_up_on date;
@@ -173,6 +212,10 @@ create index if not exists idx_splits_expense      on public.expense_splits(expe
 create index if not exists idx_payers_expense      on public.expense_payers(expense_id);
 create index if not exists idx_payers_user         on public.expense_payers(user_id);
 create index if not exists idx_invites_creator     on public.invites(created_by);
+create index if not exists idx_recurring_due       on public.recurring_expenses(next_run)
+  where active;
+create index if not exists idx_recurring_creator   on public.recurring_expenses(created_by);
+create index if not exists idx_comments_expense    on public.expense_comments(expense_id, created_at);
 create index if not exists idx_splits_user         on public.expense_splits(user_id);
 create index if not exists idx_settle_from         on public.settlements(from_user);
 create index if not exists idx_settle_to           on public.settlements(to_user);
@@ -260,6 +303,8 @@ alter table public.expenses       enable row level security;
 alter table public.expense_splits enable row level security;
 alter table public.expense_payers enable row level security;
 alter table public.invites        enable row level security;
+alter table public.recurring_expenses enable row level security;
+alter table public.expense_comments enable row level security;
 alter table public.settlements    enable row level security;
 alter table public.notifications  enable row level security;
 
@@ -419,6 +464,52 @@ create policy invites_insert on public.invites
 drop policy if exists invites_delete on public.invites;
 create policy invites_delete on public.invites
   for delete to authenticated using (created_by = auth.uid());
+
+-- ---- recurring_expenses ----------------------------------------------------
+-- Visible to whoever set it up and to anyone in the group it posts into, so
+-- nobody is surprised by a bill appearing that they cannot see the rule for.
+drop policy if exists recurring_select on public.recurring_expenses;
+create policy recurring_select on public.recurring_expenses
+  for select to authenticated
+  using (
+    created_by = auth.uid()
+    or payer_id = auth.uid()
+    or (group_id is not null and public.is_group_member(group_id, auth.uid()))
+  );
+
+drop policy if exists recurring_insert on public.recurring_expenses;
+create policy recurring_insert on public.recurring_expenses
+  for insert to authenticated
+  with check (
+    created_by = auth.uid()
+    and (group_id is null or public.is_group_member(group_id, auth.uid()))
+  );
+
+drop policy if exists recurring_update on public.recurring_expenses;
+create policy recurring_update on public.recurring_expenses
+  for update to authenticated
+  using (created_by = auth.uid()) with check (created_by = auth.uid());
+
+drop policy if exists recurring_delete on public.recurring_expenses;
+create policy recurring_delete on public.recurring_expenses
+  for delete to authenticated using (created_by = auth.uid());
+
+-- ---- expense_comments ------------------------------------------------------
+-- Anyone who can see the expense can read and add to the conversation, but
+-- only the author can remove their own words.
+drop policy if exists comments_select on public.expense_comments;
+create policy comments_select on public.expense_comments
+  for select to authenticated
+  using (public.can_see_expense(expense_id, auth.uid()));
+
+drop policy if exists comments_insert on public.expense_comments;
+create policy comments_insert on public.expense_comments
+  for insert to authenticated
+  with check (author_id = auth.uid() and public.can_see_expense(expense_id, auth.uid()));
+
+drop policy if exists comments_delete on public.expense_comments;
+create policy comments_delete on public.expense_comments
+  for delete to authenticated using (author_id = auth.uid());
 
 -- ---- settlements -----------------------------------------------------------
 drop policy if exists settlements_select on public.settlements;
@@ -1084,6 +1175,84 @@ begin
 end $$;
 
 -- ============================================================================
+--  8b. RECURRING EXPENSES
+-- ============================================================================
+
+-- Advance a date by one cadence step, keeping the intended day of the month.
+-- Adding an interval repeatedly would drift: 31 Jan clamps to 28 Feb, and
+-- from then on every later month is the 28th.
+create or replace function public.next_occurrence(
+  p_from     date,
+  p_cadence  text,
+  p_day      int default null
+) returns date language plpgsql immutable set search_path = public as $$
+declare
+  first_of_next date;
+  days_in       int;
+begin
+  if p_cadence = 'weekly' then return p_from + 7; end if;
+  if p_cadence = 'yearly' then return (p_from + interval '1 year')::date; end if;
+
+  first_of_next := (date_trunc('month', p_from) + interval '1 month')::date;
+  days_in := extract(day from (date_trunc('month', first_of_next)
+                               + interval '1 month - 1 day'))::int;
+  return first_of_next
+         + (least(coalesce(p_day, extract(day from p_from)::int), days_in) - 1);
+end $$;
+
+-- Post every rule of MINE that has come due, then advance it. Called from the
+-- app at launch, which means recurring expenses work with no scheduler at
+-- all; scoped to the caller's own rules so opening the app cannot trigger
+-- anybody else's. Idempotent: next_run only ever moves forward.
+create or replace function public.run_due_recurring()
+returns json language plpgsql security definer set search_path = public as $$
+declare
+  me      uuid := auth.uid();
+  r       public.recurring_expenses;
+  posted  int := 0;
+  guard   int;
+begin
+  if me is null then raise exception 'Not authenticated'; end if;
+
+  for r in
+    select * from public.recurring_expenses
+    where created_by = me and active and next_run <= current_date
+    order by next_run
+  loop
+    -- A rule dormant for months would otherwise post a burst of back-dated
+    -- expenses; cap the catch-up at a year's worth per launch.
+    guard := 0;
+    while r.next_run <= current_date and guard < 60 loop
+      perform public.create_expense(
+        p_amount       => r.amount,
+        p_description  => r.description,
+        p_splits       => r.splits,
+        p_payer_id     => r.payer_id,
+        p_group_id     => r.group_id,
+        p_emoji        => r.emoji,
+        p_category     => r.category,
+        p_split_mode   => r.split_mode,
+        p_expense_date => r.next_run,
+        p_notes        => r.notes,
+        p_receipt_path => null,
+        p_payers       => r.payers
+      );
+      posted := posted + 1;
+      guard := guard + 1;
+      r.next_run := public.next_occurrence(r.next_run, r.cadence, r.day_of_month);
+    end loop;
+
+    update public.recurring_expenses
+    set next_run = r.next_run,
+        last_run = current_date,
+        runs = runs + guard
+    where id = r.id;
+  end loop;
+
+  return json_build_object('ok', true, 'posted', posted);
+end $$;
+
+-- ============================================================================
 --  9. SETTLEMENTS
 -- ============================================================================
 
@@ -1186,6 +1355,38 @@ drop trigger if exists on_group_deleted on public.groups;
 create trigger on_group_deleted
   before delete on public.groups
   for each row execute function public.notify_group_deleted();
+
+create or replace function public.notify_comment()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  actor_name  text;
+  descr       text;
+  gid         uuid;
+begin
+  select full_name into actor_name from public.profiles where id = new.author_id;
+  select description, group_id into descr, gid
+    from public.expenses where id = new.expense_id;
+
+  insert into public.notifications (user_id, actor_id, type, title, body, group_id, expense_id)
+  select distinct uid, new.author_id, 'comment',
+         actor_name || ' commented on "' || descr || '"',
+         left(new.body, 120), gid, new.expense_id
+  from (
+    select user_id as uid from public.expense_splits where expense_id = new.expense_id
+    union
+    select user_id from public.expense_payers where expense_id = new.expense_id
+    union
+    select author_id from public.expense_comments where expense_id = new.expense_id
+  ) everyone
+  where uid <> new.author_id;
+
+  return new;
+end $$;
+
+drop trigger if exists on_comment_created on public.expense_comments;
+create trigger on_comment_created
+  after insert on public.expense_comments
+  for each row execute function public.notify_comment();
 
 drop trigger if exists on_settlement_created on public.settlements;
 create trigger on_settlement_created
@@ -1316,6 +1517,8 @@ grant execute on function public.add_group_members(uuid, uuid[])        to authe
 grant execute on function public.create_invite(uuid)                    to authenticated;
 grant execute on function public.redeem_invite(text)                    to authenticated;
 grant execute on function public.nudge(uuid, uuid, numeric)              to authenticated;
+grant execute on function public.run_due_recurring()                     to authenticated;
+grant execute on function public.next_occurrence(date, text, int)        to authenticated;
 grant execute on function public.create_expense(
   numeric, text, jsonb, uuid, uuid, text, text, text, date, text, text, jsonb) to authenticated;
 grant execute on function public.update_expense(

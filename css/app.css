@@ -2323,3 +2323,137 @@ button.is-loading .spinner { display: block; }
   font-size: 14px;
   font-weight: 800;
 }
+
+/* ==========================================================================
+   Offline queue, comments, repeating expenses
+   ========================================================================== */
+
+.pending-chip {
+  flex: none;
+  border: 1.5px solid var(--owe);
+  background: color-mix(in srgb, var(--owe) 12%, transparent);
+  color: var(--owe);
+  border-radius: var(--r-pill);
+  padding: 5px 11px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pending-chip:hover { background: color-mix(in srgb, var(--owe) 20%, transparent); }
+
+/* A row that has not reached the server yet. */
+.is-pending { opacity: 0.72; }
+.pending-tag {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--owe);
+  border: 1px solid var(--owe);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+
+.pill-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+.pill-row .pill { margin-top: 0; }
+.pill-tap { border: 0; font: inherit; cursor: pointer; }
+.pill-tap:hover { background: var(--line-strong); color: var(--text); }
+
+/* --------------------------------------------------------------------------
+   Who added it
+   -------------------------------------------------------------------------- */
+
+.exp-added {
+  padding: 0 18px 14px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--faint);
+}
+
+/* --------------------------------------------------------------------------
+   Comments
+   -------------------------------------------------------------------------- */
+
+.comments { display: flex; flex-direction: column; gap: 2px; }
+
+.comment {
+  display: flex;
+  gap: 11px;
+  padding: 9px 18px;
+  align-items: flex-start;
+}
+.comment .avatar { width: 32px; height: 32px; font-size: 15px; }
+.comment-body { flex: 1; min-width: 0; }
+.comment-who {
+  display: block;
+  font-size: 13px;
+  font-weight: 800;
+}
+.comment-who time {
+  font-weight: 500;
+  color: var(--faint);
+  margin-left: 7px;
+  font-size: 11.5px;
+}
+.comment-text {
+  display: block;
+  font-size: 14.5px;
+  color: var(--text);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.comment-del {
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--r-sm);
+}
+.comment-del:hover { color: var(--danger); background: var(--surface-2); }
+
+.comments-empty {
+  padding: 6px 18px 10px;
+  font-size: 13.5px;
+  color: var(--faint);
+}
+
+.comment-form {
+  display: flex;
+  gap: 9px;
+  padding: 10px 14px 18px;
+  align-items: center;
+}
+.comment-form .input { flex: 1; }
+
+/* --------------------------------------------------------------------------
+   Repeating expenses
+   -------------------------------------------------------------------------- */
+
+.rec-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.rec-row:last-child { border-bottom: 0; }
+.rec-row.is-paused { opacity: 0.55; }
+.rec-main { flex: 1; min-width: 0; }
+.rec-title { display: block; font-size: 15.5px; font-weight: 700; }
+.rec-sub { display: block; font-size: 12.5px; color: var(--muted); }
+.rec-amt {
+  flex: none;
+  font-size: 15.5px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.rec-actions { display: flex; gap: 4px; flex: none; }

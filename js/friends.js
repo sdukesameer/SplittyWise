@@ -59,10 +59,20 @@ window.SW = window.SW || {};
       await SW.loadLedger();
     } catch (err) {
       document.getElementById('friends-skel').hidden = true;
-      SW.toast('Could not load balances: ' + (err.message || err), 'error');
+      // With a cached ledger already on screen there is nothing to shout
+      // about: the figures are simply as of the last successful load.
+      if (!SW.ledger) {
+        SW.toast('Could not load balances: ' + (err.message || err), 'error');
+      }
       return;
     }
+
+    // Writes still waiting to be sent belong in the ledger, or a queued
+    // expense would vanish from the balances until it syncs.
+    if (SW.outbox) await SW.outbox.applyPending();
+    if (SW.cache) SW.cache.save(SW.ledger);
     SW.recompute();
+    if (SW.outbox) SW.outbox.render();
   };
 
   /* ======================= summary ==================================== */

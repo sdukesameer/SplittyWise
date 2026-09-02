@@ -34,6 +34,9 @@
       <stop offset=".55" stop-color="#14B8A6"/>
       <stop offset="1" stop-color="#6366F1"/>
     </linearGradient>
+    <symbol id="ic-calendar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/>
+    </symbol>
     <symbol id="ic-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="12" cy="12" r="3.2"/>
       <path d="M12 3v2.2M12 18.8V21M4.6 7.8l1.9 1.1M17.5 15.1l1.9 1.1M4.6 16.2l1.9-1.1M17.5 8.9l1.9-1.1"/>
@@ -313,6 +316,7 @@
       </button>
       <span class="grow"></span>
       <button class="header-action" id="header-action" hidden></button>
+      <button type="button" class="pending-chip" id="offline-chip" hidden></button>
       <button class="icon-btn" id="btn-bell" aria-label="Notifications">
         <svg aria-hidden="true"><use href="#ic-bell"/></svg>
         <span class="badge" id="bell-badge" aria-live="polite"></span>
@@ -468,6 +472,13 @@
             <div class="set-sub" id="sub-email">&nbsp;</div>
           </div>
         </div>
+        <button class="set-row" id="row-upi">
+          <span class="grow">
+            <span class="set-title">UPI ID</span>
+            <span class="set-sub" id="sub-upi">Let friends pay you in one tap</span>
+          </span>
+          <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
+        </button>
         <button class="set-row" id="row-emoji">
           <span class="grow">
             <span class="set-title">Avatar</span>
@@ -478,6 +489,13 @@
       </div>
 
       <div class="card">
+        <button class="set-row" id="row-recurring">
+          <span class="grow">
+            <span class="set-title">Repeating expenses</span>
+            <span class="set-sub" id="sub-recurring">Rent, wifi, anything monthly</span>
+          </span>
+          <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
+        </button>
         <button class="set-row" id="row-insights">
           <span class="grow">
             <span class="set-title">Spending insights</span>
@@ -591,6 +609,8 @@
         </div>
       </header>
 
+      <div class="exp-added" id="exp-added"></div>
+
       <div class="exp-your-share" id="exp-share" hidden>
         <span id="exp-share-label"></span>
         <span class="val" id="exp-share-value"></span>
@@ -602,6 +622,17 @@
 
       <div class="section-label">Split</div>
       <div class="list" id="exp-splits"></div>
+
+      <div class="section-label">Comments</div>
+      <div class="comments" id="exp-comments"></div>
+      <div class="comment-form">
+        <input class="input" id="exp-comment-text" type="text" maxlength="1000"
+               placeholder="Add a comment…" aria-label="Add a comment">
+        <button type="button" class="btn btn-primary" id="exp-comment-send"
+                style="width:auto;padding:12px 18px;min-height:44px">
+          <span class="spinner"></span><span class="btn-label">Post</span>
+        </button>
+      </div>
 
       <div class="empty" id="exp-missing" hidden>
         <div class="empty-art">🤷</div>
@@ -627,10 +658,19 @@
         <div class="detail-hero">
           <span class="avatar" id="grp-emoji" style="background:var(--surface-2)">👥</span>
           <div class="detail-hero-text">
-            <h1 id="grp-name">&nbsp;</h1>
-            <span class="pill" id="grp-people">
-              <svg aria-hidden="true"><use href="#ic-groups"/></svg>
-              <span id="grp-people-text">0 people</span>
+            <button type="button" id="grp-name-tap"
+                    style="background:none;border:0;padding:0;text-align:left;cursor:pointer">
+              <h1 id="grp-name">&nbsp;</h1>
+            </button>
+            <span class="pill-row">
+              <button type="button" class="pill pill-tap" id="grp-settle-date-chip">
+                <svg aria-hidden="true"><use href="#ic-calendar"/></svg>
+                <span id="grp-settle-date-text">Add settle-up date</span>
+              </button>
+              <span class="pill" id="grp-people">
+                <svg aria-hidden="true"><use href="#ic-groups"/></svg>
+                <span id="grp-people-text">0 people</span>
+              </span>
             </span>
           </div>
         </div>
@@ -644,7 +684,9 @@
           <button type="button" class="chip" data-pane-btn="balances">Balances</button>
           <button type="button" class="chip" data-pane-btn="totals">Totals</button>
           <button type="button" class="chip" data-pane-btn="charts">Charts</button>
+          <button type="button" class="chip" id="grp-whiteboard-chip">Whiteboard</button>
           <button type="button" class="chip" id="grp-export">Export</button>
+          <button type="button" class="chip" id="grp-settings-chip">⚙ Settings</button>
         </div>
       </header>
 
@@ -788,6 +830,33 @@
       </div>
     </div>
 
+    <!-- ---------- Recurring expenses ---------- -->
+    <div data-view="recurring">
+      <header class="detail-header">
+        <div class="detail-bar">
+          <button class="icon-btn round" id="rec-back" aria-label="Back">
+            <svg aria-hidden="true"><use href="#ic-back"/></svg>
+          </button>
+          <span class="grow"></span>
+        </div>
+        <div class="detail-hero">
+          <div class="detail-hero-text">
+            <h1>Repeating expenses</h1>
+            <div class="detail-balance" style="color:var(--muted)">Posted automatically on the day</div>
+          </div>
+        </div>
+      </header>
+
+      <div class="list" id="rec-list"></div>
+
+      <div class="empty" id="rec-empty" hidden>
+        <div class="empty-art">🔁</div>
+        <h3>Nothing repeating yet</h3>
+        <p>Rent, wifi, the maid. Set <em>Repeats</em> when you add an expense and
+           it posts itself from then on.</p>
+      </div>
+    </div>
+
     <!-- ---------- Insights ---------- -->
     <div data-view="insights">
       <header class="detail-header">
@@ -874,6 +943,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="js/config.js"></script>
 <script src="js/db.js"></script>
+<script src="js/outbox.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/auth.js"></script>
 <script src="js/balances.js"></script>
@@ -885,7 +955,9 @@
 <script src="js/expense.js"></script>
 <script src="js/groups.js"></script>
 <script src="js/settle.js"></script>
+<script src="js/celebrate.js"></script>
 <script src="js/groupsettings.js"></script>
+<script src="js/recurring.js"></script>
 <script src="js/insights.js"></script>
 <script src="js/search.js"></script>
 <script src="js/realtime.js"></script>

@@ -14,7 +14,8 @@ from pg_tables
 where schemaname = 'public'
   and tablename in ('profiles','friendships','groups','group_members',
                     'expenses','expense_splits','expense_payers','settlements',
-                    'notifications','invites');
+                    'notifications','invites','recurring_expenses',
+                    'expense_comments');
 
 -- 2. Which ones, if any, are unprotected.
 select tablename, rowsecurity
@@ -106,3 +107,30 @@ left join public.expense_splits s on s.expense_id = e.id
 group by e.id, e.description, e.amount
 having e.amount <> coalesce(sum(s.amount), 0)
 order by e.created_at desc;
+
+-- 11. Anything in `public` that this app did not create. A schema that has
+--     been through several versions can leave objects behind; this lists
+--     them so you can decide, rather than dropping anything automatically.
+select tablename as unexpected_table
+from pg_tables
+where schemaname = 'public'
+  and tablename not in (
+    'profiles','friendships','groups','group_members','expenses',
+    'expense_splits','expense_payers','expense_comments','settlements',
+    'notifications','invites','recurring_expenses'
+  )
+order by tablename;
+
+-- 12. Same for functions. `create or replace` cannot replace a function whose
+--     argument list changed, so an older version can survive as an overload
+--     and make calls ambiguous. Anything listed twice here needs the older
+--     signature dropped.
+select p.proname as function_name,
+       count(*)  as versions,
+       string_agg(pg_get_function_identity_arguments(p.oid), '  |  ') as signatures
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+group by p.proname
+having count(*) > 1
+order by p.proname;

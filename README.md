@@ -46,7 +46,9 @@ Android.
 
 Expenses split five ways: equally (with anyone tickable out), by exact
 amounts, by percentage, by shares, or by adjustment. More than one person can
-have paid. Groups carry a cover photo, a whiteboard, a settle-up date and
+have paid. Settling up can open a UPI app with the amount already filled,
+expenses can repeat on a schedule, and adding one works with no signal at
+all — it queues on the phone and syncs later. Groups carry a cover photo, a whiteboard, a settle-up date and
 your own default split. Invite links let someone join by signing up.
 
 ### Running the tests
@@ -55,7 +57,7 @@ your own default split. Invite links let someone join by signing up.
 for t in tests/*.test.js; do node "$t"; done
 ```
 
-Eleven suites, no database and no browser needed:
+Twelve suites, no database and no browser needed:
 
 | Suite | Covers |
 |---|---|
@@ -69,6 +71,7 @@ Eleven suites, no database and no browser needed:
 | `splitmodes.test.js` | All five split modes, checked against the reference app's own on-screen numbers |
 | `payers.test.js` | Multiple payers: one payer still behaves identically, and several net into the fewest transfers |
 | `history.test.js` | Folding away settled history, shared groups, and scoping charts and exports by group, friend and month |
+| `upi.test.js` | UPI link building, and recurrence dates that must not drift |
 | `wiring.test.js` | That the app is actually connected: every RPC exists with the arguments passed, every column selected exists, every button has a handler, every screen can render, and the offline shell is complete |
 
 The full database — 8 tables, 27 row-level-security policies, 6 write RPCs — is
@@ -160,8 +163,11 @@ policies, that security-definer functions pin `search_path`, that the
 receipts bucket is private, that clients cannot write notifications for
 other people, and that every expense's splits sum to its total.
 
-Worth re-running after any schema change, and occasionally in normal use —
-check 8 catches ledger corruption that would otherwise be invisible.
+Worth re-running after any schema change, and occasionally in normal use.
+Check 8 catches ledger corruption that would otherwise be invisible, and
+checks 11 and 12 list anything in the database this app did not create —
+including an old function left behind as an overload, which is the one thing
+that can make an RPC call ambiguous.
 
 ### 2.5 Confirm the storage bucket
 

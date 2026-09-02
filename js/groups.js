@@ -305,6 +305,14 @@ window.SW = window.SW || {};
 
     if (SW.applyGroupCover) SW.applyGroupCover(isLoose ? null : g.cover_path);
 
+    const dateChip = document.getElementById('grp-settle-date-chip');
+    dateChip.hidden = isLoose;
+    document.getElementById('grp-settle-date-text').textContent = g.settle_up_on
+      ? 'Settle up by ' + SW.formatDate(g.settle_up_on)
+      : 'Add settle-up date';
+    document.getElementById('grp-whiteboard-chip').hidden = isLoose;
+    document.getElementById('grp-settings-chip').hidden = isLoose;
+
     // A settle-up date is a promise the group made, so show it where the
     // balance is.
     if (!isLoose && g.settle_up_on) {
@@ -561,6 +569,14 @@ window.SW = window.SW || {};
     if (SW.currentGroupId) openAddMember(SW.currentGroupId);
   });
 
+  // Both live on the settings page; these are the shortcuts to them.
+  document.getElementById('grp-settle-date-chip').addEventListener('click', function () {
+    if (SW.openSettleDate) SW.openSettleDate(SW.currentGroupId);
+  });
+  document.getElementById('grp-whiteboard-chip').addEventListener('click', function () {
+    if (SW.openWhiteboard) SW.openWhiteboard(SW.currentGroupId);
+  });
+
   document.getElementById('grp-export').addEventListener('click', function () {
     const gid = SW.currentGroupId;
     const g = gid ? SW.ledger.groups[gid] : null;
@@ -582,9 +598,15 @@ window.SW = window.SW || {};
 
   /* ======================= group settings ============================= */
 
-  document.getElementById('grp-settings').addEventListener('click', function () {
+  function openSettings() {
     if (SW.currentGroupId) SW.navigate('gsettings/' + SW.currentGroupId);
-  });
+    else SW.toast('Non-group expenses have no settings');
+  }
+
+  // Three ways in, because one gear icon was not findable.
+  document.getElementById('grp-settings').addEventListener('click', openSettings);
+  document.getElementById('grp-settings-chip').addEventListener('click', openSettings);
+  document.getElementById('grp-name-tap').addEventListener('click', openSettings);
 
   SW.openAddMember = function (gid) { openAddMember(gid); };
 

@@ -77,6 +77,14 @@ window.SW = window.SW || {};
                    'placeholder="Note — UPI, cash, GPay (optional)">' +
           '</div>' +
 
+          (other.upi_id
+            ? '<button type="button" class="btn btn-ghost" id="pay-upi">' +
+              '💸 Pay with UPI</button>' +
+              '<span class="hint" id="pay-upi-hint">Opens your payment app. ' +
+                'Come back and record it — we cannot see whether it went through.' +
+              '</span>'
+            : '') +
+
           (group
             ? '<span class="hint">Recorded in ' + esc(group.name) + '.</span>'
             : '<span class="hint">Recorded outside any group.</span>') +
@@ -88,6 +96,24 @@ window.SW = window.SW || {};
         const amount = document.getElementById('pay-amount');
         amount.focus();
         amount.setSelectionRange(amount.value.length, amount.value.length);
+
+        const upi = document.getElementById('pay-upi');
+        if (upi) upi.addEventListener('click', function () {
+          const paise = parseAmount(document.getElementById('pay-amount').value);
+          if (paise <= 0) {
+            return SW.setError('pay-error', 'Enter an amount first.');
+          }
+          if (!iPay) {
+            return SW.setError('pay-error',
+              'This is set to them paying you. Switch it round to pay them.');
+          }
+          window.location.href = SW.upiUri({
+            vpa: other.upi_id,
+            name: other.full_name,
+            amountPaise: paise,
+            note: (group ? group.name : 'SplittyWise') + ' settle up',
+          });
+        });
 
         document.getElementById('pay-dir').addEventListener('click', function (e) {
           const b = e.target.closest('[data-dir]');
@@ -108,8 +134,7 @@ window.SW = window.SW || {};
           return false;
         }
 
-        SW.busy(btn, true);
-        const { error } = await db.from('settlements').insert({
+        const row = {
           group_id: groupId,
           from_user: iPay ? me : opts.otherId,
           to_user: iPay ? opts.otherId : me,
@@ -117,14 +142,133 @@ window.SW = window.SW || {};
           note: note || null,
           settled_on: date,
           created_by: me,
-        });
+        };
+
+        SW.busy(btn, true);
+        const { error } = await db.from('settlements').insert(row);
         SW.busy(btn, false);
+
+        if (error && SW.isOfflineError && SW.isOfflineError(error) && SW.outbox) {
+          const optimistic = Object.assign({}, row, {
+            created_at: new Date().toISOString(), pending: true,
+          });
+          await SW.outbox.add('settlement', row, optimistic);
+          SW.ledger.settlements.unshift(optimistic);
+          SW.bumpLedger();
+          SW.recompute();
+          SW.toast('Saved on this phone — it will sync when you reconnect', 'ok');
+          return true;
+        }
 
         if (error) { SW.setError('pay-error', error.message); return false; }
 
+        const before = SW.friendNet(opts.otherId);
+        const groupBefore = groupId ? SW.groupSummary(groupId).myNet : 0;
         await SW.refreshLedger();
         if (SW.refreshUnread) SW.refreshUnread();
-        SW.toast('Payment recorded', 'ok');
+
+        const after = SW.friendNet(opts.otherId);
+        const groupCleared = groupId && groupBefore !== 0 &&
+                             SW.groupSummary(groupId).myNet === 0;
+
+        if (groupCleared) {
+          SW.celebrate('All settled up in ' + group.name);
+        } else if (before !== 0 && after === 0) {
+          SW.celebrate('All square with ' + other.full_name.split(' ')[0]);
+        } else {
+          SW.toast('Payment recorded', 'ok');
+        }
+        return true;
+      },
+    });
+  };
+
+  /* ======================= settling everything at once ================ */
+
+  // Settling the overall total as one non-group payment would leave every
+  // group's balance untouched and offset by a payment sitting outside them
+  // all. So this writes one settlement per group where a balance exists.
+  SW.settleAllWith = function (friendId) {
+    const me = SW.ledger.me;
+    const p = SW.person(friendId);
+    const nets = SW.friendBalances();
+    const byGroup = (nets[friendId] || { byGroup: {} }).byGroup;
+
+    const parts = Object.keys(byGroup)
+      .filter(function (k) { return byGroup[k] !== 0; })
+      .map(function (k) {
+        return {
+          groupId: k === 'none' ? null : k,
+          label: k === 'none' ? 'Not in a group' : (SW.ledger.groups[k] || {}).name || 'a group',
+          amount: byGroup[k],
+        };
+      })
+      .sort(function (a, b) { return Math.abs(b.amount) - Math.abs(a.amount); });
+
+    const total = parts.reduce(function (t, x) { return t + x.amount; }, 0);
+
+    if (!parts.length) {
+      return SW.sheet({
+        title: 'Already settled',
+        rawBody: '<div class="empty" style="padding:26px 24px">' +
+          '<div class="empty-art">🎉</div><h3>Nothing outstanding</h3>' +
+          '<p>You and ' + esc(p.full_name) + ' are square everywhere.</p></div>',
+        confirm: null,
+      });
+    }
+
+    // Everything one way is the simple case. Mixed directions mean some
+    // groups owe each way, and netting them into one payment would be wrong.
+    const mixed = parts.some(function (x) { return x.amount > 0; }) &&
+                  parts.some(function (x) { return x.amount < 0; });
+
+    SW.sheet({
+      title: 'Settle everything',
+      rawBody:
+        '<div class="sheet-body"><p style="color:var(--muted);font-size:14.5px">' +
+          (mixed
+            ? 'Some of these run each way, so they are recorded separately rather ' +
+              'than netted into one payment.'
+            : (total > 0
+                ? esc(p.full_name) + ' pays you <strong style="color:var(--owed)">' +
+                  SW.money(total) + '</strong> in total.'
+                : 'You pay ' + esc(p.full_name) + ' <strong style="color:var(--owe)">' +
+                  SW.money(total) + '</strong> in total.')) +
+        '</p></div>' +
+        '<div>' + parts.map(function (x) {
+          return '<div class="plan-row ' + (x.amount < 0 ? 'is-mine' : 'is-owed') +
+                   '" style="cursor:default">' +
+            '<span class="pl-main"><span class="pl-text">' + esc(x.label) + '</span>' +
+            '<span class="pl-sub">' + (x.amount > 0 ? 'they pay you' : 'you pay them') +
+            '</span></span>' +
+            '<span class="pl-amt">' + SW.money(x.amount) + '</span></div>';
+        }).join('') + '</div>' +
+        '<div class="split-foot"><span class="sf-state is-ok">' +
+          parts.length + (parts.length === 1 ? ' payment' : ' payments') +
+        '</span><span class="sf-total">' + SW.money(total) + ' net</span></div>',
+      confirm: 'Record them all',
+      onConfirm: async function (btn) {
+        SW.busy(btn, true);
+
+        const rows = parts.map(function (x) {
+          return {
+            group_id: x.groupId,
+            from_user: x.amount > 0 ? friendId : me,
+            to_user: x.amount > 0 ? me : friendId,
+            amount: SW.rupees(x.amount),
+            note: 'Settled up',
+            settled_on: today(),
+            created_by: me,
+          };
+        });
+
+        const { error } = await db.from('settlements').insert(rows);
+        SW.busy(btn, false);
+        if (error) { SW.toast(error.message, 'error'); return false; }
+
+        await SW.refreshLedger();
+        if (SW.refreshUnread) SW.refreshUnread();
+        SW.celebrate('All square with ' + p.full_name.split(' ')[0]);
         return true;
       },
     });
@@ -151,9 +295,18 @@ window.SW = window.SW || {};
       });
     }
 
+    const spread = Object.keys((SW.friendBalances()[id] || { byGroup: {} }).byGroup)
+      .filter(function (k) { return (SW.friendBalances()[id].byGroup[k]) !== 0; });
+
+    // Spread across more than one group, settling the total as a single
+    // payment would leave each group's balance untouched. Offer the
+    // group-by-group version instead.
+    if (spread.length > 1) return SW.settleAllWith(id);
+
     // net > 0 means they owe me, so the default is them paying me.
     SW.openPaymentSheet({
       otherId: id,
+      groupId: spread[0] === 'none' ? null : spread[0],
       amountPaise: Math.abs(net),
       iPay: net < 0,
     });

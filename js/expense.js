@@ -41,6 +41,7 @@ window.SW = window.SW || {};
       shares: {},            // userId -> whole shares
       adjust: {},            // userId -> paise owed on top
       note: '',              // typed, or written by the itemised scanner
+      repeat: null,          // 'weekly' | 'monthly' | 'yearly'
       receiptPath: null,
       receiptFile: null,
       receiptName: '',
@@ -179,6 +180,15 @@ window.SW = window.SW || {};
 
           '<div id="exp-f-split"></div>' +
 
+          '<button type="button" class="picker-row" id="exp-f-repeat" ' +
+                  'style="border:1px solid var(--line);border-radius:var(--r-md)">' +
+            '<span class="pr-label">Repeats</span>' +
+            '<span class="pr-value' + (f.repeat ? '' : ' is-empty') + '">' +
+              esc(f.repeat ? SW.cadenceLabel(f.repeat) : 'Never') + '</span>' +
+            '<svg class="chev" width="17" height="17" aria-hidden="true">' +
+              '<use href="#ic-chev"/></svg>' +
+          '</button>' +
+
           '<button type="button" class="btn btn-ghost" id="exp-f-scan">' +
             '🧾 Scan a receipt to itemise' +
           '</button>' +
@@ -247,6 +257,11 @@ window.SW = window.SW || {};
     document.getElementById('exp-f-emoji').addEventListener('click', function () {
       SW.closeSheet();
       openEmojiPicker();
+    });
+
+    document.getElementById('exp-f-repeat').addEventListener('click', function () {
+      SW.closeSheet();
+      openRepeatSheet();
     });
 
     document.getElementById('exp-f-note').addEventListener('click', function () {
@@ -504,6 +519,34 @@ window.SW = window.SW || {};
     const mine = (SW.ledger.myMembership || {})[gid];
     const mode = mine && mine.default_split_mode;
     return SW.SPLIT_MODES.some(function (m) { return m.key === mode; }) ? mode : 'equal';
+  }
+
+  function openRepeatSheet() {
+    const options = [{ key: null, label: 'Never' }].concat(SW.CADENCES);
+    SW.sheet({
+      title: 'Repeats',
+      rawBody:
+        '<div class="split-blurb">The expense is added again on schedule, with ' +
+          'the same people and the same split. You can pause or stop it from ' +
+          'Account &rarr; Repeating expenses.</div>' +
+        '<div class="opt-list">' + options.map(function (o) {
+          return '<button type="button" class="opt' +
+            ((o.key || null) === f.repeat ? ' is-on' : '') +
+            '" data-cadence="' + (o.key || '') + '">' + esc(o.label) +
+            '<svg class="tick" width="19" height="19" aria-hidden="true">' +
+            '<use href="#ic-check"/></svg></button>';
+        }).join('') + '</div>',
+      confirm: null,
+      onOpen: function () {
+        document.querySelector('.opt-list').addEventListener('click', function (e) {
+          const b = e.target.closest('[data-cadence]');
+          if (!b) return;
+          f.repeat = b.getAttribute('data-cadence') || null;
+          SW.closeSheet();
+        });
+      },
+      onClose: function () { if (f) SW.openExpenseSheet({ keepState: true }); },
+    });
   }
 
   function openNoteSheet() {
@@ -945,11 +988,50 @@ window.SW = window.SW || {};
       } else {
         ({ error } = await db.rpc('create_expense', args));
       }
+
+      // No connection: hold it, show it, send it later. Editing an existing
+      // expense is not queued — merging two offline edits of the same row is
+      // a problem worth not having.
+      if (error && !f.id && SW.isOfflineError && SW.isOfflineError(error) && SW.outbox) {
+        const optimistic = {
+          group_id: args.p_group_id || null,
+          payer_id: f.payerId,
+          amount: args.p_amount,
+          description: args.p_description,
+          emoji: f.emoji,
+          category: args.p_category,
+          split_mode: f.mode,
+          notes: f.note || null,
+          receipt_path: null,
+          expense_date: f.date,
+          created_at: new Date().toISOString(),
+          created_by: SW.user.id,
+          expense_splits: args.p_splits.map(function (x) {
+            return { user_id: x.user_id, amount: x.amount };
+          }),
+          expense_payers: (args.p_payers || [{ user_id: f.payerId, amount: args.p_amount }]),
+          pending: true,
+        };
+
+        await SW.outbox.add('create_expense', args, optimistic);
+        SW.ledger.expenses.unshift(optimistic);
+        SW.bumpLedger();
+        SW.recompute();
+        SW.toast('Saved on this phone — it will sync when you reconnect', 'ok');
+        f = null;
+        return true;
+      }
+
       if (error) throw error;
+
+      if (!f.id && f.repeat) await createRepeat(args);
 
       await SW.refreshLedger();
       if (SW.refreshUnread) SW.refreshUnread();
-      SW.toast(f.id ? 'Expense updated' : 'Expense added', 'ok');
+      SW.toast(f.id
+        ? 'Expense updated'
+        : (f.repeat ? 'Added, and repeating ' + SW.cadenceLabel(f.repeat).toLowerCase()
+                    : 'Expense added'), 'ok');
       f = null;
       return true;
     } catch (err) {
@@ -962,6 +1044,28 @@ window.SW = window.SW || {};
       SW.setError('exp-f-error', message);
       return false;
     }
+  }
+
+  // The rule posts the NEXT one; today's was just created directly.
+  async function createRepeat(args) {
+    const day = parseInt(String(f.date).slice(8, 10), 10);
+    const { error } = await db.from('recurring_expenses').insert({
+      group_id: args.p_group_id || null,
+      payer_id: f.payerId,
+      amount: args.p_amount,
+      description: args.p_description,
+      emoji: f.emoji,
+      category: args.p_category,
+      split_mode: f.mode,
+      splits: args.p_splits,
+      payers: args.p_payers,
+      notes: f.note || null,
+      cadence: f.repeat,
+      day_of_month: f.repeat === 'monthly' ? day : null,
+      next_run: SW.nextOccurrence(f.date, f.repeat, day),
+      created_by: SW.user.id,
+    });
+    if (error) SW.toast('Saved, but the repeat did not: ' + error.message, 'error');
   }
 
   /* ======================= one expense's page ========================= */
@@ -1045,10 +1149,15 @@ window.SW = window.SW || {};
       document.getElementById('exp-meta').textContent = '';
       document.getElementById('exp-emoji').textContent = '🤷';
       if (bar) bar.hidden = true;
+      document.getElementById('exp-added').textContent = '';
+      document.querySelector('.comment-form').hidden = true;
+      document.getElementById('exp-comments').innerHTML = '';
       return;
     }
     missing.hidden = true;
     if (bar) bar.hidden = false;
+    document.querySelector('.comment-form').hidden = false;
+    loadComments(id);
 
     const me = SW.ledger.me;
     const total = SW.toPaise(e.amount);
@@ -1060,7 +1169,8 @@ window.SW = window.SW || {};
 
     document.getElementById('exp-emoji').textContent = e.emoji || '🧾';
     document.getElementById('exp-desc').textContent = e.description;
-    document.getElementById('exp-amount').textContent = SW.money(total);
+    document.getElementById('exp-amount').innerHTML = SW.money(total) +
+      (e.pending ? '<span class="pending-tag">not synced</span>' : '');
     const paid = SW.paidMap(e);
     const payerIds = Object.keys(paid);
     const paidLabel = payerIds.length > 1
@@ -1091,6 +1201,15 @@ window.SW = window.SW || {};
       label.textContent = 'You are not in this split';
       value.textContent = '—';
     }
+
+    const addedBy = e.created_by === me ? 'You' : SW.person(e.created_by).full_name;
+    const addedOn = e.created_at
+      ? new Date(e.created_at).toLocaleDateString('en-IN',
+          { day: 'numeric', month: 'long', year: 'numeric' })
+      : null;
+    document.getElementById('exp-added').textContent = addedOn
+      ? 'Added by ' + addedBy + ' on ' + addedOn
+      : 'Added by ' + addedBy;
 
     // The itemised breakdown, if this expense was scanned.
     const noteEl = document.getElementById('exp-note');
@@ -1139,6 +1258,94 @@ window.SW = window.SW || {};
       }).join('');
   };
 
+  /* ======================= comments ================================== */
+
+  function commentTime(iso) {
+    const secs = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (secs < 60) return 'just now';
+    if (secs < 3600) return Math.floor(secs / 60) + 'm';
+    if (secs < 86400) return Math.floor(secs / 3600) + 'h';
+    if (secs < 604800) return Math.floor(secs / 86400) + 'd';
+    return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  }
+
+  async function loadComments(expenseId) {
+    const host = document.getElementById('exp-comments');
+    if (!host) return;
+
+    const { data, error } = await db
+      .from('expense_comments')
+      .select('id, author_id, body, created_at')
+      .eq('expense_id', expenseId)
+      .order('created_at', { ascending: true });
+
+    // Guard against a slow response landing after the user has moved on.
+    if (SW.currentExpenseId !== expenseId) return;
+
+    if (error) {
+      host.innerHTML = '<div class="comments-empty">Could not load comments.</div>';
+      return;
+    }
+    if (!data.length) {
+      host.innerHTML = '<div class="comments-empty">No comments yet. ' +
+        'Useful for explaining what a share actually covered.</div>';
+      return;
+    }
+
+    const me = SW.ledger.me;
+    host.innerHTML = data.map(function (c) {
+      const p = SW.person(c.author_id);
+      return '<div class="comment">' +
+        SW.avatar(c.author_id, p.avatar_emoji) +
+        '<span class="comment-body">' +
+          '<span class="comment-who">' +
+            esc(c.author_id === me ? 'You' : p.full_name) +
+            '<time datetime="' + esc(c.created_at) + '">' +
+              esc(commentTime(c.created_at)) + '</time>' +
+          '</span>' +
+          '<span class="comment-text">' + esc(c.body) + '</span>' +
+        '</span>' +
+        (c.author_id === me
+          ? '<button type="button" class="comment-del" data-comment="' + esc(c.id) +
+            '" aria-label="Delete this comment">&times;</button>'
+          : '') +
+      '</div>';
+    }).join('');
+  }
+
+  document.getElementById('exp-comments').addEventListener('click', async function (e) {
+    const b = e.target.closest('[data-comment]');
+    if (!b) return;
+    const id = b.getAttribute('data-comment');
+    const { error } = await db.from('expense_comments').delete().eq('id', id);
+    if (error) return SW.toast(error.message, 'error');
+    loadComments(SW.currentExpenseId);
+  });
+
+  async function postComment() {
+    const input = document.getElementById('exp-comment-text');
+    const btn = document.getElementById('exp-comment-send');
+    const body = input.value.trim();
+    if (!body) return;
+
+    SW.busy(btn, true);
+    const { error } = await db.from('expense_comments').insert({
+      expense_id: SW.currentExpenseId,
+      author_id: SW.user.id,
+      body: body,
+    });
+    SW.busy(btn, false);
+
+    if (error) return SW.toast(error.message, 'error');
+    input.value = '';
+    loadComments(SW.currentExpenseId);
+  }
+
+  document.getElementById('exp-comment-send').addEventListener('click', postComment);
+  document.getElementById('exp-comment-text').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); postComment(); }
+  });
+
   SW.viewHooks['expense-detail'] = function (param) { SW.renderExpenseDetail(param); };
 
   /* ======================= detail actions ============================= */
@@ -1161,6 +1368,7 @@ window.SW = window.SW || {};
     if (already) return;
     const at = Math.min(Math.max(0, index), SW.ledger.expenses.length);
     SW.ledger.expenses.splice(at, 0, row);
+    SW.bumpLedger();
   }
 
   document.getElementById('exp-delete').addEventListener('click', function () {
@@ -1174,6 +1382,7 @@ window.SW = window.SW || {};
     // gets a second round of notifications.
     const index = SW.ledger.expenses.findIndex(function (x) { return x.id === id; });
     const removed = SW.ledger.expenses.splice(index, 1)[0];
+    SW.bumpLedger();
     SW.recompute();
 
     if (history.length > 1) history.back();
