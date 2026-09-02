@@ -74,6 +74,47 @@ window.SW = window.SW || {};
     });
   };
 
+  // Allocate a total across people in proportion to weights, landing on the
+  // total EXACTLY. Used for handling and delivery fees: someone who ordered
+  // 15% of the basket carries 15% of the fee. Odd paise go to the largest
+  // fractional remainders, then by id so the result is deterministic.
+  SW.prorate = function (totalPaise, weights) {
+    const ids = Object.keys(weights);
+    if (!ids.length) return {};
+
+    const total = Math.max(0, Math.round(totalPaise));
+    const sum = ids.reduce(function (s, id) { return s + Math.max(0, weights[id]); }, 0);
+
+    // Nobody has a share to weight against, so fall back to an even split.
+    if (sum <= 0) {
+      const even = SW.splitEqually(total, ids.length);
+      const flat = {};
+      ids.forEach(function (id, i) { flat[id] = even[i]; });
+      return flat;
+    }
+
+    const out = {};
+    const remainders = [];
+    let allocated = 0;
+
+    ids.forEach(function (id) {
+      const exact = total * Math.max(0, weights[id]) / sum;
+      const whole = Math.floor(exact);
+      out[id] = whole;
+      allocated += whole;
+      remainders.push({ id: id, frac: exact - whole });
+    });
+
+    remainders.sort(function (a, b) {
+      return (b.frac - a.frac) || (a.id < b.id ? -1 : 1);
+    });
+
+    let left = total - allocated;
+    for (let i = 0; i < left; i++) out[remainders[i].id] += 1;
+
+    return out;
+  };
+
   /* ======================= generated avatars ========================== */
 
   // Deterministic abstract art from a user id, in the spirit of the
@@ -138,8 +179,8 @@ window.SW = window.SW || {};
     const [friendRes, expRes, setRes, grpRes, memRes] = await Promise.all([
       db.from('friendships').select('user_a, user_b'),
       db.from('expenses').select(
-        'id, group_id, payer_id, amount, description, emoji, category, ' +
-        'expense_date, created_at, expense_splits(user_id, amount)'
+        'id, group_id, payer_id, amount, description, emoji, category, split_mode, ' +
+        'notes, receipt_path, expense_date, created_at, expense_splits(user_id, amount)'
       ).order('expense_date', { ascending: false }),
       db.from('settlements').select(
         'id, group_id, from_user, to_user, amount, note, settled_on, created_at'

@@ -35,6 +35,7 @@ window.SW = window.SW || {};
       payerId: SW.user.id,
       mode: 'equal',
       exact: {},             // userId -> paise, only used in exact mode
+      note: '',              // set by the itemised scanner
       receiptPath: null,
       receiptFile: null,
       receiptName: '',
@@ -178,11 +179,19 @@ window.SW = window.SW || {};
 
           '<div id="exp-f-split"></div>' +
 
+          '<button type="button" class="btn btn-ghost" id="exp-f-scan">' +
+            '🧾 Scan a receipt to itemise' +
+          '</button>' +
+
+          (f.note
+            ? '<div class="callout" id="exp-f-note">' + esc(f.note) + '</div>'
+            : '') +
+
           '<div class="receipt-row">' +
             '<input type="file" id="exp-f-file" accept="image/*" hidden>' +
             '<button type="button" class="receipt-drop" id="exp-f-receipt">' +
               (f.receiptName || f.receiptPath ? '📎 ' + esc(f.receiptName || 'Receipt attached')
-                                              : '📷 Attach a receipt') +
+                                              : '📷 Attach a photo instead') +
             '</button>' +
           '</div>' +
 
@@ -231,6 +240,40 @@ window.SW = window.SW || {};
     document.getElementById('exp-f-emoji').addEventListener('click', function () {
       SW.closeSheet();
       openEmojiPicker();
+    });
+
+    document.getElementById('exp-f-scan').addEventListener('click', function () {
+      if (!f.targetId) {
+        return SW.setError('exp-f-error',
+          'Choose a friend or group first, so the scanner knows who to split between.');
+      }
+      const people = participants();
+      if (people.length < 2) {
+        return SW.setError('exp-f-error',
+          'That group needs at least two people before an itemised split makes sense.');
+      }
+
+      // The form closes while the scanner runs, then comes back with the
+      // itemisation applied — or unchanged if it was cancelled.
+      SW.closeSheet();
+      SW.openScanner({
+        participants: people,
+        onApply: function (result) {
+          f.amountPaise = result.grandTotal;
+          f.amountText = SW.rupees(result.grandTotal);
+          f.mode = 'exact';
+          f.exact = result.totals;
+          f.note = result.note;
+          if (!f.description.trim()) {
+            const lines = (result.note.match(/;/g) || []).length + 1;
+            f.description = 'Order · ' + lines + (lines === 1 ? ' item' : ' items');
+            if (!f.emojiManual) f.emoji = SW.guessEmoji(f.description);
+          }
+          SW.openExpenseSheet({ keepState: true });
+          SW.toast('Itemised — shares filled in', 'ok');
+        },
+        onCancel: function () { SW.openExpenseSheet({ keepState: true }); },
+      });
     });
 
     const file = document.getElementById('exp-f-file');
@@ -473,6 +516,7 @@ window.SW = window.SW || {};
         p_emoji: f.emoji,
         p_split_mode: f.mode,
         p_expense_date: f.date,
+        p_notes: f.note || null,
         p_receipt_path: receiptPath,
       };
 
@@ -531,6 +575,7 @@ window.SW = window.SW || {};
       payerId: e.payer_id,
       mode: e.split_mode === 'exact' ? 'exact' : 'equal',
       exact: exact,
+      note: e.notes || '',
       receiptPath: e.receipt_path || null,
       receiptFile: null,
       receiptName: e.receipt_path ? 'Receipt attached' : '',
@@ -603,6 +648,15 @@ window.SW = window.SW || {};
       share.className = 'exp-your-share is-flat';
       label.textContent = 'You are not in this split';
       value.textContent = '—';
+    }
+
+    // The itemised breakdown, if this expense was scanned.
+    const noteEl = document.getElementById('exp-note');
+    if (e.notes) {
+      noteEl.textContent = e.notes;
+      noteEl.hidden = false;
+    } else {
+      noteEl.hidden = true;
     }
 
     // Receipt, behind a short-lived signed URL rather than a public one.

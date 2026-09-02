@@ -28,7 +28,7 @@ Amounts are in **INR (₹)** throughout.
 
 ## 1. What works today
 
-**Phases 1 to 6 of 10 are complete.** The core loop works end to end. Sign up, log in, log out, email
+**Phases 1 to 7 of 10 are complete.** The core loop works end to end. Sign up, log in, log out, email
 confirmation and password reset all work end to end. Signing in lands on the
 app shell: four tabs (Friends, Groups, Activity, Account), a bell with an
 unread count, and the Add-expense button.
@@ -37,8 +37,11 @@ Add friends by email, create groups, add an expense and split it equally or
 by exact amounts, see who owes whom, and settle up with partial payments.
 Every balance is derived from the ledger, never stored.
 
-Still to come: itemised receipt scanning (phase 7), charts and CSV export
-(phase 8), installable PWA (phase 9), deploy hardening (phase 10).
+Receipts can be scanned on-device to itemise an order: tick who was in on
+each line, and fees are shared out by the size of each person's order.
+
+Still to come: charts and CSV export (phase 8), installable PWA and realtime
+notifications (phase 9), deploy hardening (phase 10).
 
 ### Running the tests
 
@@ -46,7 +49,7 @@ Still to come: itemised receipt scanning (phase 7), charts and CSV export
 for t in tests/*.test.js; do node "$t"; done
 ```
 
-Four suites, no database and no browser needed:
+Six suites, no database and no browser needed:
 
 | Suite | Covers |
 |---|---|
@@ -54,6 +57,8 @@ Four suites, no database and no browser needed:
 | `splits.test.js` | Equal splits sum back to the total exactly, over 71,430 total/participant combinations |
 | `groups.test.js` | Member nets sum to zero, who-paid vs whose-share, debt simplification clears every balance |
 | `emoji.test.js` | Description-to-icon guessing and rule precedence |
+| `prorate.test.js` | Fees allocated by order size, landing on the total exactly |
+| `scan.test.js` | Receipt parsing from realistic OCR output, and itemised splits |
 
 The full database — 8 tables, 27 row-level-security policies, 6 write RPCs — is
 already in `supabase/schema.sql` and supports every later phase.
@@ -387,6 +392,7 @@ js/emoji.js             description-to-icon guessing, and the picker
 js/expense.js           add/edit form, splitting, receipts, one expense's page
 js/groups.js            groups list, one group's page, membership, settings
 js/settle.js            recording payments, and the plan to clear a group
+js/scan.js              on-device OCR, receipt parsing, itemised assignment
 tests/                  balance, split, group and emoji suites
 icons/                  app icon: SVG source + 5 rendered PNG sizes
 supabase/schema.sql     tables, RLS policies, RPCs, triggers, storage
@@ -439,7 +445,7 @@ address without exposing the table.
 | 4 | Groups | Done |
 | 5 | Expenses, splits, edit, delete | Done |
 | 6 | Settle up, debt simplification | Done |
-| 7 | Itemised receipt scanning | Next |
-| 8 | Charts, search, CSV export | |
-| 9 | PWA install, offline | |
+| 7 | Itemised receipt scanning | Done |
+| 8 | Charts, search, CSV export | Next |
+| 9 | PWA install, offline, realtime notifications | |
 | 10 | Deploy hardening | |

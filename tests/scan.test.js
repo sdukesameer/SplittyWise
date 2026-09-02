@@ -1,0 +1,157 @@
+// Run from the repo root:  node tests/scan.test.js
+//
+// The parser has to cope with real Tesseract output: prices on their own
+// line, ₹ read as "Rs" or "R5", struck-through MRPs, weights that look like
+// prices, and rows repeated by the screenshot.
+const fs = require('fs');
+const path = require('path');
+process.chdir(path.join(__dirname, '..'));
+
+global.window = {};
+global.window.SW = global.SW = {};
+for (const f of ['js/balances.js', 'js/scan.js']) {
+  new Function('window', 'SW', fs.readFileSync(f, 'utf8'))(global.window, global.SW);
+}
+
+let fails = 0;
+function check(label, got, want) {
+  const g = JSON.stringify(got), w = JSON.stringify(want);
+  const ok = g === w;
+  if (!ok) fails++;
+  console.log((ok ? '  PASS  ' : '  FAIL  ') + label + (ok ? '' : '\n         got  ' + g + '\n         want ' + w));
+}
+const brief = r => r.rows.map(x => x.name + '|' + x.qty + '|' + x.totalPaise + '|' + x.kind);
+
+console.log('--- Zepto, amounts on the same line ---');
+let r = SW.parseReceipt([
+  'Zepto',
+  'Onion 1 kg ₹42',
+  'Amul Butter 500 g x2 ₹530',
+  'Maggi Noodles 12 pack ₹168',
+  'Brown Bread ₹45',
+  'Item Total ₹785',
+  'Handling Fee ₹12',
+  'Delivery Fee ₹25',
+  'You saved ₹58',
+  'To Pay ₹822',
+].join('\n'));
+check('4 items + 2 fees', brief(r), [
+  'Onion 1 kg|1|4200|item',
+  'Amul Butter 500 g|2|53000|item',
+  'Maggi Noodles 12 pack|1|16800|item',
+  'Brown Bread|1|4500|item',
+  'Handling Fee|1|1200|fee',
+  'Delivery Fee|1|2500|fee',
+]);
+
+console.log('\n--- Blinkit, price on its own line ---');
+r = SW.parseReceipt([
+  'Onion', '1 kg', '₹42',
+  'Amul Butter', '500 g', '₹265',
+  'Handling Fee', '₹12',
+].join('\n'));
+check('names joined with their weight line', brief(r), [
+  'Onion 1 kg|1|4200|item',
+  'Amul Butter 500 g|1|26500|item',
+  'Handling Fee|1|1200|fee',
+]);
+
+console.log('\n--- OCR noise: Rs / R5 for ₹, and repeated rows ---');
+r = SW.parseReceipt([
+  'Onion 1kg Rs 42',
+  'Onion 1kg Rs 42',
+  'Tomato 500 g', 'Rs 38',
+  'Platform Fee R5 8',
+  'MRP ₹49',
+].join('\n'));
+check('duplicate folded away', brief(r), [
+  'Onion 1kg|1|4200|item',
+  'Tomato 500 g|1|3800|item',
+  'Platform Fee|1|800|fee',
+]);
+check('one merge reported', r.merged, 1);
+
+console.log('\n--- struck-through MRP on the same line ---');
+r = SW.parseReceipt('Amul Milk 500ml ₹32 ₹28');
+check('takes the rightmost (payable) price', brief(r), ['Amul Milk 500ml|1|2800|item']);
+
+console.log('\n--- a weight must not be read as a price ---');
+r = SW.parseReceipt('Amul Butter 500 g');
+check('no price, no row', brief(r), []);
+r = SW.parseReceipt('Basmati Rice 5 kg\n₹560');
+check('weight then price', brief(r), ['Basmati Rice 5 kg|1|56000|item']);
+
+console.log('\n--- bare trailing amount, no currency mark ---');
+r = SW.parseReceipt('Brown Bread 45\nCurd 400 g 38');
+check('trailing number is the amount', brief(r), [
+  'Brown Bread|1|4500|item',
+  'Curd 400 g|1|3800|item',
+]);
+
+console.log('\n--- quantity forms ---');
+r = SW.parseReceipt([
+  'Coke can x3 ₹120',
+  '2 x Dairy Milk ₹90',
+  'Eggs Qty: 2 ₹130',
+].join('\n'));
+check('x3 / 2 x / Qty:', r.rows.map(x => x.qty), [3, 2, 2]);
+
+console.log('\n--- everything that is not an item gets skipped ---');
+r = SW.parseReceipt([
+  'Order ID 88213', 'Delivered to Home', 'GSTIN 29ABCDE',
+  'Sub Total ₹500', 'You saved ₹40', 'Grand Total ₹520',
+  'Paid via UPI', 'Thank you for shopping',
+].join('\n'));
+check('no rows survive', brief(r), []);
+
+console.log('\n--- fees are recognised, and sorted after items ---');
+r = SW.parseReceipt([
+  'Handling Fee ₹12', 'Onion ₹42', 'GST ₹6', 'Tomato ₹38', 'Tip ₹20',
+].join('\n'));
+check('items first, then fees', brief(r), [
+  'Onion|1|4200|item',
+  'Tomato|1|3800|item',
+  'Handling Fee|1|1200|fee',
+  'GST|1|600|fee',
+  'Tip|1|2000|fee',
+]);
+
+console.log('\n--- the scenario from the request ---');
+// 5 items across 4 people: 2 shared by all, 2 by three of them, 1 by one.
+const P = ['p1', 'p2', 'p3', 'p4'];
+const rows = [
+  { name: 'Onion',    qty: 1, totalPaise: 10000, kind: 'item', who: P },
+  { name: 'Butter',   qty: 1, totalPaise: 20000, kind: 'item', who: P },
+  { name: 'Paneer',   qty: 1, totalPaise:  9000, kind: 'item', who: ['p1','p2','p3'] },
+  { name: 'Curd',     qty: 1, totalPaise:  6000, kind: 'item', who: ['p1','p2','p3'] },
+  { name: 'Protein',  qty: 1, totalPaise:  5000, kind: 'item', who: ['p1'] },
+  { name: 'Handling', qty: 1, totalPaise:  2000, kind: 'fee' },
+];
+const split = SW.itemisedSplit(rows, P);
+check('item subtotals', split.subtotal, { p1: 17500, p2: 12500, p3: 12500, p4: 7500 });
+check('items total',    split.itemsTotal, 50000);
+check('fee prorated by order size', {
+  p1: split.totals.p1 - split.subtotal.p1,
+  p2: split.totals.p2 - split.subtotal.p2,
+  p3: split.totals.p3 - split.subtotal.p3,
+  p4: split.totals.p4 - split.subtotal.p4,
+}, { p1: 700, p2: 500, p3: 500, p4: 300 });
+console.log('  p1 ordered 35% of ₹500 and carries ₹7 of the ₹20 fee');
+check('totals', split.totals, { p1: 18200, p2: 13000, p3: 13000, p4: 7800 });
+check('totals sum to the grand total',
+  P.reduce((s, id) => s + split.totals[id], 0), split.grandTotal);
+check('grand total', split.grandTotal, 52000);
+
+console.log('\n--- an item nobody is ticked on is left out of the total ---');
+const orphan = SW.itemisedSplit(
+  [{ name: 'Mystery', qty: 1, totalPaise: 5000, kind: 'item', who: [] }], P);
+check('contributes nothing', orphan.grandTotal, 0);
+
+console.log('\n--- the note ---');
+const note = SW.itemisedNote(rows, id => ({ p1: 'You', p2: 'Ali', p3: 'Zara', p4: 'Dev' }[id]));
+console.log('  ' + note);
+check('names every row and its people', note.indexOf('Protein ₹50.00 (You)') > -1, true);
+check('marks fees as prorated', note.indexOf('shared by order size') > -1, true);
+
+console.log('\n' + (fails ? fails + ' FAILURE(S)' : 'all checks passed'));
+process.exit(fails ? 1 : 0);
