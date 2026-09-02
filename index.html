@@ -15,23 +15,14 @@
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
 <link rel="icon" type="image/png" sizes="64x64" href="icons/favicon-64.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:ital,wght@0,600;0,700;0,800;1,600&display=swap">
 <link rel="stylesheet" href="css/app.css">
 
-<script>
-  // Runs before first paint: applies the saved theme so the page never
-  // flashes the wrong one. Wrapped because localStorage throws outright in
-  // some privacy modes.
-  (function () {
-    try {
-      var t = localStorage.getItem('splittywise.theme');
-      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
-    } catch (e) {}
-  })();
-</script>
+<script src="js/theme.js"></script>
 </head>
 <body>
 
@@ -475,6 +466,16 @@
       </div>
 
       <div class="card">
+        <button class="set-row" id="row-insights">
+          <div class="grow">
+            <div class="set-title">Spending insights</div>
+            <div class="set-sub">Charts by category and month, and a CSV export</div>
+          </div>
+          <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
+        </button>
+      </div>
+
+      <div class="card">
         <div class="card-head">Appearance</div>
         <div class="card-body">
           <div class="seg" id="theme-seg" role="group" aria-label="Theme">
@@ -618,6 +619,7 @@
           <button type="button" class="chip is-on" data-pane-btn="expenses">Expenses</button>
           <button type="button" class="chip" data-pane-btn="balances">Balances</button>
           <button type="button" class="chip" data-pane-btn="totals">Totals</button>
+          <button type="button" class="chip" data-pane-btn="charts">Charts</button>
         </div>
       </header>
 
@@ -651,12 +653,95 @@
         </div>
       </div>
 
+      <div data-pane="charts">
+        <div class="chart-card">
+          <h3>Where this group spends</h3>
+          <div class="ch-sub">Your share within this group</div>
+          <div id="grp-donut"></div>
+        </div>
+        <div class="chart-card">
+          <h3>Month by month</h3>
+          <div class="ch-sub">Your share in this group, last 6 months</div>
+          <div id="grp-bars"></div>
+        </div>
+      </div>
+
       <div class="empty" id="grp-missing" hidden>
         <div class="empty-art">🤷</div>
         <h3>Group not found</h3>
         <p>You may have left it, or it was deleted.</p>
         <button type="button" class="btn btn-ghost" id="grp-missing-back">Back to groups</button>
       </div>
+    </div>
+
+    <!-- ---------- Insights ---------- -->
+    <div data-view="insights">
+      <header class="detail-header">
+        <div class="detail-bar">
+          <button class="icon-btn round" id="ins-back" aria-label="Back">
+            <svg aria-hidden="true"><use href="#ic-back"/></svg>
+          </button>
+          <span class="grow"></span>
+        </div>
+        <div class="detail-hero">
+          <div class="detail-hero-text">
+            <h1>Your spending</h1>
+            <div class="detail-balance" style="color:var(--muted)">Your own share, not the bills you fronted</div>
+          </div>
+        </div>
+      </header>
+
+      <div class="stat-row">
+        <div class="stat">
+          <div class="s-label">This month</div>
+          <div class="s-value" id="ins-month">₹0.00</div>
+          <div class="s-note" id="ins-month-note">&nbsp;</div>
+        </div>
+        <div class="stat">
+          <div class="s-label">Monthly average</div>
+          <div class="s-value" id="ins-avg">₹0.00</div>
+          <div class="s-note" id="ins-avg-note">last 6 months</div>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <h3>Where it goes</h3>
+        <div class="ch-sub" id="ins-cat-sub">By category, all time</div>
+        <div id="ins-donut"></div>
+      </div>
+
+      <div class="chart-card">
+        <h3>Month by month</h3>
+        <div class="ch-sub">Your share of expenses, last 6 months</div>
+        <div id="ins-bars"></div>
+      </div>
+
+      <div style="padding:0 14px 10px">
+        <button type="button" class="btn btn-ghost" id="ins-csv">Export everything as CSV</button>
+      </div>
+
+      <div class="empty" id="ins-empty" hidden>
+        <div class="empty-art">📊</div>
+        <h3>Nothing to chart yet</h3>
+        <p>Add a few expenses and this fills in with where your money actually goes.</p>
+      </div>
+    </div>
+
+    <!-- ---------- Search ---------- -->
+    <div data-view="search">
+      <div class="search-bar">
+        <button class="icon-btn" id="srch-back" aria-label="Back">
+          <svg aria-hidden="true"><use href="#ic-back"/></svg>
+        </button>
+        <input class="input" id="srch-input" type="search" enterkeyhint="search"
+               autocomplete="off" placeholder="Description, person, group or amount"
+               aria-label="Search expenses">
+      </div>
+      <div class="search-hint" id="srch-hint">
+        Search by what it was, who was involved, which group, or the amount.
+      </div>
+      <div class="search-count" id="srch-count" hidden></div>
+      <div id="srch-results"></div>
     </div>
 
   </main>
@@ -708,5 +793,9 @@
 <script src="js/expense.js"></script>
 <script src="js/groups.js"></script>
 <script src="js/settle.js"></script>
+<script src="js/insights.js"></script>
+<script src="js/search.js"></script>
+<script src="js/realtime.js"></script>
+<script src="js/pwa.js"></script>
 </body>
 </html>

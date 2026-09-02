@@ -514,6 +514,9 @@ window.SW = window.SW || {};
         p_splits: SW.splitsPayload(split),
         p_payer_id: f.payerId,
         p_emoji: f.emoji,
+        // Derived from the emoji, so the picker and the charts can never
+        // disagree about what counts as groceries.
+        p_category: SW.categoryForEmoji(f.emoji),
         p_split_mode: f.mode,
         p_expense_date: f.date,
         p_notes: f.note || null,

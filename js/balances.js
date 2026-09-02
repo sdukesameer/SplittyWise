@@ -522,6 +522,174 @@ window.SW = window.SW || {};
     return items;
   };
 
+  /* ======================= insights ================================== */
+
+  // What I personally spent: my own share of every expense, which is the
+  // only figure that means anything for "where does my money go". The
+  // expense total would count other people's shares as mine.
+  SW.myShareOf = function (expense) {
+    const mine = (expense.expense_splits || []).find(function (s) {
+      return s.user_id === SW.ledger.me;
+    });
+    return mine ? SW.toPaise(mine.amount) : 0;
+  };
+
+  // opts: { groupId } to scope to one group, or omitted for everything.
+  SW.spendByCategory = function (opts) {
+    opts = opts || {};
+    const totals = {};
+    SW.ledger.expenses.forEach(function (e) {
+      if (opts.groupId !== undefined && (e.group_id || null) !== opts.groupId) return;
+      const mine = SW.myShareOf(e);
+      if (mine <= 0) return;
+      const cat = SW.categoryOf(e);
+      totals[cat] = (totals[cat] || 0) + mine;
+    });
+
+    return Object.keys(totals)
+      .map(function (k) { return { label: k, paise: totals[k] }; })
+      .sort(function (a, b) { return b.paise - a.paise; });
+  };
+
+  // The last `months` calendar months, oldest first, including empty ones so
+  // the bars show gaps rather than silently compressing time.
+  SW.spendByMonth = function (opts) {
+    opts = opts || {};
+    const months = opts.months || 6;
+    const buckets = [];
+    const index = {};
+    const now = new Date();
+
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+      const entry = {
+        key: key,
+        label: d.toLocaleDateString('en-IN', { month: 'short' }),
+        year: d.getFullYear(),
+        paise: 0,
+      };
+      index[key] = entry;
+      buckets.push(entry);
+    }
+
+    SW.ledger.expenses.forEach(function (e) {
+      if (opts.groupId !== undefined && (e.group_id || null) !== opts.groupId) return;
+      const key = String(e.expense_date).slice(0, 7);
+      if (!index[key]) return;
+      index[key].paise += SW.myShareOf(e);
+    });
+
+    return buckets;
+  };
+
+  /* ======================= search ===================================== */
+
+  // Matches description, category, the people involved, the group name, and
+  // the amount. "ali" finds what you split with Ali; "420" finds ₹420.
+  SW.searchExpenses = function (query) {
+    const q = String(query || '').trim().toLowerCase();
+    if (q.length < 2) return [];
+
+    const digits = q.replace(/[^0-9.]/g, '');
+    const asPaise = digits ? SW.toPaise(digits) : null;
+
+    return SW.ledger.expenses.filter(function (e) {
+      if (String(e.description || '').toLowerCase().indexOf(q) > -1) return true;
+      if (SW.categoryOf(e).toLowerCase().indexOf(q) > -1) return true;
+      if (String(e.notes || '').toLowerCase().indexOf(q) > -1) return true;
+
+      const group = e.group_id ? SW.ledger.groups[e.group_id] : null;
+      if (group && group.name.toLowerCase().indexOf(q) > -1) return true;
+
+      const people = [e.payer_id].concat(
+        (e.expense_splits || []).map(function (s) { return s.user_id; }));
+      for (let i = 0; i < people.length; i++) {
+        const p = SW.ledger.people[people[i]];
+        if (p && String(p.full_name).toLowerCase().indexOf(q) > -1) return true;
+      }
+
+      // An amount query matches the total or anybody's share.
+      if (asPaise) {
+        if (SW.toPaise(e.amount) === asPaise) return true;
+        const hit = (e.expense_splits || []).some(function (s) {
+          return SW.toPaise(s.amount) === asPaise;
+        });
+        if (hit) return true;
+      }
+      return false;
+    }).sort(function (a, b) {
+      return (a.expense_date + (a.created_at || '')) < (b.expense_date + (b.created_at || '')) ? 1 : -1;
+    });
+  };
+
+  /* ======================= CSV export ================================ */
+
+  function csvCell(value) {
+    const text = value == null ? '' : String(value);
+    // Quote anything that could break a cell, and double any inner quotes.
+    // A leading =, +, - or @ is prefixed so a spreadsheet treats it as text
+    // rather than a formula.
+    // A plain number must stay a number, or Excel imports every negative
+    // amount as text. Only genuinely formula-shaped cells get neutralised.
+    const isNumber = /^-?\d+(\.\d+)?$/.test(text);
+    const risky = (!isNumber && /^[=+@\t\r-]/.test(text)) ? "'" + text : text;
+    return /[",\n\r]/.test(risky) ? '"' + risky.replace(/"/g, '""') + '"' : risky;
+  }
+
+  SW.buildCsv = function () {
+    const L = SW.ledger;
+    const header = ['Date', 'Description', 'Category', 'Group', 'Paid by',
+                    'Total (INR)', 'Your share (INR)', 'Your net (INR)', 'Note'];
+    const lines = [header.map(csvCell).join(',')];
+
+    L.expenses.slice().sort(function (a, b) {
+      return a.expense_date < b.expense_date ? -1 : 1;
+    }).forEach(function (e) {
+      const total = SW.toPaise(e.amount);
+      const mine = SW.myShareOf(e);
+      // Net is what this row did to my balance: lent if I paid, owed if not.
+      const net = e.payer_id === L.me ? total - mine : -mine;
+      const group = e.group_id ? (L.groups[e.group_id] || {}).name : '';
+
+      lines.push([
+        e.expense_date,
+        e.description,
+        SW.categoryOf(e),
+        group || 'Non-group',
+        e.payer_id === L.me ? 'You' : (L.people[e.payer_id] || {}).full_name || 'Someone',
+        SW.rupees(total),
+        SW.rupees(mine),
+        (net < 0 ? '-' : '') + SW.rupees(net),
+        e.notes || '',
+      ].map(csvCell).join(','));
+    });
+
+    L.settlements.slice().sort(function (a, b) {
+      return a.settled_on < b.settled_on ? -1 : 1;
+    }).forEach(function (st) {
+      const paise = SW.toPaise(st.amount);
+      const iPaid = st.from_user === L.me;
+      const other = iPaid ? st.to_user : st.from_user;
+      const name = (L.people[other] || {}).full_name || 'Someone';
+
+      lines.push([
+        st.settled_on,
+        iPaid ? 'Payment to ' + name : 'Payment from ' + name,
+        'Settlement',
+        st.group_id ? (L.groups[st.group_id] || {}).name : 'Non-group',
+        iPaid ? 'You' : name,
+        SW.rupees(paise),
+        '0.00',
+        (iPaid ? '' : '-') + SW.rupees(paise),
+        st.note || '',
+      ].map(csvCell).join(','));
+    });
+
+    // A BOM so Excel opens the ₹ and any Indian names as UTF-8.
+    return '\ufeff' + lines.join('\r\n') + '\r\n';
+  };
+
   /* ======================= dates ====================================== */
 
   SW.formatDate = function (iso) {

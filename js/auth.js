@@ -19,7 +19,7 @@ window.SW = window.SW || {};
   /* ======================= routing ==================================== */
 
   const AUTH_SCREENS = ['login', 'signup', 'verify', 'forgot', 'forgot-sent', 'reset'];
-  const APP_VIEWS = ['friends', 'groups', 'activity', 'account'];
+  const APP_VIEWS = ['friends', 'groups', 'activity', 'account', 'insights', 'search'];
   // Routes carrying an id, e.g. #/friend/<uuid>. The value is the view name.
   const PARAM_ROUTES = { friend: 'friend-detail', group: 'group-detail',
                          expense: 'expense-detail' };

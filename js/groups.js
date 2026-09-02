@@ -243,6 +243,7 @@ window.SW = window.SW || {};
     renderGroupExpenses(gid);
     renderGroupBalances(gid, summary);
     renderGroupTotals(gid, summary, memberIds);
+    if (SW.renderGroupCharts) SW.renderGroupCharts(gid);
   }
 
   SW.viewHooks['group-detail'] = renderGroupDetail;

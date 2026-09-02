@@ -777,3 +777,18 @@ grant execute on function public.group_peers(uuid)            to authenticated;
 grant execute on function public.has_split(uuid, uuid)        to authenticated;
 grant execute on function public.can_see_expense(uuid, uuid)  to authenticated;
 grant execute on function public.can_see_profile(uuid, uuid)  to authenticated;
+
+-- ============================================================================
+--  13. REALTIME
+--  Lets the app receive a notification the moment it is written, instead of
+--  polling. RLS still applies: a client only ever receives its own rows.
+-- ============================================================================
+
+do $$
+begin
+  alter publication supabase_realtime add table public.notifications;
+exception
+  when duplicate_object then null;   -- already added, which is fine
+  when undefined_object then
+    raise notice 'supabase_realtime publication not found — skipping';
+end $$;

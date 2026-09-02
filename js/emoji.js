@@ -86,12 +86,38 @@ window.SW = window.SW || {};
     return FALLBACK;
   };
 
-  // Picker, grouped so it is scannable rather than one wall of emoji.
+  // Picker groups, which double as spending categories: an expense's
+  // category is whichever group its emoji belongs to. One list, so the
+  // picker and the charts can never disagree about what counts as food.
+  // Every emoji appears in exactly one group (asserted in the tests).
   SW.EMOJI_GROUPS = [
-    { label: 'Food',      items: '🍽️ 🍕 🍔 🍛 🍜 🥟 🥞 🍗 🍳 🍿 🎂 🍦 🍮 ☕ 🥤 🍻 🥛 🍎 🥦 🛒'.split(' ') },
-    { label: 'Home',      items: '🏠 💡 🚰 🔥 🌐 📱 🧹 🧺 🔧 🛋️ 🪴 🧾'.split(' ') },
-    { label: 'Travel',    items: '⛽ 🛺 🚆 ✈️ 🚌 🛣️ 🅿️ 🛵 🏨 🧳 🚗 ⛴️'.split(' ') },
-    { label: 'Life',      items: '💊 🏥 🏋️ 🎬 📺 🎮 📚 🎓 🛍️ 💈 🎁 🛡️ 🐾 💸'.split(' ') },
-    { label: 'Anything',  items: '⭐️ 🔥 💎 🎯 🎉 ❤️ 🙌 👍 ⚡️ 🌈 🍀 🧿'.split(' ') },
+    { label: 'Groceries',   items: '🛒 🥦 🍎 🥛'.split(' ') },
+    { label: 'Food & drink', items: '🍽️ 🍕 🍔 🍛 🍜 🥟 🥞 🍗 🍳 🍿 🎂 🍦 🍮 ☕ 🥤 🍻'.split(' ') },
+    { label: 'Home & bills', items: '🏠 💡 🚰 🔥 🌐 📱 🧹 🧺 🔧 🛋️ 🪴 🧾'.split(' ') },
+    { label: 'Travel',      items: '⛽ 🛺 🚆 ✈️ 🚌 🛣️ 🅿️ 🛵 🏨 🧳 🚗 ⛴️'.split(' ') },
+    { label: 'Life & fun',  items: '💊 🏥 🏋️ 🎬 📺 🎮 📚 🎓 🛍️ 💈 🎁 🛡️ 🐾 💸'.split(' ') },
+    { label: 'Other',       items: '⭐️ 💎 🎯 🎉 ❤️ 🙌 👍 ⚡️ 🌈 🍀 🧿'.split(' ') },
   ];
+
+  // emoji -> category label.
+  const BY_EMOJI = {};
+  SW.EMOJI_GROUPS.forEach(function (g) {
+    g.items.forEach(function (e) { BY_EMOJI[e] = g.label; });
+  });
+
+  SW.CATEGORIES = SW.EMOJI_GROUPS.map(function (g) { return g.label; });
+
+  // An expense stores its own category, but anything created before
+  // categories existed falls back to whatever its emoji implies.
+  SW.categoryOf = function (expense) {
+    const stored = expense && expense.category;
+    if (stored && stored !== 'general' && SW.CATEGORIES.indexOf(stored) > -1) return stored;
+    return BY_EMOJI[(expense && expense.emoji) || ''] || 'Other';
+  };
+
+  SW.categoryForEmoji = function (emoji) { return BY_EMOJI[emoji] || 'Other'; };
+
+  SW.guessCategory = function (description) {
+    return BY_EMOJI[SW.guessEmoji(description)] || 'Other';
+  };
 })();

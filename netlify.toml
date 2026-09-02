@@ -9,13 +9,49 @@
   to = "/index.html"
   status = 200
 
+# ---------------------------------------------------------------------------
+#  Security headers
+#
+#  The CSP below is tight on scripts on purpose: the app has no inline
+#  <script> at all, so it does not need 'unsafe-inline' there. Each allowance
+#  is something the app genuinely uses:
+#
+#    cdn.jsdelivr.net        supabase-js, and tesseract.js for receipt OCR
+#    blob: + wasm-unsafe-eval  Tesseract compiles WebAssembly in a worker
+#    unpkg / tessdata...     where tesseract.js fetches its language data
+#    *.supabase.co           the database, auth, and signed receipt URLs
+#    wss://*.supabase.co     realtime notifications
+#    fonts.googleapis/gstatic  the Nunito typeface
+#    'unsafe-inline' on style  the app uses style="" attributes
+#
+#  If something breaks after a deploy, comment out this whole [[headers]]
+#  block, redeploy, and check the browser console for which directive
+#  blocked it — then add that one host back rather than dropping the lot.
+# ---------------------------------------------------------------------------
+
 [[headers]]
   for = "/*"
   [headers.values]
-    X-Frame-Options = "DENY"
+    Content-Security-Policy = """
+      default-src 'self';
+      script-src 'self' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net;
+      worker-src 'self' blob:;
+      style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+      font-src 'self' https://fonts.gstatic.com;
+      img-src 'self' data: blob: https://*.supabase.co;
+      connect-src 'self' blob: https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net https://unpkg.com https://tessdata.projectnaptha.com;
+      manifest-src 'self';
+      object-src 'none';
+      base-uri 'self';
+      form-action 'self';
+      frame-ancestors 'none';
+      upgrade-insecure-requests
+      """
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    Permissions-Policy = "geolocation=(), microphone=(), camera=()"
+    Permissions-Policy = "geolocation=(), microphone=(), camera=(), interest-cohort=()"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+    X-Frame-Options = "DENY"
 
 # App code must never be stale, or a logged-in user can end up running last
 # week's JavaScript against this week's database.
@@ -28,6 +64,19 @@
   for = "/css/*"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
+
+# The service worker must always be revalidated, or a stale one can pin the
+# app to an old shell indefinitely.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+    Service-Worker-Allowed = "/"
+
+[[headers]]
+  for = "/manifest.json"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
 
 [[headers]]
   for = "/icons/*"

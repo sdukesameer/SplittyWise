@@ -22,6 +22,8 @@ window.SW = window.SW || {};
     'friend-detail':  { tab: 'friends',  action: null,           summary: false, chrome: false, fab: true },
     'group-detail':   { tab: 'groups',   action: null,           summary: false, chrome: false, fab: true },
     'expense-detail': { tab: null,       action: null,           summary: false, chrome: false, fab: false },
+    insights:         { tab: 'account',  action: null,           summary: false, chrome: false, fab: false },
+    search:           { tab: null,       action: null,           summary: false, chrome: false, fab: false },
   };
 
   // Views register their renderer here; showView calls it on every entry.
@@ -122,7 +124,7 @@ window.SW = window.SW || {};
   });
 
   document.getElementById('btn-search').addEventListener('click', function () {
-    SW.toast('Expense search arrives in phase 8');
+    SW.navigate('search');
   });
 
   document.getElementById('btn-filter').addEventListener('click', function () {
@@ -162,6 +164,7 @@ window.SW = window.SW || {};
   };
 
   async function loadActivity(force) {
+    if (SW.activityStale) { SW.activityStale = false; force = true; }
     if (activityLoaded && !force) return;
 
     const skel = document.getElementById('activity-skel');
@@ -367,6 +370,7 @@ window.SW = window.SW || {};
     const { error } = await db.auth.signOut();
     SW.busy(this, false);
     if (error) SW.toast(error.message, 'error');
+    else if (SW.stopRealtime) SW.stopRealtime();
   });
 
   /* ======================= helpers ==================================== */
@@ -397,5 +401,8 @@ window.SW = window.SW || {};
 
     // The ledger drives Friends, Groups and the balance summary.
     if (SW.refreshLedger) await SW.refreshLedger();
+
+    // Live updates, so a friend's expense lands without a refresh.
+    if (SW.startRealtime) SW.startRealtime();
   };
 })();

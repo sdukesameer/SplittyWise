@@ -28,7 +28,7 @@ Amounts are in **INR (₹)** throughout.
 
 ## 1. What works today
 
-**Phases 1 to 7 of 10 are complete.** The core loop works end to end. Sign up, log in, log out, email
+**All 10 phases are complete.** Sign up, log in, log out, email
 confirmation and password reset all work end to end. Signing in lands on the
 app shell: four tabs (Friends, Groups, Activity, Account), a bell with an
 unread count, and the Add-expense button.
@@ -40,8 +40,9 @@ Every balance is derived from the ledger, never stored.
 Receipts can be scanned on-device to itemise an order: tick who was in on
 each line, and fees are shared out by the size of each person's order.
 
-Still to come: charts and CSV export (phase 8), installable PWA and realtime
-notifications (phase 9), deploy hardening (phase 10).
+Spending charts by category and month, expense search, CSV export, live
+notifications, and it installs to the home screen on both iPhone and
+Android.
 
 ### Running the tests
 
@@ -49,7 +50,7 @@ notifications (phase 9), deploy hardening (phase 10).
 for t in tests/*.test.js; do node "$t"; done
 ```
 
-Six suites, no database and no browser needed:
+Seven suites, no database and no browser needed:
 
 | Suite | Covers |
 |---|---|
@@ -59,6 +60,7 @@ Six suites, no database and no browser needed:
 | `emoji.test.js` | Description-to-icon guessing and rule precedence |
 | `prorate.test.js` | Fees allocated by order size, landing on the total exactly |
 | `scan.test.js` | Receipt parsing from realistic OCR output, and itemised splits |
+| `insights.test.js` | Categories, monthly buckets, search, and CSV including formula-injection guarding |
 
 The full database — 8 tables, 27 row-level-security policies, 6 write RPCs — is
 already in `supabase/schema.sql` and supports every later phase.
@@ -118,7 +120,35 @@ where schemaname = 'public' order by tablename;
 **Every row must read `true`.** If any says `false`, your data is readable by any
 signed-in user. Re-run the schema.
 
-### 2.3 Confirm the storage bucket
+### 2.3 Confirm realtime is on
+
+The schema adds `notifications` to the realtime publication, which is what
+makes a friend's expense appear on your phone without a refresh. Confirm it:
+
+```sql
+select tablename from pg_publication_tables
+where pubname = 'supabase_realtime' and schemaname = 'public';
+```
+
+`notifications` should be listed. If it is not, check
+**Database → Replication** in the dashboard and enable it for that table.
+
+### 2.4 Run the security audit
+
+```
+supabase/rls-audit.sql
+```
+
+Paste it into the SQL Editor and run it. **Every result column must say
+`PASS`.** It checks that RLS is on for all eight tables, that each has
+policies, that security-definer functions pin `search_path`, that the
+receipts bucket is private, that clients cannot write notifications for
+other people, and that every expense's splits sum to its total.
+
+Worth re-running after any schema change, and occasionally in normal use —
+check 8 catches ledger corruption that would otherwise be invisible.
+
+### 2.5 Confirm the storage bucket
 
 Click **Storage** in the sidebar. You should see a bucket called **receipts**,
 marked private. The schema created it. Receipt photos land here in phase 5.
@@ -275,10 +305,8 @@ https://splittywise.netlify.app/**
 
 ## 8. Install on iPhone and Android
 
-The manifest and service worker land in phase 9, which is what makes it install
-*properly* — offline support, splash screen, no browser chrome. You can already
-add it to your home screen today; it will just open with the Safari/Chrome bar
-visible until phase 9.
+It installs as a real app: fullscreen, its own icon, and it opens even with no
+signal (the app shell is cached; balances need a connection to refresh).
 
 ### iPhone
 
@@ -287,16 +315,20 @@ visible until phase 9.
 3. Scroll down, tap **Add to Home Screen**.
 4. Tap **Add**.
 
-iOS never shows an install prompt of its own; this manual route is the only one,
+iOS never shows an install prompt of its own, so the app displays a hint
+banner after a couple of seconds instead. This manual route is the only one,
 and it is the same flow as your MyExpenseTracker.
 
 ### Android
 
 1. Open the site in **Chrome**.
-2. Either accept the **Install app** prompt, or use **⋮ → Add to Home screen**.
+2. Accept the **Install** banner the app shows, or use **⋮ → Add to Home screen**.
 
-The icon is already wired up for both — `icons/apple-touch-icon.png` for iOS and
-a maskable icon for Android's adaptive shapes.
+### After a deploy
+
+The service worker updates itself on the next launch. If an installed copy
+looks stale, force-quit it and reopen. Bumping `CACHE` in `sw.js` guarantees
+the old shell is discarded.
 
 ---
 
@@ -371,8 +403,29 @@ on conflict (id) do nothing;
 ```
 
 **Changes not showing after a deploy**
-Hard-reload: `Cmd/Ctrl + Shift + R`. On an installed home-screen app, remove it
-and re-add it.
+Hard-reload: `Cmd/Ctrl + Shift + R`. On an installed home-screen app,
+force-quit and reopen — the service worker picks up the new version on
+launch. If it persists, bump `CACHE` in `sw.js` and redeploy.
+
+**Something broke right after deploying, and the console mentions CSP**
+The Content-Security-Policy in `netlify.toml` blocked a request. Open the
+browser console, find which directive it names, and add that one host to
+that directive. To rule it out entirely, comment out the whole `[[headers]]`
+block containing the CSP and redeploy — but put it back afterwards.
+
+**Receipt scanning does nothing / stalls at 8%**
+The first scan downloads roughly 4 MB of OCR engine and language data. On a
+slow connection give it a minute. If it fails outright, the CSP may be
+blocking `cdn.jsdelivr.net` or `tessdata.projectnaptha.com`.
+
+**CSV export does nothing on an installed iPhone app**
+iOS in standalone mode blocks downloads a page starts itself. Open the site
+in Safari proper and export from there.
+
+**The bell does not update live**
+Realtime is not enabled for `notifications`. See
+[step 2.3](#23-confirm-realtime-is-on). The app still resyncs whenever you
+bring it back to the foreground, so nothing is lost either way.
 
 ---
 
@@ -393,7 +446,15 @@ js/expense.js           add/edit form, splitting, receipts, one expense's page
 js/groups.js            groups list, one group's page, membership, settings
 js/settle.js            recording payments, and the plan to clear a group
 js/scan.js              on-device OCR, receipt parsing, itemised assignment
-tests/                  balance, split, group and emoji suites
+js/insights.js          hand-drawn SVG charts and CSV export
+js/search.js            expense search
+js/realtime.js          live notifications, and resync on foreground
+js/pwa.js               service worker registration and install prompts
+js/theme.js             applies the saved theme before first paint
+manifest.json           web app manifest
+sw.js                   service worker: app shell cache, offline fallback
+supabase/rls-audit.sql  security and ledger-integrity audit
+tests/                  seven suites, no database or browser needed
 icons/                  app icon: SVG source + 5 rendered PNG sizes
 supabase/schema.sql     tables, RLS policies, RPCs, triggers, storage
 netlify.toml            publish settings, redirects, security headers
@@ -436,6 +497,8 @@ address without exposing the table.
 
 ## Roadmap
 
+All ten phases are complete.
+
 | Phase | | Status |
 |---|---|---|
 | 0 | Data model, RLS, app icon | Done |
@@ -446,6 +509,6 @@ address without exposing the table.
 | 5 | Expenses, splits, edit, delete | Done |
 | 6 | Settle up, debt simplification | Done |
 | 7 | Itemised receipt scanning | Done |
-| 8 | Charts, search, CSV export | Next |
-| 9 | PWA install, offline, realtime notifications | |
-| 10 | Deploy hardening | |
+| 8 | Charts, search, CSV export | Done |
+| 9 | PWA install, offline, realtime notifications | Done |
+| 10 | Deploy hardening, CSP, security audit | Done |
