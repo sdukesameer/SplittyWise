@@ -4,3 +4,10 @@ node_modules/
 *.log
 .env
 .env.*
+
+# Database dumps hold real people's expenses. Never committed.
+backups/
+
+# Supabase CLI local state
+supabase/.temp/
+supabase/.branches/

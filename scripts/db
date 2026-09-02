@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+#  SplittyWise database helper
+#
+#  Wraps the handful of Supabase CLI commands this project actually needs, so
+#  none of them have to be remembered. Run ./scripts/db with no arguments to
+#  see what it does.
+#
+#  This project keeps ONE re-runnable schema.sql rather than a migration
+#  chain, so `supabase db push` is deliberately not used — see `warn` below.
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+SCHEMA=supabase/schema.sql
+AUDIT=supabase/rls-audit.sql
+
+have_link() {
+  [ -f supabase/.temp/project-ref ]
+}
+
+require_link() {
+  if ! have_link; then
+    cat <<'MSG'
+Not linked to a project yet. Two commands, once:
+
+  supabase login
+  supabase link --project-ref YOUR-PROJECT-REF
+
+The ref is in your dashboard URL:
+  https://supabase.com/dashboard/project/YOUR-PROJECT-REF
+
+It will ask for the database password — the one you set when the project was
+created, under Project Settings -> Database if you have forgotten it.
+MSG
+    exit 1
+  fi
+}
+
+case "${1:-}" in
+
+apply)
+  require_link
+  echo "Applying $SCHEMA to $(cat supabase/.temp/project-ref)…"
+  # Safe to re-run: every function whose signature changed is dropped first,
+  # every column is added `if not exists`, every policy dropped before create.
+  supabase db query --linked -f "$SCHEMA"
+  echo
+  echo "Done. Now run:  ./scripts/db audit"
+  ;;
+
+audit)
+  require_link
+  echo "Running $AUDIT — every result column should read PASS."
+  supabase db query --linked -f "$AUDIT"
+  ;;
+
+advisors)
+  require_link
+  # Supabase's own security and performance checks, which look at things this
+  # project's audit cannot see.
+  supabase db advisors --linked --type all --level warn
+  ;;
+
+dump)
+  require_link
+  out="backups/$(date +%Y-%m-%d-%H%M)"
+  mkdir -p "$out"
+  echo "Dumping to $out …"
+  supabase db dump --linked -f "$out/schema.sql"
+  supabase db dump --linked --data-only -f "$out/data.sql"
+  echo "Wrote $out/schema.sql and $out/data.sql"
+  ;;
+
+buckets)
+  require_link
+  for b in avatars covers receipts; do
+    printf '%-10s ' "$b"
+    if supabase storage ls "ss:///$b" --linked >/dev/null 2>&1; then
+      n=$(supabase storage ls "ss:///$b" --linked 2>/dev/null | grep -c . || true)
+      echo "exists, $n entries at the top level"
+    else
+      echo "absent"
+    fi
+  done
+  ;;
+
+empty-receipts)
+  require_link
+  # Receipts are no longer stored. Emptying the old bucket is the tedious
+  # part; deleting the bucket itself still has to happen in the dashboard,
+  # because Supabase refuses it over SQL and the CLI.
+  echo "This permanently deletes every file in the 'receipts' bucket."
+  echo "Nothing in the app writes to it any more."
+  read -r -p "Type 'delete' to continue: " reply
+  [ "$reply" = "delete" ] || { echo "Left alone."; exit 0; }
+  supabase storage rm -r "ss:///receipts" --linked
+  echo
+  echo "Emptied. Delete the bucket itself under Storage in the dashboard."
+  ;;
+
+query)
+  require_link
+  shift
+  [ $# -gt 0 ] || { echo "Usage: ./scripts/db query \"select count(*) from expenses\""; exit 1; }
+  supabase db query --linked "$*"
+  ;;
+
+warn)
+  cat <<'MSG'
+Two CLI commands to avoid in this project:
+
+  supabase db push     Pushes supabase/migrations/, which this project does
+                       not use. It would report nothing to push, which reads
+                       like success while the schema never reached the server.
+
+  supabase db pull     Generates a migration from the remote schema. That
+                       would create a second, diverging source of truth
+                       alongside schema.sql.
+
+  supabase db reset    Wipes the LOCAL database. Harmless to the remote one,
+                       but it does nothing useful here.
+
+Use ./scripts/db apply instead. One file, re-runnable, and it is the same
+file the README documents.
+MSG
+  ;;
+
+*)
+  cat <<'MSG'
+SplittyWise database helper
+
+  ./scripts/db apply             Apply supabase/schema.sql (safe to re-run)
+  ./scripts/db audit             Run the security and integrity audit
+  ./scripts/db advisors          Supabase's own security/performance checks
+  ./scripts/db dump              Back up schema and data into backups/
+  ./scripts/db buckets           Show which storage buckets exist
+  ./scripts/db empty-receipts    Delete the files in the old receipts bucket
+  ./scripts/db query "SQL"       Run one statement
+  ./scripts/db warn              Which CLI commands to avoid here, and why
+
+First time:
+  supabase login
+  supabase link --project-ref YOUR-PROJECT-REF
+MSG
+  ;;
+esac

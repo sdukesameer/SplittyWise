@@ -101,10 +101,66 @@ already in `supabase/schema.sql` and supports every later phase.
 
 ## 2. Set up Supabase
 
+You can do all of this in the dashboard, or from the command line with the
+Supabase CLI. **If you have the CLI, use it** — applying an 1,800-line schema
+by pasting it into a browser is how a half-applied schema happens.
+
+### With the CLI
+
+Twice, ever:
+
+```bash
+supabase login
+supabase link --project-ref YOUR-PROJECT-REF
+```
+
+The ref is in your dashboard URL: `supabase.com/dashboard/project/YOUR-REF`.
+Linking asks for the database password — the one set when the project was
+created, resettable under **Project Settings → Database**.
+
+Then everything else is one command each:
+
+```bash
+./scripts/db apply       # apply supabase/schema.sql, safe to re-run
+./scripts/db audit       # the security and integrity audit, all PASS
+./scripts/db advisors    # Supabase's own security and performance checks
+./scripts/db buckets     # which storage buckets exist
+./scripts/db dump        # back up schema and data into backups/
+./scripts/db query "select count(*) from expenses"
+```
+
+`./scripts/db` on its own lists them.
+
+> **Do not use `supabase db push` here.** It pushes
+> `supabase/migrations/`, which this project does not have — so it reports
+> nothing to push, which reads like success while the schema never reached
+> the server. `supabase db pull` is worse: it would generate a migration and
+> leave you with two diverging sources of truth. `./scripts/db warn` explains
+> this at the prompt.
+>
+> This project keeps one re-runnable `schema.sql` on purpose. Every function
+> whose signature changed is dropped before being recreated, every column is
+> added `if not exists`, and every policy is dropped before being created —
+> so applying it twice is the same as applying it once.
+
+Dumps land in `backups/`, which is gitignored: they contain real people's
+expenses.
+
+### Running a local copy
+
+`supabase start` brings up the whole stack in Docker on ports 54321–54329.
+It is genuinely useful for trying a destructive change safely, but it is a
+second environment to keep in step: apply the schema with
+`supabase db query --local -f supabase/schema.sql`, then point
+`js/config.js` at the local URL and anon key that `supabase status` prints.
+Remember to point it back.
+
+### In the dashboard
+
 You said you already created an empty project named **Splittywise**. These steps
 fill it in.
 
-### 2.1 Run the schema
+#### 2.1 Run the schema
 
 1. Open your project at [supabase.com/dashboard](https://supabase.com/dashboard).
 2. In the left sidebar click **SQL Editor**.
@@ -133,7 +189,7 @@ without wiping your expenses.
 > applies. If you see a notice about either bucket, create it under
 > **Storage** as private and re-run.
 
-### 2.2 Confirm it worked
+#### 2.2 Confirm it worked
 
 In the SQL Editor, run:
 
@@ -166,7 +222,7 @@ where schemaname = 'public' order by tablename;
 **Every row must read `true`.** If any says `false`, your data is readable by any
 signed-in user. Re-run the schema.
 
-### 2.3 Confirm realtime is on
+#### 2.3 Confirm realtime is on
 
 The schema adds `notifications` to the realtime publication, which is what
 makes a friend's expense appear on your phone without a refresh. Confirm it:
@@ -179,7 +235,7 @@ where pubname = 'supabase_realtime' and schemaname = 'public';
 `notifications` should be listed. If it is not, check
 **Database → Replication** in the dashboard and enable it for that table.
 
-### 2.4 Run the security audit
+#### 2.4 Run the security audit
 
 ```
 supabase/rls-audit.sql
@@ -197,7 +253,7 @@ checks 11 and 12 list anything in the database this app did not create —
 including an old function left behind as an overload, which is the one thing
 that can make an RPC call ambiguous.
 
-### 2.5 Confirm the storage buckets
+#### 2.5 Confirm the storage buckets
 
 Click **Storage** in the sidebar. You should see exactly two buckets, both
 marked private:
@@ -217,14 +273,24 @@ picture rather than refusing it: every photo off a phone camera is several
 megabytes, so "too big" would be useless advice. A 4 MB camera photo becomes
 roughly a 40 KB avatar that looks identical at the size it is shown.
 
-### Deleting the old receipts bucket
+#### Deleting the old receipts bucket
 
 If you ran an earlier version, a `receipts` bucket may still be there with
 files in it. **The schema cannot remove it** — Supabase refuses a direct
 `delete` from the storage tables, to stop a bucket being orphaned from its
 files. The script notices it and prints a reminder instead.
 
-Remove it by hand, once:
+With the CLI, emptying it is one command:
+
+```bash
+./scripts/db empty-receipts
+```
+
+It asks for confirmation, because it permanently deletes files. Deleting the
+now-empty **bucket** still has to happen in the dashboard: **Storage** →
+**receipts** → **⋮** → **Delete bucket**.
+
+By hand instead:
 
 1. **Storage** in the sidebar → select **receipts**.
 2. Select all files inside it and delete them.
@@ -553,6 +619,7 @@ bring it back to the foreground, so nothing is lost either way.
 ```
 index.html              every screen, as hidden <section data-screen> blocks
 css/app.css             design tokens + components, dark-first
+scripts/db              the handful of Supabase CLI commands this needs
 js/config.js            your two Supabase values — the only file you edit
 js/db.js                Supabase client
 js/ui.js                screens, toasts, bottom sheet, form plumbing
