@@ -78,12 +78,18 @@ window.SW = window.SW || {};
       : '');
   }
 
+  // Repaint only. Focus is handled where the user asks for search, not here:
+  // this also runs on every data change, and stealing focus then would yank
+  // the caret out of whatever they were typing.
   SW.viewHooks.search = function () {
+    render(document.getElementById('srch-input').value);
+  };
+
+  SW.focusSearch = function () {
     const input = document.getElementById('srch-input');
-    render(input.value);
-    // Focus only on a pointer-capable device: on a phone this would throw up
-    // the keyboard over the results before anything has been typed.
-    if (!SW.isTouch) input.focus();
+    // Not on a touch device: it would throw the keyboard up over the results
+    // before anything has been typed.
+    if (input && !SW.isTouch) input.focus();
   };
 
   document.getElementById('srch-input').addEventListener('input', function () {

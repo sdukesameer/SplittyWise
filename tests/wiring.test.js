@@ -242,7 +242,39 @@ const undriven = spinnerButtons.filter(id =>
 check(spinnerButtons.length + ' spinner buttons are driven by SW.busy',
   undriven.length === 0, undriven);
 
-/* ---------------- 9. no leftover placeholders ---------------- */
+/* ---------------- 9. every SW.* call resolves ---------------- */
+
+// Cross-module calls are the quietest failure in the app: most are written
+// as `if (SW.thing) SW.thing()`, so a misspelled name does nothing at all
+// and raises nothing.
+console.log('\n--- cross-module calls ---');
+const swDefined = new Set();
+for (const src of Object.values(js)) {
+  for (const m of src.matchAll(/SW\.([A-Za-z_$][\w$]*)\s*=(?!=)/g)) swDefined.add(m[1]);
+  // Properties hung off SW by assignment inside object literals, e.g.
+  // SW.viewHooks.friends = fn
+  for (const m of src.matchAll(/SW\.(viewHooks)\b/g)) swDefined.add(m[1]);
+}
+// Set by the harness rather than assigned in js/.
+['user', 'profile', 'session', 'db', 'ledger', 'isConfigured', 'initialHash',
+ 'currentScreen', 'isTouch', 'activityStale', 'currentFriendId', 'currentGroupId',
+ 'currentExpenseId', 'APP_VIEWS', 'MIN_PASSWORD', 'CATEGORIES', 'SPLIT_MODES',
+ 'EMOJI_GROUPS'].forEach(n => swDefined.add(n));
+
+const called = new Map();
+for (const [file, src] of Object.entries(js)) {
+  for (const m of src.matchAll(/SW\.([A-Za-z_$][\w$]*)/g)) {
+    if (!called.has(m[1])) called.set(m[1], file);
+  }
+}
+const unresolvedCalls = [...called.entries()]
+  .filter(([name]) => !swDefined.has(name))
+  .map(([name, file]) => file + ': SW.' + name);
+check('every SW.* reference is assigned somewhere',
+  unresolvedCalls.length === 0, unresolvedCalls);
+console.log('  ' + swDefined.size + ' names defined, ' + called.size + ' referenced');
+
+/* ---------------- 10. no leftover placeholders ---------------- */
 
 console.log('\n--- placeholders ---');
 const stale = [];

@@ -26,6 +26,9 @@ window.SW = window.SW || {};
 
   function render(param) {
     gid = param;
+    // On a cold deep link the ledger has not arrived yet; recompute calls
+    // this again once it has.
+    if (!SW.ledger) return;
     const g = group();
     if (!g) return SW.navigate('groups');
 

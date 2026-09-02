@@ -981,10 +981,18 @@ window.SW = window.SW || {};
 
     (e.expense_splits || []).forEach(function (sp) {
       exact[sp.user_id] = SW.toPaise(sp.amount);
-      included[sp.user_id] = true;
       percent[sp.user_id] = paise
         ? Math.round((SW.toPaise(sp.amount) / paise) * 10000) / 100
         : 0;
+    });
+
+    // An absent entry counts as included, so anyone deliberately left off
+    // the expense has to be marked false explicitly — otherwise editing it
+    // would quietly put them back in and change everyone's share.
+    peopleOn(e).forEach(function (id) {
+      included[id] = (e.expense_splits || []).some(function (sp) {
+        return sp.user_id === id;
+      });
     });
 
     // Only the amounts are stored, not the shares or adjustments that
@@ -1147,6 +1155,14 @@ window.SW = window.SW || {};
     SW.openExpenseSheet({ expenseId: SW.currentExpenseId });
   });
 
+  function restore(index, row) {
+    if (!SW.ledger || !row) return;
+    const already = SW.ledger.expenses.some(function (x) { return x.id === row.id; });
+    if (already) return;
+    const at = Math.min(Math.max(0, index), SW.ledger.expenses.length);
+    SW.ledger.expenses.splice(at, 0, row);
+  }
+
   document.getElementById('exp-delete').addEventListener('click', function () {
     const id = SW.currentExpenseId;
     const e = findExpense(id);
@@ -1167,13 +1183,16 @@ window.SW = window.SW || {};
       'Deleted "' + e.description + '"',
       'Undo',
       function () {
-        SW.ledger.expenses.splice(index, 0, removed);
+        // A realtime event or a foreground resync may already have refetched
+        // the ledger, in which case the expense is back and re-inserting it
+        // would double-count it.
+        restore(index, removed);
         SW.recompute();
       },
       async function () {
         const { error } = await db.from('expenses').delete().eq('id', id);
         if (error) {
-          SW.ledger.expenses.splice(index, 0, removed);
+          restore(index, removed);
           SW.recompute();
           SW.toast('Could not delete it: ' + error.message, 'error');
           return;

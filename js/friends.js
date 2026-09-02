@@ -41,11 +41,13 @@ window.SW = window.SW || {};
     nets = SW.friendBalances();
     renderSummary();
     renderFriends();
+
+    // Repaint whatever is actually on screen. Naming views individually
+    // meant adding an expense from a group page left that page stale, and
+    // every new view had to remember to add itself here.
     const view = SW.activeView();
-    if (view === 'friend-detail') renderFriendDetail(SW.currentFriendId);
-    if (view === 'expense-detail' && SW.renderExpenseDetail) {
-      SW.renderExpenseDetail(SW.currentExpenseId);
-    }
+    const hook = SW.viewHooks[view];
+    if (hook && view !== 'friends') hook(SW.activeParam());
   };
 
   SW.friendNet = function (id) {

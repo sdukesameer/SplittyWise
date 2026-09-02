@@ -102,6 +102,7 @@ window.SW = window.SW || {};
   };
 
   SW.activeView = function () { return activeView; };
+  SW.activeParam = function () { return activeParam; };
 
   document.addEventListener('click', function (e) {
     const tab = e.target.closest('.tab');
@@ -126,6 +127,7 @@ window.SW = window.SW || {};
 
   document.getElementById('btn-search').addEventListener('click', function () {
     SW.navigate('search');
+    if (SW.focusSearch) SW.focusSearch();
   });
 
   document.getElementById('btn-filter').addEventListener('click', function () {
