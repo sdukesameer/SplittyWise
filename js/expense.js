@@ -143,10 +143,12 @@ window.SW = window.SW || {};
             '<span class="amount-field">' +
               '<span class="cur">₹</span>' +
               '<input class="amount-input" id="exp-f-amount" type="text" ' +
-                     'inputmode="decimal" placeholder="0.00" ' +
-                     'value="' + esc(f.amountText) + '" aria-label="Amount">' +
+                     'inputmode="text" placeholder="0.00" ' +
+                     'value="' + esc(f.amountText) + '" aria-label="Amount, ' +
+                     'or a sum like 240+80*2">' +
             '</span>' +
           '</div>' +
+          '<div class="calc-hint" id="exp-f-calc" hidden></div>' +
 
           '<div class="field">' +
             '<input class="input" id="exp-f-desc" type="text" maxlength="80" ' +
@@ -224,10 +226,33 @@ window.SW = window.SW || {};
     const desc = document.getElementById('exp-f-desc');
     const date = document.getElementById('exp-f-date');
 
+    const calc = document.getElementById('exp-f-calc');
+
     amount.addEventListener('input', function () {
       f.amountText = amount.value;
-      f.amountPaise = parseAmount(amount.value);
+
+      // "240+80*2" totals to ₹400. Anything that is not a sum falls through
+      // to ordinary parsing, so a plain number behaves exactly as before.
+      if (SW.isExpression(amount.value)) {
+        const total = SW.evalAmount(amount.value);
+        f.amountPaise = total === null ? 0 : total;
+        calc.hidden = false;
+        calc.textContent = total === null ? 'That does not add up yet' : '= ' + SW.money(total);
+        calc.classList.toggle('is-bad', total === null);
+      } else {
+        f.amountPaise = parseAmount(amount.value);
+        calc.hidden = true;
+      }
       renderSplit();
+    });
+
+    // Leaving the field settles the sum into the number it came to.
+    amount.addEventListener('blur', function () {
+      if (f.amountPaise > 0 && SW.isExpression(amount.value)) {
+        f.amountText = SW.rupees(f.amountPaise);
+        amount.value = f.amountText;
+        calc.hidden = true;
+      }
     });
 
     desc.addEventListener('input', function () {

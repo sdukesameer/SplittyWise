@@ -2457,3 +2457,51 @@ button.is-loading .spinner { display: block; }
   font-variant-numeric: tabular-nums;
 }
 .rec-actions { display: flex; gap: 4px; flex: none; }
+
+/* ==========================================================================
+   Amount arithmetic, true black, accent choice
+   ========================================================================== */
+
+.calc-hint {
+  margin-top: -4px;
+  padding-left: 70px;
+  font-size: 13.5px;
+  font-weight: 800;
+  color: var(--owed);
+  font-variant-numeric: tabular-nums;
+}
+.calc-hint.is-bad { color: var(--owe); font-weight: 700; }
+
+/* True black for OLED screens: only the grounds change, so contrast and the
+   accent stay exactly as designed. */
+:root[data-black="1"] {
+  --bg: #000000;
+  --bg-elevated: #0A0D0C;
+  --surface: #0E1211;
+  --surface-2: #161B1A;
+  --surface-3: #1E2422;
+  --line: #232A28;
+  --line-strong: #333B39;
+}
+
+.swatches-row {
+  display: flex;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.swatch {
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+}
+.swatch.is-on { border-color: var(--text); }
+.swatch.is-on::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+}

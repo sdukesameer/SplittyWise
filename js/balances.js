@@ -238,6 +238,79 @@ window.SW = window.SW || {};
       blurb: 'Enter who owes extra; the remainder is split equally.' },
   ];
 
+  /* ======================= amount arithmetic ========================= */
+
+  // "240+80*2" in the amount field. Hand-rolled recursive descent rather
+  // than eval: the Content-Security-Policy forbids eval outright, and
+  // handing arbitrary input to it for the sake of a calculator would be a
+  // poor trade even if it did not.
+  //
+  // Returns paise, or null if the expression is not something to total.
+  SW.evalAmount = function (text) {
+    const src = String(text == null ? '' : text).replace(/[₹,\s]/g, '');
+    if (!src) return null;
+    // Only the characters a sum can be made of.
+    if (!/^[0-9.+\-*/()]+$/.test(src)) return null;
+
+    let at = 0;
+    const peek = function () { return src[at]; };
+
+    function number() {
+      const start = at;
+      while (at < src.length && /[0-9.]/.test(src[at])) at++;
+      const raw = src.slice(start, at);
+      // "1.2.3" is a typo, not a number.
+      if (!/^\d*\.?\d*$/.test(raw) || raw === '' || raw === '.') return NaN;
+      return parseFloat(raw);
+    }
+
+    function factor() {
+      if (peek() === '(') {
+        at++;
+        const inner = expression();
+        if (peek() !== ')') return NaN;
+        at++;
+        return inner;
+      }
+      if (peek() === '-') { at++; return -factor(); }
+      if (peek() === '+') { at++; return factor(); }
+      return number();
+    }
+
+    function term() {
+      let value = factor();
+      while (peek() === '*' || peek() === '/') {
+        const op = src[at++];
+        const rhs = factor();
+        if (op === '/' && rhs === 0) return NaN;
+        value = op === '*' ? value * rhs : value / rhs;
+      }
+      return value;
+    }
+
+    function expression() {
+      let value = term();
+      while (peek() === '+' || peek() === '-') {
+        const op = src[at++];
+        const rhs = term();
+        value = op === '+' ? value + rhs : value - rhs;
+      }
+      return value;
+    }
+
+    const result = expression();
+    // Trailing rubbish means the whole thing is suspect.
+    if (at !== src.length) return null;
+    if (!isFinite(result) || result < 0 || result > 5000000) return null;
+    return Math.round(result * 100);
+  };
+
+  // True when the text is a sum rather than a plain number, so the form can
+  // show the total it works out to.
+  SW.isExpression = function (text) {
+    return /[+\-*/()]/.test(String(text || '').replace(/^\s*-/, ''));
+  };
+
   /* ======================= UPI ======================================== */
 
   // A virtual payment address: something@bank. Deliberately permissive on the

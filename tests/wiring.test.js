@@ -293,7 +293,50 @@ check('every stacked pair is display:block', notBlock.length === 0, notBlock);
 // And a check switched on by its own class must have a rule for that.
 check('.sp-check.is-on is styled', /\.sp-check\.is-on/.test(css));
 
-/* ---------------- 11. no leftover placeholders ---------------- */
+/* ---------------- 11. every CSS token is defined at the base ---------------- */
+
+// A token whose only definition sits inside a media query or a [data-theme]
+// block does not exist for the default "system" viewer, and the page then
+// renders one theme's text on the other theme's ground.
+console.log('\n--- theme tokens ---');
+// Every bare `:root { }` block, not just the first — the palette is declared
+// across a few of them. `:root:not(...)` and `:root[data-theme=...]` do not
+// match this pattern, which is the point.
+const baseTokens = new Set();
+for (const block of css.matchAll(/:root\s*\{([\s\S]*?)\}/g)) {
+  for (const t of block[1].matchAll(/(--[\w-]+)\s*:/g)) baseTokens.add(t[1]);
+}
+// Declared anywhere at all, including inside a media or [data-theme] block.
+const anyTokens = new Set([...css.matchAll(/(--[\w-]+)\s*:/g)].map(m => m[1]));
+const usedTokens = new Set([...css.matchAll(/var\((--[\w-]+)/g)].map(m => m[1]));
+
+const undefinedTokens = [...usedTokens].filter(t => !anyTokens.has(t));
+check('every var() resolves to a declaration', undefinedTokens.length === 0, undefinedTokens);
+
+const themeOnly = [...usedTokens].filter(t => anyTokens.has(t) && !baseTokens.has(t));
+check('no token is defined only inside a theme block',
+  themeOnly.length === 0, themeOnly);
+console.log('  ' + baseTokens.size + ' tokens at :root, ' + usedTokens.size + ' used');
+
+// The body must paint its own ground, or it borrows the host page's.
+check('body sets an explicit background token',
+  /body\s*\{[^}]*background:\s*var\(--/.test(css));
+
+/* ---------------- 12. accessibility floor ---------------- */
+
+console.log('\n--- accessibility ---');
+check('keyboard focus is visible', /:focus-visible/.test(css));
+check('reduced motion is respected', /prefers-reduced-motion/.test(css));
+const inputsNoLabel = [...html.matchAll(/<input(?![^>]*type="hidden")[^>]*>/g)]
+  .map(m => m[0])
+  .filter(tag => !/aria-label=/.test(tag) && !/\bid="([^"]+)"/.test(tag));
+check('every input is labelled or has an id a label points at',
+  inputsNoLabel.length === 0, inputsNoLabel.map(t => t.slice(0, 60)));
+check('the page declares a language', /<html lang="/.test(html));
+check('viewport allows zoom',
+  !/user-scalable\s*=\s*no/.test(html) && !/maximum-scale\s*=\s*1/.test(html));
+
+/* ---------------- 13. no leftover placeholders ---------------- */
 
 console.log('\n--- placeholders ---');
 const stale = [];

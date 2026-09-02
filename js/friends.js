@@ -478,6 +478,46 @@ window.SW = window.SW || {};
     if (SW.openFriendCharts) SW.openFriendCharts(SW.currentFriendId);
   });
 
+  document.getElementById('friend-share').addEventListener('click', async function () {
+    const id = SW.currentFriendId;
+    const p = SW.person(id);
+    const net = SW.friendNet(id);
+    const shared = SW.sharedGroups(id).filter(function (sg) { return sg.net !== 0; });
+
+    const lines = [];
+    lines.push(net === 0
+      ? 'You and ' + p.full_name + ' are all settled up.'
+      : (net > 0
+          ? p.full_name + ' owes you ' + SW.money(net)
+          : 'You owe ' + p.full_name + ' ' + SW.money(net)));
+
+    shared.forEach(function (sg) {
+      lines.push('· ' + sg.group.name + ': ' +
+        (sg.net > 0 ? 'owes you ' : 'you owe ') + SW.money(sg.net));
+    });
+    lines.push('');
+    lines.push('via SplittyWise');
+    const text = lines.join('\n');
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'SplittyWise', text: text });
+        return;
+      } catch (e) { /* dismissed, fall through to copying */ }
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      SW.toast('Summary copied', 'ok');
+    } catch (e) {
+      SW.sheet({
+        title: 'Balance summary',
+        rawBody: '<div class="sheet-body"><textarea class="input" rows="6" readonly ' +
+                 'style="line-height:1.5">' + esc(text) + '</textarea></div>',
+        confirm: null,
+      });
+    }
+  });
+
   document.getElementById('friend-export').addEventListener('click', function () {
     const p = SW.person(SW.currentFriendId);
     SW.exportCsv({ withFriend: SW.currentFriendId },
