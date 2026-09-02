@@ -114,3 +114,98 @@ window.SW = window.SW || {};
     }
   });
 })();
+
+/* ==========================================================================
+   Bottom sheet
+   ========================================================================== */
+
+(function () {
+  let active = null;
+
+  const scrim = document.getElementById('sheet-scrim');
+  const titleEl = document.getElementById('sheet-title');
+  const contentEl = document.getElementById('sheet-content');
+  const actionsEl = document.getElementById('sheet-actions');
+
+  // opts: { title, body, rawBody, confirm, cancel, onOpen, onConfirm }
+  //   body     — markup wrapped in .sheet-body padding
+  //   rawBody  — markup inserted as-is, for content that owns its own layout
+  //   onConfirm(btn) — return false to keep the sheet open (e.g. on a
+  //                    validation failure); anything else closes it
+  SW.sheet = function (opts) {
+    active = opts;
+
+    titleEl.textContent = opts.title || '';
+    titleEl.hidden = !opts.title;
+
+    contentEl.innerHTML = opts.rawBody
+      ? opts.rawBody
+      : (opts.body ? '<div class="sheet-body">' + opts.body + '</div>' : '');
+
+    actionsEl.innerHTML = '';
+    if (opts.confirm) {
+      const ok = document.createElement('button');
+      ok.type = 'button';
+      ok.className = 'btn btn-primary';
+      ok.id = 'sheet-confirm';
+      ok.innerHTML = '<span class="spinner"></span><span class="btn-label">' +
+                     SW.escapeHtml(opts.confirm) + '</span>';
+      ok.addEventListener('click', async function () {
+        if (!active || !active.onConfirm) return SW.closeSheet();
+        const keep = await active.onConfirm(ok);
+        if (keep !== false) SW.closeSheet();
+      });
+      actionsEl.appendChild(ok);
+    }
+
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn-text';
+    cancel.style.alignSelf = 'center';
+    cancel.style.padding = '10px';
+    cancel.textContent = opts.cancel || (opts.confirm ? 'Cancel' : 'Close');
+    cancel.addEventListener('click', SW.closeSheet);
+    actionsEl.appendChild(cancel);
+
+    scrim.classList.add('is-open');
+    document.body.style.overflow = 'hidden';
+
+    if (opts.onOpen) opts.onOpen();
+
+    // Enter submits a single-input sheet, which is what everyone expects.
+    const input = contentEl.querySelector('input');
+    if (input && opts.confirm) {
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          document.getElementById('sheet-confirm').click();
+        }
+      });
+    }
+  };
+
+  SW.closeSheet = function () {
+    scrim.classList.remove('is-open');
+    document.body.style.overflow = '';
+    contentEl.innerHTML = '';
+    actionsEl.innerHTML = '';
+    active = null;
+  };
+
+  // Tapping the backdrop closes; tapping inside the sheet must not.
+  scrim.addEventListener('click', function (e) {
+    if (e.target === scrim) SW.closeSheet();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && scrim.classList.contains('is-open')) SW.closeSheet();
+  });
+})();
+
+/* Fallback escaper: shell.js replaces this with its own, but the sheet code
+   above may run first. */
+SW.escapeHtml = SW.escapeHtml || function (str) {
+  return String(str == null ? '' : str).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+};

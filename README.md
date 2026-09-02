@@ -28,9 +28,15 @@ Amounts are in **INR (₹)** throughout.
 
 ## 1. What works today
 
-**Phase 1 of 10 is complete.** Sign up, log in, log out, email confirmation and
-password reset all work end to end. Signing in currently lands on a placeholder
-screen; the Friends, Groups, Activity and Account tabs arrive in phase 2.
+**Phases 1 and 2 of 10 are complete.** Sign up, log in, log out, email
+confirmation and password reset all work end to end. Signing in lands on the
+app shell: four tabs (Friends, Groups, Activity, Account), a bell with an
+unread count, and the Add-expense button.
+
+The **Account** tab is fully working — edit your name, pick an avatar emoji,
+switch between system/light/dark themes, request a password-change link, and
+log out. **Activity** reads live from the database. Friends and Groups show
+empty states until phase 3 and 4 fill them in.
 
 The full database — 8 tables, 27 row-level-security policies, 6 write RPCs — is
 already in `supabase/schema.sql` and supports every later phase.
@@ -403,8 +409,8 @@ address without exposing the table.
 |---|---|---|
 | 0 | Data model, RLS, app icon | Done |
 | 1 | Auth — signup, login, reset | Done |
-| 2 | Shell, tab bar, theming | Next |
-| 3 | Friends and balances | |
+| 2 | Shell, tab bar, theming, Account tab | Done |
+| 3 | Friends and balances | Next |
 | 4 | Groups | |
 | 5 | Expenses, splits, receipts | |
 | 6 | Settle up | |

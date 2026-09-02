@@ -20,6 +20,18 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:ital,wght@0,600;0,700;0,800;1,600&display=swap">
 <link rel="stylesheet" href="css/app.css">
+
+<script>
+  // Runs before first paint: applies the saved theme so the page never
+  // flashes the wrong one. Wrapped because localStorage throws outright in
+  // some privacy modes.
+  (function () {
+    try {
+      var t = localStorage.getItem('splittywise.theme');
+      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
 </head>
 <body>
 
@@ -31,6 +43,37 @@
       <stop offset=".55" stop-color="#14B8A6"/>
       <stop offset="1" stop-color="#6366F1"/>
     </linearGradient>
+    <symbol id="ic-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round">
+      <circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/>
+    </symbol>
+    <symbol id="ic-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 8A6 6 0 006 8c0 6-2 7-2 7h16s-2-1-2-7"/><path d="M10.3 20a2 2 0 003.4 0"/>
+    </symbol>
+    <symbol id="ic-filter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M3 7h13M18 7h3M3 12h4M9 12h12M3 17h9M15 17h6"/>
+      <circle cx="17" cy="7" r="1.9" fill="currentColor" stroke="none"/>
+      <circle cx="8" cy="12" r="1.9" fill="currentColor" stroke="none"/>
+      <circle cx="13.5" cy="17" r="1.9" fill="currentColor" stroke="none"/>
+    </symbol>
+    <symbol id="ic-friends" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0115 0"/>
+    </symbol>
+    <symbol id="ic-groups" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="9" cy="8.5" r="3.4"/><path d="M2.5 19.5a6.5 6.5 0 0113 0"/>
+      <path d="M16.2 5.6a3.4 3.4 0 010 5.9M18 14.4a6.5 6.5 0 013.5 5.1"/>
+    </symbol>
+    <symbol id="ic-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="4"/><path d="M7.5 14.5l3.2-3.6 2.4 2.2 3.4-4"/>
+    </symbol>
+    <symbol id="ic-account" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3.1"/><path d="M6.2 18.6a6.6 6.6 0 0111.6 0"/>
+    </symbol>
+    <symbol id="ic-receipt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 3.5h14v17l-2.3-1.6-2.4 1.6-2.3-1.6L9.7 20.5 7.3 18.9 5 20.5z"/><path d="M8.6 8h6.8M8.6 12h6.8"/>
+    </symbol>
+    <symbol id="ic-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 5l7 7-7 7"/>
+    </symbol>
     <g id="sw-logo">
       <rect width="512" height="512" rx="116" fill="url(#sw-bg)"/>
       <g transform="rotate(-24 256 256)">
@@ -242,20 +285,177 @@
   </div>
 </section>
 
-<!-- ===================== signed in (placeholder until phase 2) ===================== -->
-<section data-screen="app" class="holding">
-  <div class="avatar-lg" id="app-avatar">🙂</div>
-  <div>
-    <h1 id="app-greeting">You are logged in</h1>
-    <p class="who" id="app-who"></p>
-  </div>
-  <p class="next">Phase 1 done: auth works end to end. The Friends, Groups, Activity
-     and Account tabs arrive in phase 2.</p>
-  <div class="mono" id="app-uid"></div>
-  <button type="button" class="btn btn-ghost" id="app-logout" style="max-width:280px">
-    <span class="spinner"></span><span class="btn-label">Log out</span>
+<!-- ===================== signed in — app shell ===================== -->
+<section data-screen="app" class="shell">
+
+  <header class="app-header" id="app-header">
+    <div class="header-bar">
+      <button class="icon-btn" id="btn-search" aria-label="Search expenses">
+        <svg aria-hidden="true"><use href="#ic-search"/></svg>
+      </button>
+      <span class="grow"></span>
+      <button class="header-action" id="header-action" hidden></button>
+      <button class="icon-btn" id="btn-bell" aria-label="Notifications">
+        <svg aria-hidden="true"><use href="#ic-bell"/></svg>
+        <span class="badge" id="bell-badge" aria-live="polite"></span>
+      </button>
+    </div>
+
+    <div class="summary" id="summary" hidden>
+      <div class="summary-text" id="summary-text"></div>
+      <button class="icon-btn" id="btn-filter" aria-label="Filter list">
+        <svg aria-hidden="true"><use href="#ic-filter"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="app-main">
+
+    <!-- ---------- Friends ---------- -->
+    <div data-view="friends">
+      <div class="empty">
+        <div class="empty-art">👋</div>
+        <h3>No friends yet</h3>
+        <p>Add someone by their email address and any expense you split with
+           them shows up here.</p>
+        <button type="button" class="btn btn-ghost" data-todo="Adding friends arrives in phase 3">
+          Add a friend
+        </button>
+      </div>
+    </div>
+
+    <!-- ---------- Groups ---------- -->
+    <div data-view="groups">
+      <div class="empty">
+        <div class="empty-art">🏠</div>
+        <h3>No groups yet</h3>
+        <p>Groups keep a flat, a trip or a shared bill in one place, and split
+           every expense across everyone in them.</p>
+        <button type="button" class="btn btn-ghost" data-todo="Groups arrive in phase 4">
+          Start a group
+        </button>
+      </div>
+    </div>
+
+    <!-- ---------- Activity ---------- -->
+    <div data-view="activity">
+      <div id="activity-skel">
+        <div class="skel-row"><div class="skel skel-avatar"></div>
+          <div class="skel-lines"><div class="skel skel-line-1"></div><div class="skel skel-line-2"></div></div></div>
+        <div class="skel-row"><div class="skel skel-avatar"></div>
+          <div class="skel-lines"><div class="skel skel-line-1"></div><div class="skel skel-line-2"></div></div></div>
+        <div class="skel-row"><div class="skel skel-avatar"></div>
+          <div class="skel-lines"><div class="skel skel-line-1"></div><div class="skel skel-line-2"></div></div></div>
+      </div>
+      <div class="list" id="activity-list"></div>
+      <div class="empty" id="activity-empty" hidden>
+        <div class="empty-art">🔔</div>
+        <h3>Nothing yet</h3>
+        <p>When someone adds an expense, records a payment or puts you in a
+           group, it lands here.</p>
+      </div>
+    </div>
+
+    <!-- ---------- Account ---------- -->
+    <div data-view="account">
+      <div class="profile-head">
+        <button class="profile-emoji" id="profile-emoji" aria-label="Change your avatar">🙂</button>
+        <div style="min-width:0">
+          <div class="profile-name" id="profile-name">&nbsp;</div>
+          <div class="profile-email" id="profile-email">&nbsp;</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">Your details</div>
+        <button class="set-row" id="row-name" style="margin-top:4px">
+          <div class="grow">
+            <div class="set-title">Name</div>
+            <div class="set-sub" id="sub-name">&nbsp;</div>
+          </div>
+          <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
+        </button>
+        <div class="set-row" style="cursor:default">
+          <div class="grow">
+            <div class="set-title">Email</div>
+            <div class="set-sub" id="sub-email">&nbsp;</div>
+          </div>
+        </div>
+        <button class="set-row" id="row-emoji">
+          <div class="grow">
+            <div class="set-title">Avatar</div>
+            <div class="set-sub">Pick an emoji your friends will recognise</div>
+          </div>
+          <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
+        </button>
+      </div>
+
+      <div class="card">
+        <div class="card-head">Appearance</div>
+        <div class="card-body">
+          <div class="seg" id="theme-seg" role="group" aria-label="Theme">
+            <button type="button" data-theme-choice="system">System</button>
+            <button type="button" data-theme-choice="light">Light</button>
+            <button type="button" data-theme-choice="dark">Dark</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">Password</div>
+        <button class="set-row" id="row-password" style="margin-top:4px">
+          <div class="grow">
+            <div class="set-title">Change password</div>
+            <div class="set-sub">We email you a link to set a new one</div>
+          </div>
+          <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
+        </button>
+      </div>
+
+      <div class="card">
+        <button class="set-row is-danger" id="app-logout">
+          <div class="grow"><div class="set-title">Log out</div></div>
+          <span class="spinner" style="color:var(--danger)"></span>
+        </button>
+      </div>
+
+      <p style="text-align:center;color:var(--faint);font-size:12.5px;padding:4px 20px 10px">
+        SplittyWise · phase 2 of 10<br>Friends and balances arrive next.
+      </p>
+    </div>
+
+  </main>
+
+  <button class="fab" id="fab" data-todo="Adding expenses arrives in phase 5">
+    <svg aria-hidden="true"><use href="#ic-receipt"/></svg>
+    <span>Add expense</span>
   </button>
+
+  <nav class="tabbar" aria-label="Main">
+    <button class="tab" data-tab="friends">
+      <svg aria-hidden="true"><use href="#ic-friends"/></svg><span>Friends</span>
+    </button>
+    <button class="tab" data-tab="groups">
+      <svg aria-hidden="true"><use href="#ic-groups"/></svg><span>Groups</span>
+    </button>
+    <button class="tab" data-tab="activity">
+      <svg aria-hidden="true"><use href="#ic-activity"/></svg>
+      <span>Activity</span><span class="tab-badge" id="tab-badge-activity"></span>
+    </button>
+    <button class="tab" data-tab="account">
+      <svg aria-hidden="true"><use href="#ic-account"/></svg><span>Account</span>
+    </button>
+  </nav>
 </section>
+
+<div class="sheet-scrim" id="sheet-scrim">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <div class="sheet-grip"></div>
+    <div class="sheet-title" id="sheet-title"></div>
+    <div id="sheet-content"></div>
+    <div class="sheet-actions" id="sheet-actions"></div>
+  </div>
+</div>
 
 <div class="toast-host" id="toast-host" aria-live="polite"></div>
 
@@ -265,5 +465,6 @@
 <script src="js/db.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/auth.js"></script>
+<script src="js/shell.js"></script>
 </body>
 </html>

@@ -18,19 +18,34 @@ window.SW = window.SW || {};
 
   /* ======================= routing ==================================== */
 
-  const PUBLIC = ['login', 'signup', 'verify', 'forgot', 'forgot-sent', 'reset'];
+  const AUTH_SCREENS = ['login', 'signup', 'verify', 'forgot', 'forgot-sent', 'reset'];
+  const APP_VIEWS = ['friends', 'groups', 'activity', 'account'];
+  const DEFAULT_VIEW = 'friends';
 
-  SW.navigate = function (screen, opts) {
+  SW.APP_VIEWS = APP_VIEWS;
+
+  // One route namespace covers both worlds: an auth screen name, or an app
+  // view name (which implies the 'app' screen).
+  SW.navigate = function (route, opts) {
     const replace = opts && opts.replace;
-    const target = '#/' + screen;
+    const target = '#/' + route;
     if (window.location.hash !== target) {
       if (replace) window.history.replaceState(null, '', target);
       else window.location.hash = target;
     }
-    SW.show(screen);
+    render(route);
   };
 
-  function screenFromHash() {
+  function render(route) {
+    if (APP_VIEWS.includes(route)) {
+      SW.show('app');
+      if (SW.showView) SW.showView(route);
+    } else {
+      SW.show(route);
+    }
+  }
+
+  function routeFromHash() {
     const h = window.location.hash || '';
     // An auth callback hash is not a route.
     if (h.includes('access_token') || h.includes('error_description')) return null;
@@ -39,13 +54,17 @@ window.SW = window.SW || {};
   }
 
   window.addEventListener('hashchange', function () {
-    const s = screenFromHash();
-    if (!s) return;
+    const r = routeFromHash();
+    if (!r) return;
     // Signed-in users have no business on the auth screens, and signed-out
     // users have no business in the app.
-    if (SW.session && PUBLIC.includes(s) && !recoveryMode) return SW.navigate('app', { replace: true });
-    if (!SW.session && s === 'app') return SW.navigate('login', { replace: true });
-    SW.show(s);
+    if (SW.session && AUTH_SCREENS.includes(r) && !recoveryMode) {
+      return SW.navigate(DEFAULT_VIEW, { replace: true });
+    }
+    if (!SW.session && APP_VIEWS.includes(r)) {
+      return SW.navigate('login', { replace: true });
+    }
+    render(r);
   });
 
   /* ======================= error messages ============================= */
@@ -100,18 +119,19 @@ window.SW = window.SW || {};
     if (!user) return;
 
     const profile = await loadProfile(user);
-    const name = (profile && profile.full_name) || (user.email || '').split('@')[0];
 
-    document.getElementById('app-greeting').textContent = 'Hey ' + name;
-    document.getElementById('app-who').textContent = (profile && profile.email) || user.email;
-    document.getElementById('app-avatar').textContent = (profile && profile.avatar_emoji) || '🙂';
-    document.getElementById('app-uid').textContent = 'user id · ' + user.id;
+    // A missing profile row means the signup trigger did not fire — surface
+    // it now rather than as a mystery empty screen in phase 3.
+    if (!profile) SW.toast('Your profile row is missing — re-run schema.sql', 'error');
 
-    // A missing profile row means the signup trigger did not fire — worth
-    // surfacing now rather than as a mystery empty screen in phase 3.
-    if (!profile) {
-      SW.toast('Your profile row is missing — re-run schema.sql', 'error');
-    }
+    SW.profile = profile || {
+      full_name: (user.email || '').split('@')[0],
+      email: user.email,
+      avatar_emoji: '🙂',
+    };
+    SW.user = user;
+
+    if (SW.onSignedIn) SW.onSignedIn();
   }
 
   /* ======================= sign up ==================================== */
@@ -309,17 +329,8 @@ window.SW = window.SW || {};
     recoveryMode = false;
     SW.toast('Password updated', 'ok');
 
-    if (SW.session) SW.navigate('app', { replace: true });
+    if (SW.session) SW.navigate(DEFAULT_VIEW, { replace: true });
     else SW.navigate('login', { replace: true });
-  });
-
-  /* ======================= log out ==================================== */
-
-  document.getElementById('app-logout').addEventListener('click', async function () {
-    SW.busy(this, true);
-    const { error } = await db.auth.signOut();
-    SW.busy(this, false);
-    if (error) return SW.toast(humanize(error), 'error');
   });
 
   /* ======================= session lifecycle ========================== */
@@ -341,15 +352,15 @@ window.SW = window.SW || {};
     }
 
     if (session && !recoveryMode) {
-      const s = screenFromHash();
-      if (!s || PUBLIC.includes(s)) SW.navigate('app', { replace: true });
+      const r = routeFromHash();
+      if (!r || AUTH_SCREENS.includes(r)) SW.navigate(DEFAULT_VIEW, { replace: true });
       renderApp();
     }
   });
 
   /* ======================= boot ======================================= */
 
-  (async function boot() {
+  async function boot() {
     // A dead or already-used email link comes back as an error in the hash.
     const errMatch = (SW.initialHash || '').match(/error_description=([^&]+)/);
     if (errMatch) {
@@ -367,13 +378,24 @@ window.SW = window.SW || {};
     if (recoveryMode) {
       SW.navigate('reset', { replace: true });
     } else if (SW.session) {
-      SW.navigate('app', { replace: true });
+      const r = routeFromHash();
+      SW.navigate(APP_VIEWS.includes(r) ? r : DEFAULT_VIEW, { replace: true });
       await renderApp();
     } else {
-      const s = screenFromHash();
-      SW.navigate(s && PUBLIC.includes(s) ? s : 'login', { replace: true });
+      const r = routeFromHash();
+      SW.navigate(r && AUTH_SCREENS.includes(r) ? r : 'login', { replace: true });
     }
 
     SW.hideBoot();
-  })();
+  }
+
+  // getSession() resolves on a microtask, which drains the moment this
+  // script's top level ends — before shell.js has executed. Booting then
+  // would find SW.showView and SW.onSignedIn still undefined and silently
+  // skip both. DOMContentLoaded fires only after every script has run.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
 })();
