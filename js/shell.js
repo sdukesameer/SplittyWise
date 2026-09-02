@@ -267,7 +267,8 @@ window.SW = window.SW || {};
 
     const { data, error } = await db
       .from('notifications')
-      .select('id, type, title, body, is_read, created_at')
+      .select('id, type, title, body, is_read, created_at, ' +
+              'actor_id, group_id, expense_id')
       .order('created_at', { ascending: false })
       .limit(60);
 
@@ -291,16 +292,20 @@ window.SW = window.SW || {};
 
     empty.hidden = true;
     list.innerHTML = shown.map(function (n) {
-      return '<div class="list-row" style="cursor:default">' +
-        '<div class="avatar" style="background:var(--surface-2)">' +
-          (TYPE_EMOJI[n.type] || '🔔') + '</div>' +
-        '<div class="row-main">' +
-          '<div class="row-title" style="font-size:15.5px;white-space:normal">' +
-            escapeHtml(n.title) + '</div>' +
-          '<div class="row-sub">' +
+      const target = activityTarget(n);
+      const tag = target ? 'button' : 'div';
+      return '<' + tag + ' class="list-row"' +
+          (target ? ' data-goto="' + escapeHtml(target) + '"' : ' style="cursor:default"') + '>' +
+        '<span class="avatar" style="background:var(--surface-2)">' +
+          (TYPE_EMOJI[n.type] || '🔔') + '</span>' +
+        '<span class="row-main">' +
+          '<span class="row-title" style="font-size:15.5px;white-space:normal">' +
+            escapeHtml(n.title) + '</span>' +
+          '<span class="row-sub">' +
             (n.body ? escapeHtml(n.body) + ' · ' : '') + timeAgo(n.created_at) +
-          '</div>' +
-        '</div></div>';
+            (target ? ' · tap to open' : '') +
+          '</span>' +
+        '</span></' + tag + '>';
     }).join('');
 
     // Opening the tab is the read receipt.
@@ -750,6 +755,23 @@ window.SW = window.SW || {};
   SW.escapeHtml = escapeHtml;
 
   /* ======================= signed-in hook ============================= */
+
+  // Where a notification leads. Most specific first: the expense it is
+  // about, else the group, else the person who did it.
+  function activityTarget(n) {
+    if (n.expense_id) return 'expense/' + n.expense_id;
+    if (n.group_id) return 'group/' + n.group_id;
+    if (n.actor_id && n.actor_id !== SW.user.id &&
+        SW.ledger && SW.ledger.friendIds.indexOf(n.actor_id) > -1) {
+      return 'friend/' + n.actor_id;
+    }
+    return null;
+  }
+
+  document.getElementById('activity-list').addEventListener('click', function (e) {
+    const row = e.target.closest('[data-goto]');
+    if (row) SW.navigate(row.getAttribute('data-goto'));
+  });
 
   SW.viewHooks.activity = function () { loadActivity(); };
   SW.viewHooks.account = function () { renderAccount(); renderPrefs(); syncLock(); };

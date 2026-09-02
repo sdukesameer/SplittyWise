@@ -314,12 +314,41 @@ create index if not exists idx_notif_user_unread   on public.notifications(user_
 
 -- ============================================================================
 --  3. SECURITY-DEFINER HELPERS
+--
+--  These live in `sw`, not `public`, because `public` is the schema the REST
+--  API exposes. In `public` they were callable at /rest/v1/rpc/... by the
+--  anon role, and none of them checks who is asking — they cannot, since RLS
+--  policies call them. So `are_friends(a, b)` was a way for anyone, signed
+--  in or not, to probe who knows whom.
+--
+--  Policies reference them schema-qualified, so nothing depends on
+--  search_path.
+-- ============================================================================
+
+create schema if not exists sw;
+grant usage on schema sw to authenticated;
+
+-- Older runs put these in `public`. Drop them there so the exposed schema
+-- stops carrying a copy.
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as sig
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname in ('is_group_member','is_group_owner','are_friends',
+                        'group_peers','has_split','can_see_expense','can_see_profile')
+  loop
+    execute 'drop function ' || r.sig || ' cascade';
+  end loop;
+end $$;
 --  These exist so RLS policies can ask "is this person in that group?" without
 --  re-entering the policy they were called from (Postgres RLS recursion).
 --  Each is STABLE and pins search_path.
 -- ============================================================================
 
-create or replace function public.is_group_member(gid uuid, uid uuid)
+create or replace function sw.is_group_member(gid uuid, uid uuid)
 returns boolean language sql security definer stable set search_path = public as $$
   select exists (
     select 1 from public.group_members gm
@@ -327,7 +356,7 @@ returns boolean language sql security definer stable set search_path = public as
   );
 $$;
 
-create or replace function public.is_group_owner(gid uuid, uid uuid)
+create or replace function sw.is_group_owner(gid uuid, uid uuid)
 returns boolean language sql security definer stable set search_path = public as $$
   select exists (
     select 1 from public.groups g
@@ -335,7 +364,7 @@ returns boolean language sql security definer stable set search_path = public as
   );
 $$;
 
-create or replace function public.are_friends(a uuid, b uuid)
+create or replace function sw.are_friends(a uuid, b uuid)
 returns boolean language sql security definer stable set search_path = public as $$
   select exists (
     select 1 from public.friendships f
@@ -344,7 +373,7 @@ returns boolean language sql security definer stable set search_path = public as
 $$;
 
 -- Everyone who shares at least one group with uid (includes uid itself).
-create or replace function public.group_peers(uid uuid)
+create or replace function sw.group_peers(uid uuid)
 returns setof uuid language sql security definer stable set search_path = public as $$
   select distinct gm2.user_id
   from public.group_members gm1
@@ -352,7 +381,7 @@ returns setof uuid language sql security definer stable set search_path = public
   where gm1.user_id = uid;
 $$;
 
-create or replace function public.has_split(eid uuid, uid uuid)
+create or replace function sw.has_split(eid uuid, uid uuid)
 returns boolean language sql security definer stable set search_path = public as $$
   select exists (
     select 1 from public.expense_splits s
@@ -360,26 +389,26 @@ returns boolean language sql security definer stable set search_path = public as
   );
 $$;
 
-create or replace function public.can_see_expense(eid uuid, uid uuid)
+create or replace function sw.can_see_expense(eid uuid, uid uuid)
 returns boolean language sql security definer stable set search_path = public as $$
   select exists (
     select 1 from public.expenses e
     where e.id = eid and (
          e.payer_id   = uid
       or e.created_by = uid
-      or (e.group_id is not null and public.is_group_member(e.group_id, uid))
-      or public.has_split(e.id, uid)
+      or (e.group_id is not null and sw.is_group_member(e.group_id, uid))
+      or sw.has_split(e.id, uid)
     )
   );
 $$;
 
 -- You may read a profile only if it is yours, a friend's, or a co-member's.
 -- This is what stops the app from being an email-directory of every signup.
-create or replace function public.can_see_profile(target uuid, uid uuid)
+create or replace function sw.can_see_profile(target uuid, uid uuid)
 returns boolean language sql security definer stable set search_path = public as $$
   select target = uid
-      or public.are_friends(uid, target)
-      or exists (select 1 from public.group_peers(uid) p where p = target);
+      or sw.are_friends(uid, target)
+      or exists (select 1 from sw.group_peers(uid) p where p = target);
 $$;
 
 -- ============================================================================
@@ -407,96 +436,96 @@ alter table public.notifications  enable row level security;
 drop policy if exists profiles_select on public.profiles;
 create policy profiles_select on public.profiles
   for select to authenticated
-  using (public.can_see_profile(id, auth.uid()));
+  using (sw.can_see_profile(id, (select auth.uid())));
 
 drop policy if exists profiles_update on public.profiles;
 create policy profiles_update on public.profiles
   for update to authenticated
-  using (id = auth.uid()) with check (id = auth.uid());
+  using (id = (select auth.uid())) with check (id = (select auth.uid()));
 
 -- ---- friendships -----------------------------------------------------------
 drop policy if exists friendships_select on public.friendships;
 create policy friendships_select on public.friendships
   for select to authenticated
-  using (auth.uid() in (user_a, user_b));
+  using ((select auth.uid()) in (user_a, user_b));
 
 drop policy if exists friendships_insert on public.friendships;
 create policy friendships_insert on public.friendships
   for insert to authenticated
-  with check (created_by = auth.uid() and auth.uid() in (user_a, user_b));
+  with check (created_by = (select auth.uid()) and (select auth.uid()) in (user_a, user_b));
 
 drop policy if exists friendships_delete on public.friendships;
 create policy friendships_delete on public.friendships
   for delete to authenticated
-  using (auth.uid() in (user_a, user_b));
+  using ((select auth.uid()) in (user_a, user_b));
 
 -- ---- groups ----------------------------------------------------------------
 drop policy if exists groups_select on public.groups;
 create policy groups_select on public.groups
   for select to authenticated
-  using (created_by = auth.uid() or public.is_group_member(id, auth.uid()));
+  using (created_by = (select auth.uid()) or sw.is_group_member(id, (select auth.uid())));
 
 drop policy if exists groups_insert on public.groups;
 create policy groups_insert on public.groups
   for insert to authenticated
-  with check (created_by = auth.uid());
+  with check (created_by = (select auth.uid()));
 
 drop policy if exists groups_update on public.groups;
 create policy groups_update on public.groups
   for update to authenticated
-  using (public.is_group_member(id, auth.uid()))
-  with check (public.is_group_member(id, auth.uid()));
+  using (sw.is_group_member(id, (select auth.uid())))
+  with check (sw.is_group_member(id, (select auth.uid())));
 
 drop policy if exists groups_delete on public.groups;
 create policy groups_delete on public.groups
   for delete to authenticated
-  using (created_by = auth.uid());
+  using (created_by = (select auth.uid()));
 
 -- ---- group_members ---------------------------------------------------------
 drop policy if exists group_members_select on public.group_members;
 create policy group_members_select on public.group_members
   for select to authenticated
-  using (public.is_group_member(group_id, auth.uid())
-      or public.is_group_owner(group_id, auth.uid()));
+  using (sw.is_group_member(group_id, (select auth.uid()))
+      or sw.is_group_owner(group_id, (select auth.uid())));
 
 -- Any member can add another member (Splitwise behaviour); the group creator
 -- can seed the first row (themselves) before any membership exists.
 drop policy if exists group_members_insert on public.group_members;
 create policy group_members_insert on public.group_members
   for insert to authenticated
-  with check (public.is_group_member(group_id, auth.uid())
-           or public.is_group_owner(group_id, auth.uid()));
+  with check (sw.is_group_member(group_id, (select auth.uid()))
+           or sw.is_group_owner(group_id, (select auth.uid())));
 
 -- Your own membership row is yours to change — that is where your personal
 -- default split mode for the group lives.
 drop policy if exists group_members_update on public.group_members;
 create policy group_members_update on public.group_members
   for update to authenticated
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
 
 -- Leave a group yourself, or be removed by the owner.
 drop policy if exists group_members_delete on public.group_members;
 create policy group_members_delete on public.group_members
   for delete to authenticated
-  using (user_id = auth.uid() or public.is_group_owner(group_id, auth.uid()));
+  using (user_id = (select auth.uid()) or sw.is_group_owner(group_id, (select auth.uid())));
 
 -- ---- expenses --------------------------------------------------------------
 drop policy if exists expenses_select on public.expenses;
 create policy expenses_select on public.expenses
   for select to authenticated
   using (
-       payer_id   = auth.uid()
-    or created_by = auth.uid()
-    or (group_id is not null and public.is_group_member(group_id, auth.uid()))
-    or public.has_split(id, auth.uid())
+       payer_id   = (select auth.uid())
+    or created_by = (select auth.uid())
+    or (group_id is not null and sw.is_group_member(group_id, (select auth.uid())))
+    or sw.has_split(id, (select auth.uid()))
   );
 
 drop policy if exists expenses_insert on public.expenses;
 create policy expenses_insert on public.expenses
   for insert to authenticated
   with check (
-    created_by = auth.uid()
-    and (group_id is null or public.is_group_member(group_id, auth.uid()))
+    created_by = (select auth.uid())
+    and (group_id is null or sw.is_group_member(group_id, (select auth.uid())))
   );
 
 -- Anyone who can see a group expense can correct it, matching Splitwise.
@@ -505,44 +534,66 @@ drop policy if exists expenses_update on public.expenses;
 create policy expenses_update on public.expenses
   for update to authenticated
   using (
-       created_by = auth.uid()
-    or payer_id   = auth.uid()
-    or (group_id is not null and public.is_group_member(group_id, auth.uid()))
-    or public.has_split(id, auth.uid())
+       created_by = (select auth.uid())
+    or payer_id   = (select auth.uid())
+    or (group_id is not null and sw.is_group_member(group_id, (select auth.uid())))
+    or sw.has_split(id, (select auth.uid()))
   );
 
 drop policy if exists expenses_delete on public.expenses;
 create policy expenses_delete on public.expenses
   for delete to authenticated
   using (
-       created_by = auth.uid()
-    or payer_id   = auth.uid()
-    or (group_id is not null and public.is_group_member(group_id, auth.uid()))
+       created_by = (select auth.uid())
+    or payer_id   = (select auth.uid())
+    or (group_id is not null and sw.is_group_member(group_id, (select auth.uid())))
   );
 
 -- ---- expense_splits --------------------------------------------------------
 drop policy if exists splits_select on public.expense_splits;
 create policy splits_select on public.expense_splits
   for select to authenticated
-  using (user_id = auth.uid() or public.can_see_expense(expense_id, auth.uid()));
+  using (user_id = (select auth.uid()) or sw.can_see_expense(expense_id, (select auth.uid())));
 
+-- Named per action rather than FOR ALL: a FOR ALL policy also covers
+-- SELECT, so it stacked with splits_select and both ran on every read.
 drop policy if exists splits_write on public.expense_splits;
-create policy splits_write on public.expense_splits
-  for all to authenticated
-  using (public.can_see_expense(expense_id, auth.uid()))
-  with check (public.can_see_expense(expense_id, auth.uid()));
+drop policy if exists splits_write_insert on public.expense_splits;
+create policy splits_write_insert on public.expense_splits
+  for insert to authenticated
+  with check (sw.can_see_expense(expense_id, (select auth.uid())));
+
+drop policy if exists splits_write_update on public.expense_splits;
+create policy splits_write_update on public.expense_splits
+  for update to authenticated
+  using (sw.can_see_expense(expense_id, (select auth.uid()))) with check (sw.can_see_expense(expense_id, (select auth.uid())));
+
+drop policy if exists splits_write_delete on public.expense_splits;
+create policy splits_write_delete on public.expense_splits
+  for delete to authenticated
+  using (sw.can_see_expense(expense_id, (select auth.uid())));
 
 -- ---- expense_payers --------------------------------------------------------
 drop policy if exists payers_select on public.expense_payers;
 create policy payers_select on public.expense_payers
   for select to authenticated
-  using (user_id = auth.uid() or public.can_see_expense(expense_id, auth.uid()));
+  using (user_id = (select auth.uid()) or sw.can_see_expense(expense_id, (select auth.uid())));
 
 drop policy if exists payers_write on public.expense_payers;
-create policy payers_write on public.expense_payers
-  for all to authenticated
-  using (public.can_see_expense(expense_id, auth.uid()))
-  with check (public.can_see_expense(expense_id, auth.uid()));
+drop policy if exists payers_write_insert on public.expense_payers;
+create policy payers_write_insert on public.expense_payers
+  for insert to authenticated
+  with check (sw.can_see_expense(expense_id, (select auth.uid())));
+
+drop policy if exists payers_write_update on public.expense_payers;
+create policy payers_write_update on public.expense_payers
+  for update to authenticated
+  using (sw.can_see_expense(expense_id, (select auth.uid()))) with check (sw.can_see_expense(expense_id, (select auth.uid())));
+
+drop policy if exists payers_write_delete on public.expense_payers;
+create policy payers_write_delete on public.expense_payers
+  for delete to authenticated
+  using (sw.can_see_expense(expense_id, (select auth.uid())));
 
 -- ---- invites ---------------------------------------------------------------
 -- Only your own invites are listable. Redeeming goes through
@@ -550,15 +601,15 @@ create policy payers_write on public.expense_payers
 -- read the table and tokens cannot be enumerated.
 drop policy if exists invites_select on public.invites;
 create policy invites_select on public.invites
-  for select to authenticated using (created_by = auth.uid());
+  for select to authenticated using (created_by = (select auth.uid()));
 
 drop policy if exists invites_insert on public.invites;
 create policy invites_insert on public.invites
-  for insert to authenticated with check (created_by = auth.uid());
+  for insert to authenticated with check (created_by = (select auth.uid()));
 
 drop policy if exists invites_delete on public.invites;
 create policy invites_delete on public.invites
-  for delete to authenticated using (created_by = auth.uid());
+  for delete to authenticated using (created_by = (select auth.uid()));
 
 -- ---- recurring_expenses ----------------------------------------------------
 -- Visible to whoever set it up and to anyone in the group it posts into, so
@@ -567,27 +618,27 @@ drop policy if exists recurring_select on public.recurring_expenses;
 create policy recurring_select on public.recurring_expenses
   for select to authenticated
   using (
-    created_by = auth.uid()
-    or payer_id = auth.uid()
-    or (group_id is not null and public.is_group_member(group_id, auth.uid()))
+    created_by = (select auth.uid())
+    or payer_id = (select auth.uid())
+    or (group_id is not null and sw.is_group_member(group_id, (select auth.uid())))
   );
 
 drop policy if exists recurring_insert on public.recurring_expenses;
 create policy recurring_insert on public.recurring_expenses
   for insert to authenticated
   with check (
-    created_by = auth.uid()
-    and (group_id is null or public.is_group_member(group_id, auth.uid()))
+    created_by = (select auth.uid())
+    and (group_id is null or sw.is_group_member(group_id, (select auth.uid())))
   );
 
 drop policy if exists recurring_update on public.recurring_expenses;
 create policy recurring_update on public.recurring_expenses
   for update to authenticated
-  using (created_by = auth.uid()) with check (created_by = auth.uid());
+  using (created_by = (select auth.uid())) with check (created_by = (select auth.uid()));
 
 drop policy if exists recurring_delete on public.recurring_expenses;
 create policy recurring_delete on public.recurring_expenses
-  for delete to authenticated using (created_by = auth.uid());
+  for delete to authenticated using (created_by = (select auth.uid()));
 
 -- ---- expense_comments ------------------------------------------------------
 -- Anyone who can see the expense can read and add to the conversation, but
@@ -595,77 +646,77 @@ create policy recurring_delete on public.recurring_expenses
 drop policy if exists comments_select on public.expense_comments;
 create policy comments_select on public.expense_comments
   for select to authenticated
-  using (public.can_see_expense(expense_id, auth.uid()));
+  using (sw.can_see_expense(expense_id, (select auth.uid())));
 
 drop policy if exists comments_insert on public.expense_comments;
 create policy comments_insert on public.expense_comments
   for insert to authenticated
-  with check (author_id = auth.uid() and public.can_see_expense(expense_id, auth.uid()));
+  with check (author_id = (select auth.uid()) and sw.can_see_expense(expense_id, (select auth.uid())));
 
 drop policy if exists comments_delete on public.expense_comments;
 create policy comments_delete on public.expense_comments
-  for delete to authenticated using (author_id = auth.uid());
+  for delete to authenticated using (author_id = (select auth.uid()));
 
 -- ---- user_categories -------------------------------------------------------
 -- Entirely private: a budget is nobody else's business, even inside a group.
 drop policy if exists categories_all on public.user_categories;
 create policy categories_all on public.user_categories
   for all to authenticated
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
 
 -- ---- nicknames and presets -------------------------------------------------
 -- Both are entirely yours; nobody else can read either.
 drop policy if exists nicknames_all on public.nicknames;
 create policy nicknames_all on public.nicknames
   for all to authenticated
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
 
 drop policy if exists presets_all on public.split_presets;
 create policy presets_all on public.split_presets
   for all to authenticated
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
 
 -- ---- expense_history -------------------------------------------------------
 -- Readable by anyone who can see the expense; written only by update_expense.
 drop policy if exists history_select on public.expense_history;
 create policy history_select on public.expense_history
   for select to authenticated
-  using (public.can_see_expense(expense_id, auth.uid()));
+  using (sw.can_see_expense(expense_id, (select auth.uid())));
 
 -- ---- settlements -----------------------------------------------------------
 drop policy if exists settlements_select on public.settlements;
 create policy settlements_select on public.settlements
   for select to authenticated
   using (
-       auth.uid() in (from_user, to_user)
-    or (group_id is not null and public.is_group_member(group_id, auth.uid()))
+       (select auth.uid()) in (from_user, to_user)
+    or (group_id is not null and sw.is_group_member(group_id, (select auth.uid())))
   );
 
 drop policy if exists settlements_insert on public.settlements;
 create policy settlements_insert on public.settlements
   for insert to authenticated
-  with check (created_by = auth.uid() and auth.uid() in (from_user, to_user));
+  with check (created_by = (select auth.uid()) and (select auth.uid()) in (from_user, to_user));
 
 drop policy if exists settlements_delete on public.settlements;
 create policy settlements_delete on public.settlements
   for delete to authenticated
-  using (created_by = auth.uid() or auth.uid() in (from_user, to_user));
+  using (created_by = (select auth.uid()) or (select auth.uid()) in (from_user, to_user));
 
 -- ---- notifications ---------------------------------------------------------
 -- Read/flag your own only. Rows for OTHER people are written exclusively by
 -- the security-definer functions below, never by the client.
 drop policy if exists notifications_select on public.notifications;
 create policy notifications_select on public.notifications
-  for select to authenticated using (user_id = auth.uid());
+  for select to authenticated using (user_id = (select auth.uid()));
 
 drop policy if exists notifications_update on public.notifications;
 create policy notifications_update on public.notifications
   for update to authenticated
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
 
 drop policy if exists notifications_delete on public.notifications;
 create policy notifications_delete on public.notifications
-  for delete to authenticated using (user_id = auth.uid());
+  for delete to authenticated using (user_id = (select auth.uid()));
 
 -- ============================================================================
 --  5. SIGNUP HOOK — mirror auth.users into profiles
@@ -714,7 +765,7 @@ begin
 
   if target.id is null then return json_build_object('ok', false, 'error', 'no_user'); end if;
   if target.id = me   then return json_build_object('ok', false, 'error', 'self');    end if;
-  if public.are_friends(me, target.id) then
+  if sw.are_friends(me, target.id) then
     return json_build_object('ok', false, 'error', 'already');
   end if;
 
@@ -778,14 +829,14 @@ declare
   target   public.profiles;
 begin
   if me is null then raise exception 'Not authenticated'; end if;
-  if not public.is_group_member(p_group_id, me) then
+  if not sw.is_group_member(p_group_id, me) then
     raise exception 'You are not a member of this group';
   end if;
 
   select * into target from public.profiles where email = lower(trim(p_email));
   if target.id is null then return json_build_object('ok', false, 'error', 'no_user'); end if;
 
-  if public.is_group_member(p_group_id, target.id) then
+  if sw.is_group_member(p_group_id, target.id) then
     return json_build_object('ok', false, 'error', 'already');
   end if;
 
@@ -793,7 +844,7 @@ begin
 
   -- Sharing a group implies knowing each other, so mirror Splitwise and
   -- auto-friend them. Keeps 1:1 balances reachable after the group is gone.
-  if target.id <> me and not public.are_friends(me, target.id) then
+  if target.id <> me and not sw.are_friends(me, target.id) then
     insert into public.friendships (user_a, user_b, created_by)
     values (least(me, target.id), greatest(me, target.id), me)
     on conflict do nothing;
@@ -830,7 +881,7 @@ declare
   skipped  int := 0;
 begin
   if me is null then raise exception 'Not authenticated'; end if;
-  if not public.is_group_member(p_group_id, me) then
+  if not sw.is_group_member(p_group_id, me) then
     raise exception 'You are not a member of this group';
   end if;
 
@@ -842,9 +893,9 @@ begin
     -- Only people you already know: a friend, or someone already sharing a
     -- group with you. Otherwise this would be a way to pull in strangers.
     if uid = me
-       or public.is_group_member(p_group_id, uid)
-       or not (public.are_friends(me, uid)
-               or exists (select 1 from public.group_peers(me) g where g = uid))
+       or sw.is_group_member(p_group_id, uid)
+       or not (sw.are_friends(me, uid)
+               or exists (select 1 from sw.group_peers(me) g where g = uid))
     then
       skipped := skipped + 1;
       continue;
@@ -853,7 +904,7 @@ begin
     insert into public.group_members (group_id, user_id) values (p_group_id, uid)
     on conflict do nothing;
 
-    if not public.are_friends(me, uid) then
+    if not sw.are_friends(me, uid) then
       insert into public.friendships (user_a, user_b, created_by)
       values (least(me, uid), greatest(me, uid), me)
       on conflict do nothing;
@@ -884,7 +935,7 @@ declare
 begin
   if me is null then raise exception 'Not authenticated'; end if;
 
-  if p_group_id is not null and not public.is_group_member(p_group_id, me) then
+  if p_group_id is not null and not sw.is_group_member(p_group_id, me) then
     raise exception 'You are not a member of this group';
   end if;
 
@@ -928,13 +979,13 @@ begin
   select * into inviter from public.profiles where id = inv.created_by;
   select full_name into my_name from public.profiles where id = me;
 
-  if not public.are_friends(me, inv.created_by) then
+  if not sw.are_friends(me, inv.created_by) then
     insert into public.friendships (user_a, user_b, created_by)
     values (least(me, inv.created_by), greatest(me, inv.created_by), inv.created_by)
     on conflict do nothing;
   end if;
 
-  if inv.group_id is not null and not public.is_group_member(inv.group_id, me) then
+  if inv.group_id is not null and not sw.is_group_member(inv.group_id, me) then
     insert into public.group_members (group_id, user_id) values (inv.group_id, me)
     on conflict do nothing;
     select name into gname from public.groups where id = inv.group_id;
@@ -1057,7 +1108,7 @@ begin
 
   -- ---- authorisation -------------------------------------------------------
   if p_group_id is not null then
-    if not public.is_group_member(p_group_id, me) then
+    if not sw.is_group_member(p_group_id, me) then
       raise exception 'You are not a member of this group';
     end if;
     select u into bad from (
@@ -1065,7 +1116,7 @@ begin
       union
       select (s->>'user_id')::uuid from jsonb_array_elements(payers) s
     ) everyone
-    where not public.is_group_member(p_group_id, u)
+    where not sw.is_group_member(p_group_id, u)
     limit 1;
     if bad is not null then
       raise exception 'User % is not a member of this group', bad;
@@ -1076,7 +1127,7 @@ begin
       union
       select (s->>'user_id')::uuid from jsonb_array_elements(payers) s
     ) everyone
-    where u <> me and not public.are_friends(me, u)
+    where u <> me and not sw.are_friends(me, u)
     limit 1;
     if bad is not null then
       raise exception 'User % is not one of your friends', bad;
@@ -1173,7 +1224,7 @@ declare
   diff        jsonb := '{}'::jsonb;
 begin
   if me is null then raise exception 'Not authenticated'; end if;
-  if not public.can_see_expense(p_expense_id, me) then
+  if not sw.can_see_expense(p_expense_id, me) then
     raise exception 'You cannot edit this expense';
   end if;
 
@@ -1220,7 +1271,7 @@ begin
 
   -- ---- authorisation, same rules as creating one ---------------------------
   if p_group_id is not null then
-    if not public.is_group_member(p_group_id, me) then
+    if not sw.is_group_member(p_group_id, me) then
       raise exception 'You are not a member of this group';
     end if;
     select u into bad from (
@@ -1228,7 +1279,7 @@ begin
       union
       select (s->>'user_id')::uuid from jsonb_array_elements(payers) s
     ) everyone
-    where not public.is_group_member(p_group_id, u)
+    where not sw.is_group_member(p_group_id, u)
     limit 1;
     if bad is not null then
       raise exception 'User % is not a member of this group', bad;
@@ -1239,7 +1290,7 @@ begin
       union
       select (s->>'user_id')::uuid from jsonb_array_elements(payers) s
     ) everyone
-    where u <> me and not public.are_friends(me, u)
+    where u <> me and not sw.are_friends(me, u)
     limit 1;
     if bad is not null then
       raise exception 'User % is not one of your friends', bad;
@@ -1436,8 +1487,12 @@ begin
 end $$;
 
 -- Fires BEFORE the row goes, so the splits are still there to tell.
--- expense_id is deliberately left null: notifications cascade from expenses,
--- so a notification about a deletion would delete itself.
+--
+-- Neither expense_id nor group_id is set on the notification. Both columns
+-- cascade, so a notification about a deletion would either delete itself or,
+-- when a whole group goes, reference a group row that is being removed in
+-- the same statement — which is a foreign key violation and surfaces as a
+-- 409 from the API. The group's name is in the body text instead.
 create or replace function public.notify_expense_deleted()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare
@@ -1447,16 +1502,24 @@ declare
 begin
   if me is null then return old; end if;
 
+  -- Deleting a group cascades to every expense in it. One notification per
+  -- expense would be noise, and notify_group_deleted has already said the
+  -- group is gone, so stay quiet for those.
+  if old.group_id is not null
+     and current_setting('splittywise.deleting_group', true) = old.group_id::text
+  then
+    return old;
+  end if;
+
   select full_name into actor_name from public.profiles where id = me;
   if old.group_id is not null then
     select name into gname from public.groups where id = old.group_id;
   end if;
 
-  insert into public.notifications (user_id, actor_id, type, title, body, group_id)
+  insert into public.notifications (user_id, actor_id, type, title, body)
   select sp.user_id, me, 'expense_deleted',
          coalesce(actor_name, 'Someone') || ' deleted "' || old.description || '"',
-         '₹' || to_char(old.amount, 'FM999999990.00') || coalesce(' in ' || gname, ''),
-         old.group_id
+         '₹' || to_char(old.amount, 'FM999999990.00') || coalesce(' in ' || gname, '')
   from public.expense_splits sp
   where sp.expense_id = old.id and sp.user_id <> me;
 
@@ -1491,6 +1554,10 @@ declare
   me          uuid := auth.uid();
   actor_name  text;
 begin
+  -- Transaction-local, and read by notify_expense_deleted so the cascade
+  -- does not emit one notification per expense in the group.
+  perform set_config('splittywise.deleting_group', old.id::text, true);
+
   select full_name into actor_name from public.profiles where id = me;
 
   insert into public.notifications (user_id, actor_id, type, title, body)
@@ -1563,8 +1630,8 @@ begin
   if p_user_id = me then
     return json_build_object('ok', false, 'error', 'self');
   end if;
-  if not (public.are_friends(me, p_user_id)
-          or exists (select 1 from public.group_peers(me) g where g = p_user_id)) then
+  if not (sw.are_friends(me, p_user_id)
+          or exists (select 1 from sw.group_peers(me) g where g = p_user_id)) then
     return json_build_object('ok', false, 'error', 'stranger');
   end if;
 
@@ -1604,7 +1671,7 @@ declare
   gname       text;
 begin
   if me is null then raise exception 'Not authenticated'; end if;
-  if not public.can_see_expense(p_expense_id, me) then
+  if not sw.can_see_expense(p_expense_id, me) then
     raise exception 'You cannot change this expense';
   end if;
 
@@ -1720,7 +1787,7 @@ create policy avatars_insert on storage.objects
   for insert to authenticated
   with check (
     bucket_id = 'avatars'
-    and (storage.foldername(name))[1] = auth.uid()::text
+    and (storage.foldername(name))[1] = (select auth.uid())::text
   );
 
 drop policy if exists avatars_select on storage.objects;
@@ -1732,7 +1799,7 @@ create policy avatars_delete on storage.objects
   for delete to authenticated
   using (
     bucket_id = 'avatars'
-    and (storage.foldername(name))[1] = auth.uid()::text
+    and (storage.foldername(name))[1] = (select auth.uid())::text
   );
 
 do $$
@@ -1750,7 +1817,7 @@ create policy covers_insert on storage.objects
   for insert to authenticated
   with check (
     bucket_id = 'covers'
-    and (storage.foldername(name))[1] = auth.uid()::text
+    and (storage.foldername(name))[1] = (select auth.uid())::text
   );
 
 drop policy if exists covers_select on storage.objects;
@@ -1763,12 +1830,29 @@ create policy covers_delete on storage.objects
   for delete to authenticated
   using (
     bucket_id = 'covers'
-    and (storage.foldername(name))[1] = auth.uid()::text
+    and (storage.foldername(name))[1] = (select auth.uid())::text
   );
 
 -- ============================================================================
 --  12. GRANTS
+--
+--  Postgres grants EXECUTE on a new function to PUBLIC by default, which is
+--  how every one of these became callable by the anon role. Revoked first,
+--  then granted to `authenticated` only.
 -- ============================================================================
+
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as sig, n.nspname
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname in ('public', 'sw') and p.prokind = 'f'
+  loop
+    execute 'revoke all on function ' || r.sig || ' from public';
+    execute 'revoke all on function ' || r.sig || ' from anon';
+  end loop;
+end $$;
 
 grant execute on function public.add_friend_by_email(text)              to authenticated;
 grant execute on function public.create_group(text, text, text)         to authenticated;
@@ -1788,13 +1872,13 @@ grant execute on function public.update_expense(
   uuid, numeric, text, jsonb, uuid, uuid, text, text, text, date, text, jsonb) to authenticated;
 
 -- Helpers are called from policies, so authenticated needs execute on them.
-grant execute on function public.is_group_member(uuid, uuid)  to authenticated;
-grant execute on function public.is_group_owner(uuid, uuid)   to authenticated;
-grant execute on function public.are_friends(uuid, uuid)      to authenticated;
-grant execute on function public.group_peers(uuid)            to authenticated;
-grant execute on function public.has_split(uuid, uuid)        to authenticated;
-grant execute on function public.can_see_expense(uuid, uuid)  to authenticated;
-grant execute on function public.can_see_profile(uuid, uuid)  to authenticated;
+grant execute on function sw.is_group_member(uuid, uuid)  to authenticated;
+grant execute on function sw.is_group_owner(uuid, uuid)   to authenticated;
+grant execute on function sw.are_friends(uuid, uuid)      to authenticated;
+grant execute on function sw.group_peers(uuid)            to authenticated;
+grant execute on function sw.has_split(uuid, uuid)        to authenticated;
+grant execute on function sw.can_see_expense(uuid, uuid)  to authenticated;
+grant execute on function sw.can_see_profile(uuid, uuid)  to authenticated;
 
 -- ============================================================================
 --  13. REALTIME

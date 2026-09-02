@@ -132,7 +132,11 @@ window.SW = window.SW || {};
   async function loadProfile(user) {
     const { data, error } = await db
       .from('profiles')
-      .select('full_name, email, avatar_emoji')
+      // Every column the app reads off SW.profile has to be here. Three of
+      // them were missing, so a saved photo, UPI ID, notification
+      // preferences and hidden form rows all silently reverted on reopen.
+      .select('full_name, email, avatar_emoji, avatar_path, upi_id, ' +
+              'notify_prefs, ui_prefs')
       .eq('id', user.id)
       .maybeSingle();
 
@@ -157,6 +161,10 @@ window.SW = window.SW || {};
       full_name: (user.email || '').split('@')[0],
       email: user.email,
       avatar_emoji: '🙂',
+      avatar_path: null,
+      upi_id: null,
+      notify_prefs: {},
+      ui_prefs: {},
     };
     SW.user = user;
 

@@ -134,6 +134,57 @@ console.log('  ' + Object.keys(sigOf).length + ' functions defined');
 check('no direct delete from the storage tables',
   !/delete\s+from\s+storage\./i.test(schema));
 
+/* ---------------- 1b2. the profile select covers what is read ------------- */
+
+// A column that exists in the schema but is not in the select list reads as
+// undefined, which looks exactly like "the user never set it". That is how a
+// saved photo, UPI ID and both preference blobs reverted on every reopen.
+console.log('\n--- profile columns ---');
+const profileSelect = (js['js/auth.js'].match(
+  /from\('profiles'\)[\s\S]{0,400}?\.select\(((?:\s*'[^']*'\s*\+?)+)\)/) || [, ''])[1]
+  .replace(/'\s*\+\s*'/g, '').replace(/'/g, '');
+const selected = new Set(profileSelect.split(',').map(x => x.trim()).filter(Boolean));
+
+const readCols = new Set();
+for (const src of Object.values(js)) {
+  for (const m of src.matchAll(/SW\.profile(?:\s*\|\|\s*\{\})?\)?\.([a-z_]+)/g)) {
+    readCols.add(m[1]);
+  }
+}
+// Read off the local `p` alias in renderAccount too.
+for (const m of (js['js/shell.js'] || '').matchAll(/\bp\.(avatar_path|upi_id|notify_prefs|ui_prefs|avatar_emoji|full_name|email)\b/g)) {
+  readCols.add(m[1]);
+}
+const notSelected = [...readCols].filter(c => !selected.has(c));
+check('every profile column the app reads is selected',
+  notSelected.length === 0, notSelected);
+console.log('  selects ' + selected.size + ', reads ' + readCols.size);
+
+/* ---------------- 1c. delete triggers cannot reference cascading rows ------- */
+
+// notifications.expense_id and .group_id both cascade. A BEFORE DELETE
+// trigger that writes either one references a row being removed in the same
+// statement, which is a foreign key violation and reaches the client as a
+// 409. This is what broke deleting a group that had expenses in it.
+console.log('\n--- delete triggers ---');
+const deleteTriggerFns = [];
+for (const m of schema.matchAll(
+    /create trigger \w+\s+before delete on public\.\w+\s+for each row execute function public\.(\w+)\(\)/g)) {
+  deleteTriggerFns.push(m[1]);
+}
+const cascadeRefs = [];
+for (const fn of deleteTriggerFns) {
+  const body = (schema.match(
+    new RegExp('create or replace function public\\.' + fn +
+               '\\(\\)[\\s\\S]*?\\nend \\$\\$;')) || [''])[0];
+  const insert = (body.match(/insert into public\.notifications\s*\(([^)]*)\)/) || [, ''])[1];
+  for (const col of ['group_id', 'expense_id']) {
+    if (insert.indexOf(col) > -1) cascadeRefs.push(fn + ' writes ' + col);
+  }
+}
+check(deleteTriggerFns.length + ' before-delete triggers, none writing a cascading column',
+  cascadeRefs.length === 0, cascadeRefs);
+
 /* ---------------- 2. every selected / written column exists ---------------- */
 
 console.log('\n--- columns the client touches ---');

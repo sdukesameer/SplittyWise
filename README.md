@@ -247,6 +247,26 @@ policies, that security-definer functions pin `search_path`, that the
 image buckets are private, that clients cannot write notifications for
 other people, and that every expense's splits sum to its total.
 
+It also runs from the CLI as one command:
+
+```bash
+./scripts/db audit        # 16 checks, every row must read PASS
+./scripts/db advisors     # Supabase's own linter
+```
+
+`advisors` will report about twenty findings of one kind — *Signed-In Users
+Can Execute SECURITY DEFINER Function* — and that is expected. Those
+functions **are** the app's API: `create_expense` has to be security definer
+so it can write a notification for somebody else, and each one authorises
+its caller on the first line. What matters is that nothing is callable
+*without* signing in, which is check 5 of the audit.
+
+The RLS helpers used to be part of that problem. They live in a private `sw`
+schema now, not `public`, because `public` is what the REST API exposes and
+none of them can check who is asking — RLS policies call them, so they have
+no caller to check. In `public`, `are_friends(a, b)` was a way for anyone at
+all to probe who knows whom.
+
 Worth re-running after any schema change, and occasionally in normal use.
 Check 8 catches ledger corruption that would otherwise be invisible, and
 checks 11 and 12 list anything in the database this app did not create —
@@ -371,11 +391,18 @@ find each other by email in this app, that matters.
 The app handles both. With confirmation on it shows a "check your email" screen
 with a resend button; with it off it goes straight to the app.
 
-### 4.3 Password policy
+### 4.3 Leaked password protection
+
+**Authentication → Sign In / Providers → Email** → enable
+**Prevent use of leaked passwords**. It checks new passwords against
+HaveIBeenPwned. It is off by default and it is the one thing
+`./scripts/db advisors` will keep reporting until you turn it on.
+
+### 4.4 Password policy
 
 Same page. Set **Minimum password length** to `8`, matching the app's own check.
 
-### 4.4 Email templates (optional)
+### 4.5 Email templates (optional)
 
 Under **Authentication → Emails → Templates** you can rebrand the **Confirm
 signup** and **Reset password** messages. The defaults work fine — just know

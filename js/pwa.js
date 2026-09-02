@@ -63,9 +63,14 @@ window.SW = window.SW || {};
 
   // Android and desktop Chrome fire this when the app is installable.
   window.addEventListener('beforeinstallprompt', function (e) {
+    // Only take the event over when the app's own banner is actually going
+    // to be shown. Calling preventDefault and then never prompting is what
+    // makes Chrome log "the page must call prompt()" and leaves the user
+    // with no way to install at all.
+    if (standalone || dismissed()) return;
+
     e.preventDefault();
     deferredPrompt = e;
-    if (standalone || dismissed()) return;
 
     banner(
       '<span class="ib-icon">📲</span>' +
