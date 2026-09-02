@@ -250,6 +250,23 @@ window.SW = window.SW || {};
       actionsEl.appendChild(ok);
     }
 
+    // A third, destructive action. Sits between confirm and cancel so the
+    // safe way out is always the last thing under your thumb.
+    if (opts.destroy && opts.onDestroy) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'btn btn-danger';
+      del.id = 'sheet-destroy';
+      del.innerHTML = '<span class="spinner"></span><span class="btn-label">' +
+                      SW.escapeHtml(opts.destroy) + '</span>';
+      del.addEventListener('click', async function () {
+        if (!active || !active.onDestroy) return SW.closeSheet();
+        const keep = await active.onDestroy(del);
+        if (keep !== false) SW.closeSheet();
+      });
+      actionsEl.appendChild(del);
+    }
+
     const cancel = document.createElement('button');
     cancel.type = 'button';
     cancel.className = 'btn-text';

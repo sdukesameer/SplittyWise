@@ -2,6 +2,13 @@
 [build]
   publish = "."
 
+# Email notifications. One function, called by a Supabase Database Webhook
+# on new notification rows. Does nothing until its environment variables are
+# set — see README 4.7.
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
 # Hash routing means the server only ever serves index.html, but this keeps
 # deep links working if a route is ever moved off the hash.
 [[redirects]]

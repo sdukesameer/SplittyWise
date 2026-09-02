@@ -38,8 +38,8 @@ window.SW = window.SW || {};
 
     document.getElementById('gs-name-sub').textContent = g.emoji + '  ' + g.name;
 
-    document.getElementById('gs-settle-sub').textContent = g.settle_up_on
-      ? 'Everyone squares up by ' + SW.formatDate(g.settle_up_on)
+    document.getElementById('gs-settle-sub').textContent = g.settle_up_day
+      ? 'Reminder on the ' + SW.ordinalDay(g.settle_up_day) + ' of every month'
       : 'No date set';
 
     const wb = (g.whiteboard || '').trim();
@@ -237,33 +237,47 @@ window.SW = window.SW || {};
     gid = forGid || gid;
     const g = group();
     if (!g) return;
+    const days = [];
+    for (let d = 1; d <= 31; d++) {
+      days.push('<option value="' + d + '"' +
+        (g.settle_up_day === d ? ' selected' : '') + '>' +
+        'The ' + SW.ordinalDay(d) + '</option>');
+    }
+
+    async function save(day, btn) {
+      SW.busy(btn, true);
+      const { error } = await db.from('groups')
+        .update({ settle_up_day: day }).eq('id', gid);
+      SW.busy(btn, false);
+      if (error) { SW.toast(error.message, 'error'); return false; }
+      group().settle_up_day = day;
+      render(gid);
+      SW.toast(day ? 'Reminder set for the ' + SW.ordinalDay(day) : 'Reminder removed', 'ok');
+      if (SW.renderGroupDetail && SW.currentGroupId === gid) {
+        SW.renderGroupDetail(gid);
+      }
+      return true;
+    }
+
     SW.sheet({
-      title: 'Settle-up date',
+      title: 'Settle-up day',
       body:
-        '<p style="color:var(--muted);font-size:14.5px">The date everyone has ' +
-          'agreed to square up by. It is a reminder, not a deadline the app ' +
-          'enforces.</p>' +
+        '<p style="color:var(--muted);font-size:14.5px">Pick the day of the ' +
+          'month everyone squares up on. Everyone in the group gets a reminder ' +
+          'on that day, every month.</p>' +
         '<div class="field" style="margin-top:12px">' +
-          '<label for="gs-f-date">Date</label>' +
-          '<input class="input" id="gs-f-date" type="date" ' +
-                 'value="' + esc(g.settle_up_on || '') + '">' +
+          '<label for="gs-f-day">Day of the month</label>' +
+          '<select class="input" id="gs-f-day">' + days.join('') + '</select>' +
+          '<span class="hint">Pick the 29th, 30th or 31st and short months ' +
+            'remind you on their last day instead of skipping.</span>' +
         '</div>',
       confirm: 'Save',
-      cancel: g.settle_up_on ? 'Remove the date' : 'Cancel',
+      destroy: g.settle_up_day ? 'Turn the reminder off' : null,
+      onDestroy: function (btn) { return save(null, btn); },
       onClose: function () { /* nothing to restore */ },
-      onConfirm: async function (btn) {
-        const value = document.getElementById('gs-f-date').value || null;
-        SW.busy(btn, true);
-        const { error } = await db.from('groups').update({ settle_up_on: value }).eq('id', gid);
-        SW.busy(btn, false);
-        if (error) { SW.toast(error.message, 'error'); return false; }
-        group().settle_up_on = value;
-        render(gid);
-        SW.toast(value ? 'Date set' : 'Date removed', 'ok');
-        if (SW.renderGroupDetail && SW.currentGroupId === gid) {
-          SW.renderGroupDetail(gid);
-        }
-        return true;
+      onConfirm: function (btn) {
+        const day = parseInt(document.getElementById('gs-f-day').value, 10);
+        return save(day > 0 ? day : null, btn);
       },
     });
   };

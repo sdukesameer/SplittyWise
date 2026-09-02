@@ -252,10 +252,27 @@ window.SW = window.SW || {};
     expense_added: '🧾',
     expense_updated: '✏️',
     expense_deleted: '🗑️',
+    expense_restored: '♻️',
     settlement: '✅',
+    settle_reminder: '📅',
+    comment: '💬',
     nudge: '🔔',
     invite_accepted: '🤝',
   };
+
+  // Your own actions arrive already read, so they show in Activity without
+  // ever badging the bell. Switchable off for anyone who finds a record of
+  // their own work noise.
+  function showsOwn() {
+    const prefs = (SW.profile && SW.profile.notify_prefs) || {};
+    return prefs.own_actions !== false;
+  }
+
+  function visible(n) {
+    if (!SW.notifyAllows(n.type)) return false;
+    if (n.actor_id && SW.user && n.actor_id === SW.user.id && !showsOwn()) return false;
+    return true;
+  }
 
   async function loadActivity(force) {
     if (SW.activityStale) { SW.activityStale = false; force = true; }
@@ -282,7 +299,7 @@ window.SW = window.SW || {};
       return;
     }
 
-    const shown = data.filter(function (n) { return SW.notifyAllows(n.type); });
+    const shown = data.filter(visible);
 
     if (!shown.length) {
       list.innerHTML = '';
@@ -321,7 +338,7 @@ window.SW = window.SW || {};
     // not contribute to the badge.
     const { data, error } = await db
       .from('notifications')
-      .select('type')
+      .select('type, actor_id')
       .eq('is_read', false)
       .limit(500);
 
@@ -329,7 +346,7 @@ window.SW = window.SW || {};
 
     const badge = document.getElementById('bell-badge');
     const tabDot = document.getElementById('tab-badge-activity');
-    const n = (data || []).filter(function (r) { return SW.notifyAllows(r.type); }).length;
+    const n = (data || []).filter(visible).length;
 
     badge.textContent = n > 99 ? '99+' : String(n);
     badge.classList.toggle('is-on', n > 0);
@@ -474,25 +491,20 @@ window.SW = window.SW || {};
         'style="width:110px;height:110px" src="' +
         esc(SW.avatarUrls[p.avatar_path] || '') + '" alt=""></div>',
       confirm: 'Choose another',
-      cancel: 'Remove it',
+      destroy: 'Remove it',
       onConfirm: function () { SW.closeSheet(); photoFile.click(); return true; },
-      onClose: async function () {
-        // Cancel here means remove, so only act when the photo is still set
-        // and the confirm path did not run.
-        if (!SW.pendingPhotoChange && SW.profile.avatar_path === p.avatar_path) {
-          await removePhoto(p.avatar_path);
-        }
-        SW.pendingPhotoChange = false;
+      onDestroy: async function (btn) {
+        SW.busy(btn, true);
+        await removePhoto(p.avatar_path);
+        SW.busy(btn, false);
+        return true;
       },
     });
   });
 
-  photoFile.addEventListener('click', function () { SW.pendingPhotoChange = true; });
-
   photoFile.addEventListener('change', async function () {
     const file = photoFile.files && photoFile.files[0];
     photoFile.value = '';
-    SW.pendingPhotoChange = false;
     if (!file) return;
 
     SW.toast('Shrinking the photo…');
@@ -559,7 +571,19 @@ window.SW = window.SW || {};
           '<div class="field-error" id="upi-error"></div>' +
         '</div>',
       confirm: 'Save',
-      cancel: current ? 'Remove it' : 'Cancel',
+      destroy: current ? 'Remove it' : null,
+      onDestroy: async function (btn) {
+        SW.busy(btn, true);
+        const { error } = await db.from('profiles')
+          .update({ upi_id: null, updated_at: new Date().toISOString() })
+          .eq('id', SW.user.id);
+        SW.busy(btn, false);
+        if (error) { SW.setError('upi-error', error.message); return false; }
+        SW.profile.upi_id = null;
+        renderAccount();
+        SW.toast('UPI ID removed', 'ok');
+        return true;
+      },
       onOpen: function () { document.getElementById('upi-input').focus(); },
       onConfirm: async function (btn) {
         const value = document.getElementById('upi-input').value.trim();
@@ -628,6 +652,8 @@ window.SW = window.SW || {};
     { key: 'nudge',           label: 'Reminders' },
     { key: 'friend_added',    label: 'New friends' },
     { key: 'group_added',     label: 'Being added to a group' },
+    { key: 'settle_reminder', label: 'Monthly settle-up day' },
+    { key: 'own_actions',     label: 'A record of your own actions' },
   ];
 
   const FORM_ROWS = [
@@ -659,6 +685,8 @@ window.SW = window.SW || {};
       '</div>';
     }).join('');
 
+    renderEmailSwitch();
+
     document.getElementById('form-prefs').innerHTML = FORM_ROWS.map(function (k) {
       const on = SW.formShows(k.key);
       return '<div class="switch-row">' +
@@ -677,6 +705,24 @@ window.SW = window.SW || {};
     const { error } = await db.from('profiles').update(patch).eq('id', SW.user.id);
     if (error) SW.toast(error.message, 'error');
   }
+
+  function renderEmailSwitch() {
+    const on = !!(SW.profile && SW.profile.email_notify);
+    const sw = document.getElementById('email-switch');
+    sw.classList.toggle('is-on', on);
+    sw.setAttribute('aria-checked', String(on));
+    document.getElementById('email-notify-sub').textContent = on
+      ? 'At most one every 15 minutes, to ' + (SW.user ? SW.user.email : 'you')
+      : 'Off — the bell and Activity still work';
+  }
+
+  document.getElementById('email-switch').addEventListener('click', async function () {
+    const on = !this.classList.contains('is-on');
+    SW.profile.email_notify = on;
+    renderEmailSwitch();
+    await savePrefs('email_notify', on);
+    SW.toast(on ? 'Emails on' : 'Emails off', 'ok');
+  });
 
   document.getElementById('notify-prefs').addEventListener('click', function (e) {
     const b = e.target.closest('[data-notify]');
@@ -833,6 +879,12 @@ window.SW = window.SW || {};
 
       // Same daily window covers emptying the bin of anything past 30 days.
       db.rpc('purge_trash').then(function () {}, function () {});
+
+      // Monthly settle-up reminders. Writes only to your own feed and
+      // dedupes per calendar month, so this is safe to call every day.
+      db.rpc('run_due_settle_reminders').then(function (r) {
+        if (r && r.data > 0 && SW.refreshUnread) SW.refreshUnread();
+      }, function () {});
 
       const { data } = await db.rpc('run_due_recurring');
       if (data && data.posted > 0) {

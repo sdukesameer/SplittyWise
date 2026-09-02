@@ -278,7 +278,7 @@ window.SW = window.SW || {};
 
     if (f.people.indexOf(f.payerId) === -1) f.payerId = SW.ledger.me;
     f.payers = null;
-    f.included = {}; f.exact = {}; f.percent = {}; f.shares = {}; f.adjust = {};
+    f.included = {}; f.exact = {}; f.percent = {}; f.shares = {}; f.adjust = {}; f.autofilled = null;
 
     SW.openExpenseSheet({ keepState: true });
   }
@@ -685,10 +685,49 @@ window.SW = window.SW || {};
   function bind(attr, apply) {
     document.querySelectorAll('[' + attr + ']').forEach(function (input) {
       input.addEventListener('input', function () {
-        apply(input.getAttribute(attr), input.value);
+        const id = input.getAttribute(attr);
+        apply(id, input.value);
+        // Typing in the field we filled for you makes it yours again, so we
+        // stop moving it under you.
+        if (f.autofilled === id) f.autofilled = null;
+        autofillRemainder(attr);
         updateDerived();
       });
     });
+  }
+
+  // Fill in the one figure that has to follow from the others. The rule
+  // itself is SW.deriveBlank(); this reads the fields and writes the answer.
+  function autofillRemainder(attr) {
+    // Shares have no total to work back from, and adjust adds on top of an
+    // equal base rather than dividing a total, so neither is derivable.
+    const total = attr === 'data-exact' ? f.amountPaise
+                : attr === 'data-percent' ? 100
+                : 0;
+    if (!total) return;
+
+    const inputs = [].slice.call(document.querySelectorAll('[' + attr + ']'));
+    const store = attr === 'data-exact' ? f.exact : f.percent;
+
+    const answer = SW.deriveBlank(total, inputs.map(function (i) {
+      const id = i.getAttribute(attr);
+      return {
+        id: id,
+        value: store[id] || 0,
+        filled: !!i.value.trim(),
+        auto: id === f.autofilled,
+      };
+    }));
+    if (!answer) return;
+
+    const field = inputs.filter(function (i) {
+      return i.getAttribute(attr) === answer.id;
+    })[0];
+    if (!field) return;
+
+    store[answer.id] = answer.value;
+    field.value = attr === 'data-exact' ? SW.rupees(answer.value) : String(answer.value);
+    f.autofilled = answer.id;
   }
 
   // Switching mode carries the current numbers across rather than blanking
@@ -696,6 +735,7 @@ window.SW = window.SW || {};
   function seedMode(next) {
     const people = participants();
     const current = currentSplit().byUser;
+    f.autofilled = null;
 
     if (next === 'exact') {
       people.forEach(function (id) { f.exact[id] = current[id] || 0; });
@@ -758,6 +798,9 @@ window.SW = window.SW || {};
   function openCategorySheet() {
     const derived = SW.categoryForEmoji(f.emoji);
     const chosen = f.category || derived;
+    // Set when leaving for the new-category sheet, so onClose knows not to
+    // put the expense form back yet.
+    let goingToNew = false;
 
     SW.sheet({
       title: 'Category',
@@ -774,6 +817,10 @@ window.SW = window.SW || {};
               '<svg class="tick" width="19" height="19" aria-hidden="true">' +
               '<use href="#ic-check"/></svg></button>';
           }).join('') +
+        '</div>' +
+        '<div style="padding:10px 16px 4px">' +
+          '<button type="button" class="btn btn-ghost" data-newcat>' +
+            '+ New category</button>' +
         '</div>',
       confirm: null,
       onOpen: function () {
@@ -785,8 +832,25 @@ window.SW = window.SW || {};
           f.category = (name === derived) ? null : name;
           SW.closeSheet();
         });
+
+        const add = document.querySelector('[data-newcat]');
+        if (add) add.addEventListener('click', function () {
+          goingToNew = true;
+          SW.closeSheet();
+        });
       },
-      onClose: function () { if (f) SW.openExpenseSheet({ keepState: true }); },
+      onClose: function () {
+        if (goingToNew) {
+          goingToNew = false;
+          // Made here, selected here: the whole point is not losing the form.
+          return SW.addCategory(
+            '',
+            function (name) { f.category = (name === derived) ? null : name; },
+            function () { if (f) SW.openExpenseSheet({ keepState: true }); }
+          );
+        }
+        if (f) SW.openExpenseSheet({ keepState: true });
+      },
     });
   }
 
@@ -950,7 +1014,7 @@ window.SW = window.SW || {};
         // longer involved, so start those over.
         if (f.people.indexOf(f.payerId) === -1) f.payerId = me;
         f.payers = null;
-        f.included = {}; f.exact = {}; f.percent = {}; f.shares = {}; f.adjust = {};
+        f.included = {}; f.exact = {}; f.percent = {}; f.shares = {}; f.adjust = {}; f.autofilled = null;
         return true;
       },
       onClose: function () { if (f) SW.openExpenseSheet({ keepState: true }); },

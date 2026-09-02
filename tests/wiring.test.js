@@ -490,5 +490,163 @@ if (/phase \d+ of \d+/i.test(html)) stale.push('index.html: phase counter in the
 if (/data-todo/.test(html)) stale.push('index.html: data-todo stub');
 check('no placeholder text left in the app', stale.length === 0, stale);
 
+/* ---------------- 15. buttons that only look destructive ---------------- */
+
+// A sheet's `cancel:` is only a label on the close button. Two sheets said
+// "Delete this category" and "Remove the date" on a button that did nothing
+// but close — no error, no clue. Anything that reads as destructive has to
+// go through destroy/onDestroy, which actually runs something.
+console.log('\n--- destructive actions ---');
+
+const fakeDestroy = [];
+for (const [file, src] of Object.entries(js)) {
+  for (const m of src.matchAll(/cancel:\s*([^\n]*)/g)) {
+    if (/\b(delete|remove|discard|turn\s+\w+\s+off|clear)\b/i.test(m[1])) {
+      fakeDestroy.push(file + ': cancel: ' + m[1].trim().slice(0, 60));
+    }
+  }
+}
+check('no cancel button is labelled as if it destroys something',
+  fakeDestroy.length === 0, fakeDestroy);
+
+const orphanDestroy = [];
+for (const [file, src] of Object.entries(js)) {
+  const declares = (src.match(/\bdestroy:/g) || []).length;
+  const handles = (src.match(/\bonDestroy:/g) || []).length;
+  if (declares !== handles) {
+    orphanDestroy.push(file + ': ' + declares + ' destroy: vs ' + handles + ' onDestroy:');
+  }
+}
+check('every destroy: label has an onDestroy: to run', orphanDestroy.length === 0,
+  orphanDestroy);
+check('SW.sheet implements the destroy button',
+  /opts\.destroy\s*&&\s*opts\.onDestroy/.test(js['js/ui.js']) &&
+  /active\.onDestroy\(/.test(js['js/ui.js']));
+check('the destructive button has a style of its own', /\.btn-danger\s*\{/.test(css));
+
+/* ---------------- 16. the settle-up day ---------------- */
+
+console.log('\n--- settle-up day ---');
+check('settle_up_day replaced the one-off date in the schema',
+  /settle_up_day\s+int/.test(schema) && tables.groups.includes('settle_up_day'));
+check('the old settle_up_on column is migrated, then dropped',
+  /update public\.groups[\s\S]{0,200}settle_up_day = extract\(day from settle_up_on\)/.test(schema) &&
+  /alter table public\.groups drop column settle_up_on/.test(schema));
+const staleDate = Object.entries(js)
+  .filter(([, src]) => /settle_up_on/.test(src))
+  .map(([f]) => f);
+check('no client code still reads settle_up_on', staleDate.length === 0, staleDate);
+check('the reminder function exists', !!functions.run_due_settle_reminders ||
+  /function public\.run_due_settle_reminders\(\)/.test(schema));
+check('and the client calls it at launch',
+  /rpc\('run_due_settle_reminders'\)/.test(allJs));
+check('it only ever writes to the caller’s own feed',
+  /insert into public\.notifications[\s\S]{0,120}select me, null, 'settle_reminder'/.test(schema));
+check('it dedupes per calendar month',
+  /date_trunc\('month', current_date\)/.test(schema));
+check('a day past the end of a short month still fires',
+  /least\(\s*g\.settle_up_day/.test(schema));
+check('the two ordinal helpers agree',
+  /function sw\.ordinal_day/.test(schema) && /SW\.ordinalDay\s*=/.test(allJs));
+
+/* ---------------- 17. you hear about your own actions ---------------- */
+
+console.log('\n--- self-notifications ---');
+
+// Every fan-out used to end `where ... <> me`, which is why adding an
+// expense left no trace in your own Activity.
+const stillExcludes = [...schema.matchAll(/where[^;]*?\buser_id <> me\b/g)].map(m => m[0].trim());
+check('no notification fan-out excludes the actor any more',
+  stillExcludes.length === 0, stillExcludes);
+check('your own rows land already read, so the bell stays quiet',
+  /is_read\)/.test(schema) && /sp\.user_id = me\b/.test(schema));
+check('and read as your own doing',
+  /'You added "'/.test(schema) && /'You changed "'/.test(schema));
+check('the feed can be told to hide them',
+  /own_actions/.test(js['js/shell.js']));
+check('the unread count applies the same rule as the feed',
+  /select\('type, actor_id'\)/.test(js['js/shell.js']) &&
+  /\.filter\(visible\)/.test(js['js/shell.js']));
+
+// A type with no icon falls back to a bell, which is how settle_reminder
+// and comment sat there looking like nudges.
+const emittedTypes = new Set();
+for (const m of schema.matchAll(/type, [\w, ]*?\)\s*(?:values\s*\(|select[\s\S]{0,80}?)[^;]*?'(\w+)'\s*,/g)) {
+  emittedTypes.add(m[1]);
+}
+const iconMap = (js['js/shell.js'].match(/const TYPE_EMOJI = \{([\s\S]*?)\};/) || [, ''])[1];
+const noIcon = [...emittedTypes].filter(t => !iconMap.includes(t + ':'));
+check('every notification type the schema emits has an icon', noIcon.length === 0, noIcon);
+
+/* ---------------- 18. exporting is a download ---------------- */
+
+console.log('\n--- export ---');
+check('export asks before it downloads',
+  /opts\.confirmed/.test(js['js/insights.js']) &&
+  /confirm: 'Download'/.test(js['js/insights.js']));
+check('and says how many rows it is about to write',
+  /rowCount/.test(js['js/insights.js']));
+
+/* ---------------- 19. icons say what they do ---------------- */
+
+console.log('\n--- icons ---');
+const gear = (html.match(/id="ic-gear"[\s\S]*?<\/symbol>/) || [''])[0];
+check('the settings icon is a cog, not a brightness dial',
+  gear.includes('19.14') && !/M12 3v2\.2/.test(gear));
+
+/* ---------------- 20. the itemised row reads as a sum ---------------- */
+
+console.log('\n--- itemised rows ---');
+check('quantity and amount are joined by an =',
+  /class="ir-eq"/.test(js['js/scan.js']) && /\.ir-eq\s*\{/.test(css));
+
+/* ---------------- 21. new ids exist ---------------- */
+
+console.log('\n--- new controls exist in the markup ---');
+['ins-headline', 'ins-eyebrow', 'ins-subline', 'ins-stats',
+ 'email-switch', 'email-notify-sub'].forEach(id => {
+  check('#' + id + ' is in index.html', html.includes('id="' + id + '"'));
+});
+check('the day picker is built where the sheet expects it',
+  /id="gs-f-day"/.test(js['js/groupsettings.js']));
+check('email notifications are opt-in in the schema',
+  /email_notify\s+boolean not null default false/.test(schema));
+check('the client selects email_notify, or the switch would reset',
+  /email_notify/.test(js['js/auth.js']));
+check('the email function refuses an unsigned webhook',
+  /x-webhook-secret/.test(fs.readFileSync('netlify/functions/notify-email.mjs', 'utf8')));
+check('and never emails you about your own action',
+  /if \(row\.is_read\) return/.test(fs.readFileSync('netlify/functions/notify-email.mjs', 'utf8')));
+
+/* ---------------- 22. making a category where you need one ---------------- */
+
+console.log('\n--- categories ---');
+check('a custom category can actually be deleted',
+  /from\('user_categories'\)\.delete\(\)/.test(js['js/categories.js']));
+check('one can be created from the expense form',
+  /data-newcat/.test(js['js/expense.js']) && /SW\.addCategory\(/.test(js['js/expense.js']));
+check('and the expense form is put back afterwards',
+  /goingToNew/.test(js['js/expense.js']));
+
+/* ---------------- 23. filling in the forced figure ---------------- */
+
+console.log('\n--- the derived split field ---');
+check('the rule lives in balances.js, where it is testable',
+  /SW\.deriveBlank\s*=/.test(js['js/balances.js']));
+check('the expense form uses it rather than its own copy',
+  /SW\.deriveBlank\(/.test(js['js/expense.js']));
+check('typing in the filled field hands it back to you',
+  /if \(f\.autofilled === id\) f\.autofilled = null;/.test(js['js/expense.js']));
+check('switching split mode forgets it',
+  /f\.autofilled = null;/.test(js['js/expense.js']));
+
+/* ---------------- 24. settling everything by UPI ---------------- */
+
+console.log('\n--- settle all ---');
+check('settle-all offers the payment app when it is all one way',
+  /sa-upi/.test(js['js/settle.js']));
+check('and not when the debts run both ways',
+  /!mixed && total < 0 && p\.upi_id/.test(js['js/settle.js']));
+
 console.log('\n' + (fails ? fails + ' FAILURE(S)' : 'all checks passed'));
 process.exit(fails ? 1 : 0);

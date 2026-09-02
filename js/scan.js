@@ -586,6 +586,7 @@ window.SW = window.SW || {};
             '<input class="ir-qty" type="text" inputmode="numeric" ' +
                    'value="' + (r.qty > 1 ? '×' + r.qty : '') + '" ' +
                    'placeholder="×1" aria-label="Quantity">' +
+            '<span class="ir-eq" aria-hidden="true">=</span>' +
             '<input class="ir-price" type="text" inputmode="decimal" ' +
                    'value="' + (r.totalPaise ? SW.rupees(r.totalPaise) : '') + '" ' +
                    'placeholder="0.00" aria-label="Price">' +

@@ -64,8 +64,16 @@ uneven split you agreed once can be saved and reused. A group that always
 splits the same way opens that way. Deleting is recoverable for thirty days,
 an expense records what changed and to what, friends can be renamed, and the
 app can be locked behind Face ID. An expense can be spoken rather than
-typed. Groups carry a cover photo, a whiteboard, a settle-up date and
+typed. Groups carry a cover photo, a whiteboard, a monthly settle-up day and
 your own default split. Invite links let someone join by signing up.
+
+You are told about your own actions too, so Activity is a full record rather
+than only what other people did — those arrive already read, so your own work
+never sits on the bell as an unread badge. A group's settle-up day is a day
+of the month, and the reminder comes round every month rather than passing
+once. In an exact or percentage split, the one figure that has to follow from
+the others is filled in for you. Email notifications are available for free —
+see section 4.7.
 
 ### Running the tests
 
@@ -73,7 +81,7 @@ your own default split. Invite links let someone join by signing up.
 for t in tests/*.test.js; do node "$t"; done
 ```
 
-Sixteen suites, no database and no browser needed:
+Seventeen suites, no database and no browser needed:
 
 | Suite | Covers |
 |---|---|
@@ -92,7 +100,8 @@ Sixteen suites, no database and no browser needed:
 | `rounding.test.js` | Whole-rupee rounding still landing on the total, and inferring a group's usual people |
 | `voice.test.js` | Spoken amounts in words as well as digits, and never inventing one |
 | `calc.test.js` | Arithmetic in the amount field, including what it must refuse |
-| `wiring.test.js` | That the app is actually connected: every RPC exists with the arguments passed, every column selected exists, every button has a handler, every screen can render, every CSS token is defined at the base, the accessibility floor holds, and the offline shell is complete |
+| `autofill.test.js` | The one split figure that has to follow from the others — and every case where it must keep its hands off — plus ordinal days |
+| `wiring.test.js` | That the app is actually connected: every RPC exists with the arguments passed, every column selected exists, every button has a handler, every screen can render, every CSS token is defined at the base, the accessibility floor holds, the offline shell is complete, and nothing is labelled as destructive without something behind it |
 
 The full database — 8 tables, 27 row-level-security policies, 6 write RPCs — is
 already in `supabase/schema.sql` and supports every later phase.
@@ -414,6 +423,78 @@ If it ever becomes a nuisance, **Project Settings → Authentication → SMTP
 Settings** accepts a free Resend or Brevo account and fixes deliverability
 properly.
 
+### 4.6 Where email cannot help
+
+Supabase's built-in mail is for authentication only — confirmations and
+password resets. On the free tier it is also rate-limited to a couple of
+messages an hour. It cannot carry app notifications, so section 4.7 uses a
+separate route.
+
+### 4.7 Email notifications (optional, free)
+
+Off by default and opt-in per person. A Supabase **Database Webhook** posts
+each new notification row to a Netlify Function, which decides whether it is
+worth an email and sends it through **Brevo** — 300 emails a day free, and
+unlike Resend it does not need a domain of your own, just one verified
+sender address.
+
+The API key lives in Netlify's environment, never in the database.
+
+**1. Get a Brevo key.** Sign up at [brevo.com](https://www.brevo.com), then
+**Senders, Domains & Dedicated IPs → Senders** and add the address you want
+mail to come from. Brevo emails you a confirmation link for it. Then
+**SMTP & API → API Keys → Generate a new API key**.
+
+**2. Set the variables** in Netlify under **Site configuration →
+Environment variables**:
+
+| Variable | Value |
+|---|---|
+| `SUPABASE_URL` | `https://YOUR-REF.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Project Settings → API Keys → `service_role`. **Secret** — it bypasses every RLS policy. Netlify env vars are server-side only, which is why it is safe here and would not be in `js/config.js`. |
+| `BREVO_API_KEY` | From step 1 |
+| `EMAIL_FROM` | The sender address you verified |
+| `EMAIL_FROM_NAME` | `SplittyWise` |
+| `WEBHOOK_SECRET` | Any long random string — `openssl rand -hex 32` |
+| `APP_URL` | `https://your-site.netlify.app`, so the email can link straight to the expense |
+
+Redeploy after setting them.
+
+**3. Point Supabase at it.** In the dashboard, **Database → Webhooks →
+Enable webhooks**, then **Create a new hook**:
+
+- Name: `email-notifications`
+- Table: `notifications`, events: **Insert** only
+- Type: **HTTP Request**, method **POST**
+- URL: `https://your-site.netlify.app/.netlify/functions/notify-email`
+- HTTP Headers: add `x-webhook-secret` with the same value as `WEBHOOK_SECRET`
+
+**4. Turn it on** in the app: **Account → Notifications → Email me the
+important ones**.
+
+What it deliberately does *not* do:
+
+- **No email for your own actions.** Those rows arrive already read, and the
+  function skips them.
+- **Only money and people events** — an expense added, a payment recorded, a
+  nudge, the monthly settle-up day, a new friend, being added to a group. Not
+  edits, deletions or comments.
+- **At most one email per person every fifteen minutes**, stamped on
+  `profiles.last_email_at` only after a successful send, so a failed send does
+  not eat somebody's quiet window.
+- **Nothing at all until configured.** With the variables unset the function
+  returns 204, so an unconfigured deploy is quiet rather than broken.
+- **Nothing from an unsigned request.** Without the matching
+  `x-webhook-secret` header it returns 403, or the URL would be a way to make
+  your app email arbitrary addresses.
+
+The per-type switches under **Account → Notifications** govern email as well
+as the bell, so muting a type mutes both.
+
+If mail stops arriving, **Netlify → Logs → Functions** shows the reason —
+a spent Brevo quota comes back as a 502 with Brevo's own message rather than
+being swallowed.
+
 ---
 
 ## 5. Run it locally
@@ -604,6 +685,21 @@ used to be completely silent on a phone; the app now shows it as a red
 toast naming the file and line, which is what to quote if something
 misbehaves.
 
+**No email arrived**
+Check, in order: the switch is on under **Account → Notifications**; the
+event is one of the six types 4.7 lists; it was not your own action; the last
+email to you was over fifteen minutes ago; and the type is not muted. Then
+**Netlify → Logs → Functions** — a 403 there means the webhook's
+`x-webhook-secret` header does not match `WEBHOOK_SECRET`, and a 502 carries
+Brevo's own message, usually a spent daily quota.
+
+**The monthly settle-up reminder did not come**
+It is raised when you open the app, not by a scheduler — there is nothing
+running while your phone is closed. It appears the first time you open the
+app on or after that day of the month, once per month. A group set to the
+31st reminds on the last day of a shorter month rather than skipping it.
+Set the day under the group's gear icon → **Settle-up day**.
+
 **The bell badge is not counting something**
 Check **Account → Notifications**. A muted event type is still recorded in
 Activity but does not contribute to the badge, which is the point — a badge
@@ -672,10 +768,11 @@ js/theme.js             applies the saved theme before first paint
 manifest.json           web app manifest
 sw.js                   service worker: app shell cache, offline fallback
 supabase/rls-audit.sql  security and ledger-integrity audit
-tests/                  seven suites, no database or browser needed
+tests/                  seventeen suites, no database or browser needed
 icons/                  app icon: SVG source + 5 rendered PNG sizes
 supabase/schema.sql     tables, RLS policies, RPCs, triggers, storage
 netlify.toml            publish settings, redirects, security headers
+netlify/functions/      one function: optional email notifications (4.7)
 ```
 
 ### The database
@@ -690,6 +787,12 @@ netlify.toml            publish settings, redirects, security headers
 | `expense_splits` | Who owes what on one expense. Always sums to the expense amount |
 | `settlements` | Paybacks, kept separate from expenses so history is never rewritten |
 | `notifications` | Feeds the bell and the Activity tab. Written only server-side |
+
+A notification's `is_read` carries a second meaning worth knowing: a row that
+is inserted **already read** is one about your own action. It belongs in your
+Activity as a record of what you did, but it must never badge your own bell —
+and the email function uses the same flag to decide not to email you about
+yourself.
 
 ### Two decisions worth knowing
 

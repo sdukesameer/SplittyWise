@@ -2729,3 +2729,79 @@ button.is-loading .spinner { display: block; }
 .lock h1 { font-size: 23px; }
 .lock p { color: var(--muted); font-size: 15px; max-width: 30ch; }
 .lock .btn { max-width: 300px; }
+
+/* Makes the itemised row read as quantity = amount, rather than three
+   unrelated boxes. */
+.ir-eq {
+  flex: none;
+  color: var(--faint);
+  font-size: 14px;
+  font-weight: 700;
+  /* Pulled in against the 8px gap either side, so it binds the quantity to
+     the amount instead of floating between them. */
+  margin: 0 -4px;
+}
+
+/* A destructive sheet action. Reads as a real button so it is never mistaken
+   for the cancel link, but sits below the primary confirm. */
+.btn-danger {
+  background: rgba(255, 122, 77, 0.14);          /* Safari < 16.2 */
+  background: color-mix(in srgb, var(--owe) 14%, transparent);
+  color: var(--owe);
+  border: 1px solid rgba(255, 122, 77, 0.5);    /* Safari < 16.2 */
+  border: 1px solid color-mix(in srgb, var(--owe) 50%, transparent);
+}
+.btn-danger:active { transform: scale(0.985); }
+
+/* ---- Your spending: the answer above the charts ---------------------- */
+
+.ins-eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 3px;
+}
+
+.ins-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 8px;
+  padding: 4px 14px 12px;
+}
+
+.ins-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 11px 12px 12px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  min-width: 0;
+}
+
+.ins-stat .is-label {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.ins-stat .is-value {
+  display: block;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.ins-stat .is-note {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}

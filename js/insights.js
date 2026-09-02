@@ -232,7 +232,10 @@ window.SW = window.SW || {};
     empty.hidden = any;
     host.hidden = !any;
     document.getElementById('ins-csv').parentElement.hidden = !any;
+    document.getElementById('ins-stats').hidden = !any;
     if (!any) return;
+
+    renderHeadline();
 
     SW.renderChartBlock(host, {}, { ofLabel: 'everything recorded' });
 
@@ -266,6 +269,81 @@ window.SW = window.SW || {};
           '</div>';
         }).join('') +
       '</div>';
+  }
+
+  // The page used to open on the words "Your spending" and a chart. The
+  // answer people actually come for is how this month compares, so it leads
+  // now and the charts explain it underneath.
+  function renderHeadline() {
+    const months = SW.spendByMonth({ months: 13 });
+    const thisMonth = months[months.length - 1].paise;
+    const lastMonth = months.length > 1 ? months[months.length - 2].paise : 0;
+
+    const now = new Date();
+    const dayOfMonth = now.getDate();
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+
+    // Months that have actually happened, so a brand-new account is not
+    // averaged against a year of zeroes.
+    const started = months.filter(function (m) { return m.paise > 0; });
+    const average = started.length
+      ? Math.round(started.reduce(function (t, m) { return t + m.paise; }, 0) / started.length)
+      : 0;
+
+    const cats = SW.spendByCategory({ month: now.toISOString().slice(0, 7) });
+    const top = cats[0];
+
+    document.getElementById('ins-eyebrow').textContent =
+      now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    document.getElementById('ins-headline').textContent = SW.money(thisMonth);
+
+    // Comparing a part-month against a whole one reads as a fall every time,
+    // so say what it is on course for instead of pretending it is finished.
+    const pace = dayOfMonth >= daysInMonth
+      ? thisMonth
+      : Math.round(thisMonth * (daysInMonth / dayOfMonth));
+
+    let sub;
+    if (!lastMonth && !thisMonth) {
+      sub = 'Nothing yet this month';
+    } else if (!lastMonth) {
+      sub = 'Your first month with anything in it';
+    } else {
+      const delta = pace - lastMonth;
+      const pct = Math.round(Math.abs(delta) / lastMonth * 100);
+      const lastLabel = months[months.length - 2].label;
+      sub = pct < 5
+        ? 'About level with ' + lastLabel
+        : (delta > 0 ? 'On course to be ' : 'On course to be ') + pct + '% ' +
+          (delta > 0 ? 'above ' : 'below ') + lastLabel +
+          ' · ' + SW.money(pace) + ' at this rate';
+    }
+    document.getElementById('ins-subline').textContent = sub;
+
+    const tiles = [
+      { label: 'Monthly average',
+        value: SW.money(average),
+        note: started.length + (started.length === 1 ? ' month in' : ' months in') },
+      { label: 'A day, so far',
+        value: SW.money(Math.round(thisMonth / dayOfMonth)),
+        note: 'over ' + dayOfMonth + (dayOfMonth === 1 ? ' day' : ' days') },
+    ];
+    if (top) {
+      tiles.unshift({
+        label: 'Most of it',
+        value: top.label,
+        note: SW.money(top.paise) + ' · ' +
+              Math.round(top.paise / Math.max(1, thisMonth) * 100) + '% of the month',
+      });
+    }
+
+    document.getElementById('ins-stats').innerHTML = tiles.map(function (t) {
+      return '<div class="ins-stat">' +
+        '<span class="is-label">' + esc(t.label) + '</span>' +
+        '<span class="is-value">' + esc(t.value) + '</span>' +
+        '<span class="is-note">' + esc(t.note) + '</span>' +
+      '</div>';
+    }).join('');
   }
 
   SW.viewHooks.insights = renderInsights;
@@ -306,12 +384,36 @@ window.SW = window.SW || {};
 
   /* ======================= CSV export ================================ */
 
-  SW.exportCsv = function (scope, label) {
+  // opts.confirmed skips the prompt, which is how the sheet re-enters.
+  SW.exportCsv = function (scope, label, opts) {
     if (!SW.ledger) return;
 
     const csv = SW.buildCsv(scope || {});
     const stamp = new Date().toISOString().slice(0, 10);
     const name = 'splittywise-' + (label ? label + '-' : '') + stamp + '.csv';
+    const rowCount = Math.max(0, csv.split('\r\n').length - 2);
+
+    if (rowCount === 0) return SW.toast('Nothing to export', 'error');
+
+    // A file landing in Downloads unannounced is startling, and on a phone
+    // it is easy to tap Export by accident.
+    if (!opts || !opts.confirmed) {
+      return SW.sheet({
+        title: 'Export ' + rowCount + (rowCount === 1 ? ' row' : ' rows') + '?',
+        body:
+          '<p style="color:var(--muted);font-size:14.5px">Downloads ' +
+            '<strong style="color:var(--text)">' + esc(name) + '</strong> — every ' +
+            'expense and payment in scope, with your share and your net on each.</p>' +
+          '<p style="color:var(--muted);font-size:13.5px;margin-top:8px">It opens ' +
+            'in Excel or Sheets. The file is built on this device; nothing is ' +
+            'uploaded.</p>',
+        confirm: 'Download',
+        onConfirm: function () {
+          SW.exportCsv(scope, label, { confirmed: true });
+          return true;
+        },
+      });
+    }
 
     try {
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -325,9 +427,7 @@ window.SW = window.SW || {};
       a.remove();
       setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
 
-      const rows = csv.split('\r\n').length - 2;
-      if (rows <= 0) return SW.toast('Nothing to export', 'error');
-      SW.toast(rows + ' rows exported', 'ok');
+      SW.toast(rowCount + (rowCount === 1 ? ' row exported' : ' rows exported'), 'ok');
     } catch (err) {
       SW.toast('Could not build the file: ' + (err.message || err), 'error');
     }

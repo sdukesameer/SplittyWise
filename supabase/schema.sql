@@ -25,6 +25,11 @@ create table if not exists public.profiles (
   -- see. Kept as JSON because both are lists of small flags that will grow.
   notify_prefs  jsonb not null default '{}'::jsonb,
   ui_prefs      jsonb not null default '{}'::jsonb,
+  -- Email notifications are off until asked for, and the Netlify function
+  -- that sends them stamps last_email_at so nobody gets a burst. See
+  -- netlify/functions/notify-email.mjs and README 4.7.
+  email_notify  boolean not null default false,
+  last_email_at timestamptz,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
@@ -53,7 +58,9 @@ create table if not exists public.groups (
   -- rupee and gives the remainder to the payer, for groups settling in cash.
   rounding        text not null default 'paise' check (rounding in ('paise','rupee')),
   whiteboard      text,          -- shared free-text notes for the group
-  settle_up_on    date,          -- the date everyone has agreed to square up by
+  -- Day of the month everyone squares up on (1-31), reminded every month.
+  -- A 31 in a short month falls back to that month's last day.
+  settle_up_day   int check (settle_up_day between 1 and 31),
   created_by      uuid not null references public.profiles(id) on delete cascade,
   created_at      timestamptz not null default now()
 );
@@ -258,7 +265,27 @@ alter table public.settlements add column if not exists deleted_at timestamptz;
 alter table public.expenses       drop column if exists receipt_path;
 alter table public.groups        add column if not exists cover_path   text;
 alter table public.groups        add column if not exists whiteboard   text;
+alter table public.profiles      add column if not exists email_notify boolean not null default false;
+alter table public.profiles      add column if not exists last_email_at timestamptz;
 alter table public.groups        add column if not exists settle_up_on date;
+alter table public.groups        add column if not exists settle_up_day int;
+
+-- settle_up_on was a single calendar date, which is stale the day after it
+-- passes. Carry its day-of-month across, then retire the column.
+do $$ begin
+  if exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'groups'
+               and column_name = 'settle_up_on') then
+    update public.groups
+       set settle_up_day = extract(day from settle_up_on)::int
+     where settle_up_on is not null and settle_up_day is null;
+    alter table public.groups drop column settle_up_on;
+  end if;
+end $$;
+
+alter table public.groups drop constraint if exists groups_settle_up_day_check;
+alter table public.groups add constraint groups_settle_up_day_check
+  check (settle_up_day is null or settle_up_day between 1 and 31);
 alter table public.group_members add column if not exists default_split_mode text
                                  not null default 'equal';
 
@@ -347,6 +374,17 @@ end $$;
 --  re-entering the policy they were called from (Postgres RLS recursion).
 --  Each is STABLE and pins search_path.
 -- ============================================================================
+
+-- "the 3rd", "the 21st". Used in reminder text.
+create or replace function sw.ordinal_day(d int)
+returns text language sql immutable set search_path = '' as $$
+  select d::text || case
+    when d % 100 in (11, 12, 13) then 'th'
+    when d % 10 = 1 then 'st'
+    when d % 10 = 2 then 'nd'
+    when d % 10 = 3 then 'rd'
+    else 'th' end;
+$$;
 
 create or replace function sw.is_group_member(gid uuid, uid uuid)
 returns boolean language sql security definer stable set search_path = public as $$
@@ -1159,15 +1197,32 @@ begin
     select name into gname from public.groups where id = p_group_id;
   end if;
 
-  insert into public.notifications (user_id, actor_id, type, title, body, group_id, expense_id)
+  -- Everyone on the split, the actor included. Your own row lands read, so
+  -- it shows in Activity as a record of what you did without ever putting an
+  -- unread badge on the bell for your own action.
+  insert into public.notifications
+    (user_id, actor_id, type, title, body, group_id, expense_id, is_read)
   select sp.user_id, me, 'expense_added',
-         actor_name || ' added "' || trim(p_description) || '"',
+         case when sp.user_id = me then 'You added "'
+              else actor_name || ' added "' end || trim(p_description) || '"',
          '₹' || to_char(round(p_amount, 2), 'FM999999990.00')
              || coalesce(' in ' || gname, '')
              || ' · your share ₹' || to_char(sp.amount, 'FM999999990.00'),
-         p_group_id, eid
+         p_group_id, eid, sp.user_id = me
   from public.expense_splits sp
-  where sp.expense_id = eid and sp.user_id <> me;
+  where sp.expense_id = eid;
+
+  -- Paid for it but left yourself off the split: still your expense to see.
+  if not exists (select 1 from public.expense_splits
+                 where expense_id = eid and user_id = me) then
+    insert into public.notifications
+      (user_id, actor_id, type, title, body, group_id, expense_id, is_read)
+    values (me, me, 'expense_added',
+            'You added "' || trim(p_description) || '"',
+            '₹' || to_char(round(p_amount, 2), 'FM999999990.00')
+                || coalesce(' in ' || gname, '') || ' · none of it yours',
+            p_group_id, eid, true);
+  end if;
 
   return eid;
 end $$;
@@ -1365,18 +1420,21 @@ begin
     select name into gname from public.groups where id = p_group_id;
   end if;
 
-  insert into public.notifications (user_id, actor_id, type, title, body, group_id, expense_id)
+  insert into public.notifications
+    (user_id, actor_id, type, title, body, group_id, expense_id, is_read)
   select uid, me, 'expense_updated',
-         actor_name || ' changed "' || trim(p_description) || '"',
+         case when uid = me then 'You changed "'
+              else actor_name || ' changed "' end || trim(p_description) || '"',
          '₹' || to_char(round(p_amount, 2), 'FM999999990.00')
              || coalesce(' in ' || gname, ''),
-         p_group_id, p_expense_id
+         p_group_id, p_expense_id, uid = me
   from (
     select unnest(coalesce(was_on, '{}'::uuid[])) as uid
     union
     select (s->>'user_id')::uuid from jsonb_array_elements(p_splits) s
-  ) touched
-  where uid <> me;
+    union
+    select me
+  ) touched;
 end $$;
 
 -- ============================================================================
@@ -1483,6 +1541,18 @@ begin
     coalesce(new.note, '') || coalesce(' · ' || gname, ''),
     new.group_id
   );
+
+  insert into public.notifications
+    (user_id, actor_id, type, title, body, group_id, is_read)
+  values (
+    actor, actor, 'settlement',
+    case when actor = new.from_user
+         then 'You paid ' else 'You recorded a payment from ' end
+      || coalesce((select full_name from public.profiles where id = other), 'someone')
+      || ' ₹' || to_char(new.amount, 'FM999999990.00'),
+    coalesce(new.note, '') || coalesce(' · ' || gname, ''),
+    new.group_id, true
+  );
   return null;
 end $$;
 
@@ -1516,12 +1586,19 @@ begin
     select name into gname from public.groups where id = old.group_id;
   end if;
 
-  insert into public.notifications (user_id, actor_id, type, title, body)
-  select sp.user_id, me, 'expense_deleted',
-         coalesce(actor_name, 'Someone') || ' deleted "' || old.description || '"',
-         '₹' || to_char(old.amount, 'FM999999990.00') || coalesce(' in ' || gname, '')
-  from public.expense_splits sp
-  where sp.expense_id = old.id and sp.user_id <> me;
+  insert into public.notifications (user_id, actor_id, type, title, body, is_read)
+  select uid, me, 'expense_deleted',
+         case when uid = me then 'You deleted "'
+              else coalesce(actor_name, 'Someone') || ' deleted "' end
+           || old.description || '"',
+         '₹' || to_char(old.amount, 'FM999999990.00') || coalesce(' in ' || gname, ''),
+         uid = me
+  from (
+    select user_id as uid from public.expense_splits where expense_id = old.id
+    union
+    select me
+  ) touched
+  where uid is not null;
 
   return old;
 end $$;
@@ -1587,18 +1664,21 @@ begin
   select description, group_id into descr, gid
     from public.expenses where id = new.expense_id;
 
-  insert into public.notifications (user_id, actor_id, type, title, body, group_id, expense_id)
+  insert into public.notifications
+    (user_id, actor_id, type, title, body, group_id, expense_id, is_read)
   select distinct uid, new.author_id, 'comment',
-         actor_name || ' commented on "' || descr || '"',
-         left(new.body, 120), gid, new.expense_id
+         case when uid = new.author_id then 'You commented on "'
+              else actor_name || ' commented on "' end || descr || '"',
+         left(new.body, 120), gid, new.expense_id, uid = new.author_id
   from (
     select user_id as uid from public.expense_splits where expense_id = new.expense_id
     union
     select user_id from public.expense_payers where expense_id = new.expense_id
     union
     select author_id from public.expense_comments where expense_id = new.expense_id
-  ) everyone
-  where uid <> new.author_id;
+    union
+    select new.author_id
+  ) everyone;
 
   return new;
 end $$;
@@ -1688,16 +1768,69 @@ begin
     select name into gname from public.groups where id = row_before.group_id;
   end if;
 
-  insert into public.notifications (user_id, actor_id, type, title, body, group_id)
-  select sp.user_id, me,
+  insert into public.notifications
+    (user_id, actor_id, type, title, body, group_id, is_read)
+  select uid, me,
          case when p_deleted then 'expense_deleted' else 'expense_restored' end,
-         actor_name || case when p_deleted then ' deleted "' else ' restored "' end
+         case when uid = me
+              then (case when p_deleted then 'You deleted "' else 'You restored "' end)
+              else actor_name || case when p_deleted then ' deleted "'
+                                      else ' restored "' end end
            || row_before.description || '"',
          '₹' || to_char(row_before.amount, 'FM999999990.00')
              || coalesce(' in ' || gname, ''),
-         row_before.group_id
-  from public.expense_splits sp
-  where sp.expense_id = p_expense_id and sp.user_id <> me;
+         row_before.group_id, uid = me
+  from (
+    select user_id as uid from public.expense_splits where expense_id = p_expense_id
+    union
+    select me
+  ) touched;
+end $$;
+
+-- Monthly settle-up reminders.
+--
+-- A group's settle_up_day is a day of the month, not a fixed date, so the
+-- reminder comes round every month rather than passing once and going stale.
+-- Called at launch alongside run_due_recurring(), and it only ever writes to
+-- the caller's own feed: each member's own launch raises their own reminder,
+-- so nobody's device can spam anybody else's bell.
+--
+-- Dedupe is per calendar month, so opening the app five times on the 5th
+-- gives one reminder, and a month that is missed entirely is simply missed
+-- rather than caught up on.
+create or replace function public.run_due_settle_reminders()
+returns int language plpgsql security definer set search_path = public as $$
+declare
+  me    uuid := auth.uid();
+  made  int;
+begin
+  if me is null then return 0; end if;
+
+  insert into public.notifications (user_id, actor_id, type, title, body, group_id)
+  select me, null, 'settle_reminder',
+         'Settle up in ' || g.name,
+         'The ' || sw.ordinal_day(g.settle_up_day) ||
+         ' has come round — square up with everyone.',
+         g.id
+  from public.groups g
+  join public.group_members gm on gm.group_id = g.id and gm.user_id = me
+  where g.settle_up_day is not null
+    -- Today has reached the day. A 31 in a 30-day month lands on the 30th,
+    -- so a short month still gets its reminder instead of skipping.
+    and extract(day from current_date)::int >= least(
+          g.settle_up_day,
+          extract(day from (date_trunc('month', current_date)
+                            + interval '1 month' - interval '1 day'))::int)
+    and not exists (
+      select 1 from public.notifications n
+      where n.user_id = me
+        and n.group_id = g.id
+        and n.type = 'settle_reminder'
+        and n.created_at >= date_trunc('month', current_date)
+    );
+
+  get diagnostics made = row_count;
+  return made;
 end $$;
 
 -- Anything in your trash for more than thirty days goes for good. Called at

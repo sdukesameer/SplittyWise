@@ -245,8 +245,34 @@ window.SW = window.SW || {};
         }).join('') + '</div>' +
         '<div class="split-foot"><span class="sf-state is-ok">' +
           parts.length + (parts.length === 1 ? ' payment' : ' payments') +
-        '</span><span class="sf-total">' + SW.money(total) + ' net</span></div>',
+        '</span><span class="sf-total">' + SW.money(total) + ' net</span></div>' +
+
+        // One transfer covers every group at once, so offer it before the
+        // recording step. Only when it is all one way and all owed by you:
+        // paying a netted figure across mixed directions would be wrong.
+        (!mixed && total < 0 && p.upi_id
+          ? '<div style="padding:12px 16px 4px">' +
+              '<button type="button" class="btn btn-ghost" id="sa-upi">' +
+                '💸 Pay ' + SW.money(-total) + ' by UPI</button>' +
+              '<span class="hint">Opens your payment app with ' +
+                esc(p.full_name.split(' ')[0]) + '\u2019s UPI ID and the amount ' +
+                'already in. Come back and record it — we cannot see whether ' +
+                'it went through.</span>' +
+            '</div>'
+          : ''),
       confirm: 'Record them all',
+      onOpen: function () {
+        const upi = document.getElementById('sa-upi');
+        if (upi) upi.addEventListener('click', function () {
+          window.location.href = SW.upiUri({
+            vpa: p.upi_id,
+            name: p.full_name,
+            amountPaise: -total,
+            note: parts.length === 1 ? parts[0].label + ' settle up'
+                                     : 'SplittyWise settle up',
+          });
+        });
+      },
       onConfirm: async function (btn) {
         SW.busy(btn, true);
 

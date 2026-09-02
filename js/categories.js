@@ -166,7 +166,19 @@ window.SW = window.SW || {};
           : '') +
         '<div class="field-error" id="cat-error"></div>',
       confirm: 'Save',
-      cancel: entry.custom ? 'Delete this category' : 'Cancel',
+      destroy: entry.custom ? 'Delete this category' : null,
+      onDestroy: async function (btn) {
+        SW.busy(btn, true);
+        const { error } = await db.from('user_categories').delete().eq('id', entry.id);
+        SW.busy(btn, false);
+        if (error) { SW.toast(error.message, 'error'); return false; }
+        await SW.refreshLedger();
+        render();
+        // Expenses keep the category as plain text, so nothing is orphaned:
+        // the name simply stops being offered and stops carrying a cap.
+        SW.toast(entry.name + ' deleted', 'ok');
+        return true;
+      },
       onOpen: function () { document.getElementById('cat-budget').focus(); },
       onConfirm: async function (btn) {
         const budget = parseRupees(document.getElementById('cat-budget').value);
@@ -217,12 +229,20 @@ window.SW = window.SW || {};
   }
 
   document.getElementById('cat-add').addEventListener('click', function () {
+    SW.addCategory();
+  });
+
+  // Shared with the expense form's category picker, so a category can be
+  // created at the moment it turns out to be missing. `after` receives the
+  // new name, letting the caller select it straight away.
+  SW.addCategory = function (seedName, after, onClose) {
     SW.sheet({
       title: 'Add a category',
       body:
         '<div class="field">' +
           '<label for="new-cat-name">Name</label>' +
           '<input class="input" id="new-cat-name" type="text" maxlength="40" ' +
+                 'value="' + esc(seedName || '') + '" ' +
                  'placeholder="Bike, Tuition, Cigarettes">' +
         '</div>' +
         '<div class="field">' +
@@ -265,10 +285,12 @@ window.SW = window.SW || {};
         }
 
         await SW.refreshLedger();
-        render();
+        if (SW.activeView() === 'categories') render();
         SW.toast(name + ' added', 'ok');
+        if (after) after(name);
         return true;
       },
+      onClose: onClose || null,
     });
-  });
+  };
 })();

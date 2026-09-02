@@ -609,6 +609,42 @@ window.SW = window.SW || {};
 
   // The UPI deep link. Opening it hands the phone to GPay, PhonePe, Paytm or
   // whatever else is installed, with payee and amount already filled.
+  // Which field has to follow from the others, and what it has to be.
+  //
+  // ₹300 across three people: fill in 50 and 100 and the third can only be
+  // 150. Returns null unless the answer is forced — two blanks could be
+  // divided any number of ways, so nothing is guessed, and a total already
+  // met or overshot leaves the field alone rather than writing a negative
+  // share nobody asked for.
+  //
+  // `fields` is [{ id, value, filled, auto }]. A field we filled ourselves
+  // last time counts as available again, so it keeps tracking the others
+  // until the person types in it.
+  SW.deriveBlank = function (total, fields) {
+    if (!(total > 0) || !fields || fields.length < 2) return null;
+
+    const open = fields.filter(function (x) { return !x.filled || x.auto; });
+    if (open.length !== 1) return null;
+
+    const target = open[0];
+    const others = fields.filter(function (x) { return x !== target; });
+    if (others.some(function (x) { return !x.filled; })) return null;
+
+    const assigned = others.reduce(function (t, x) { return t + (x.value || 0); }, 0);
+    const left = Math.round((total - assigned) * 100) / 100;
+    if (left <= 0) return null;
+
+    return { id: target.id, value: left };
+  };
+
+  // Mirrors sw.ordinal_day() so reminder text reads the same either side.
+  SW.ordinalDay = function (d) {
+    d = parseInt(d, 10) || 0;
+    const suffix = (d % 100 >= 11 && d % 100 <= 13) ? 'th'
+      : (d % 10 === 1 ? 'st' : d % 10 === 2 ? 'nd' : d % 10 === 3 ? 'rd' : 'th');
+    return d + suffix;
+  };
+
   SW.upiUri = function (opts) {
     // The note field is fussy across apps: keep it short and alphanumeric.
     const note = String(opts.note || '')
@@ -780,7 +816,7 @@ window.SW = window.SW || {};
       ).is('deleted_at', null).order('settled_on', { ascending: false }),
       db.from('groups').select(
         'id, name, emoji, group_type, simplify_debts, cover_path, whiteboard, ' +
-        'settle_up_on, rounding, created_by'),
+        'settle_up_day, rounding, created_by'),
       db.from('group_members').select('group_id, user_id, role, default_split_mode'),
       db.from('user_categories')
         .select('id, name, emoji, budget_paise, is_custom, sort_order')

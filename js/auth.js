@@ -136,7 +136,7 @@ window.SW = window.SW || {};
       // them were missing, so a saved photo, UPI ID, notification
       // preferences and hidden form rows all silently reverted on reopen.
       .select('full_name, email, avatar_emoji, avatar_path, upi_id, ' +
-              'notify_prefs, ui_prefs')
+              'notify_prefs, ui_prefs, email_notify')
       .eq('id', user.id)
       .maybeSingle();
 

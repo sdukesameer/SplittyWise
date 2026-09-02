@@ -307,16 +307,16 @@ window.SW = window.SW || {};
 
     const dateChip = document.getElementById('grp-settle-date-chip');
     dateChip.hidden = isLoose;
-    document.getElementById('grp-settle-date-text').textContent = g.settle_up_on
-      ? 'Settle up by ' + SW.formatDate(g.settle_up_on)
+    document.getElementById('grp-settle-date-text').textContent = g.settle_up_day
+      ? 'Settle up on the ' + SW.ordinalDay(g.settle_up_day) + ' of the month'
       : 'Add settle-up date';
     document.getElementById('grp-whiteboard-chip').hidden = isLoose;
     document.getElementById('grp-settings-chip').hidden = isLoose;
 
     // A settle-up date is a promise the group made, so show it where the
     // balance is.
-    if (!isLoose && g.settle_up_on) {
-      bal.textContent += ' · settle up by ' + SW.formatDate(g.settle_up_on);
+    if (!isLoose && g.settle_up_day) {
+      bal.textContent += ' · settle up on the ' + SW.ordinalDay(g.settle_up_day);
     }
 
     renderGroupExpenses(gid);
