@@ -110,6 +110,7 @@ window.SW = window.SW || {};
       if (opts.groupId) {
         f.groupId = opts.groupId;
         f.people = groupMembers(opts.groupId);
+        f.mode = defaultModeFor(opts.groupId);
       }
     }
 
@@ -182,9 +183,15 @@ window.SW = window.SW || {};
             '🧾 Scan a receipt to itemise' +
           '</button>' +
 
-          (f.note
-            ? '<div class="callout" id="exp-f-note">' + esc(f.note) + '</div>'
-            : '') +
+          '<button type="button" class="picker-row" id="exp-f-note" ' +
+                  'style="border:1px solid var(--line);border-radius:var(--r-md)">' +
+            '<span class="pr-label">Note</span>' +
+            '<span class="pr-value' + (f.note ? '' : ' is-empty') + '">' +
+              esc(f.note ? f.note.slice(0, 40) + (f.note.length > 40 ? '…' : '')
+                         : 'Add a note') + '</span>' +
+            '<svg class="chev" width="17" height="17" aria-hidden="true">' +
+              '<use href="#ic-chev"/></svg>' +
+          '</button>' +
 
           '<div class="receipt-row">' +
             '<input type="file" id="exp-f-file" accept="image/*" hidden>' +
@@ -240,6 +247,11 @@ window.SW = window.SW || {};
     document.getElementById('exp-f-emoji').addEventListener('click', function () {
       SW.closeSheet();
       openEmojiPicker();
+    });
+
+    document.getElementById('exp-f-note').addEventListener('click', function () {
+      SW.closeSheet();
+      openNoteSheet();
     });
 
     document.getElementById('exp-f-scan').addEventListener('click', function () {
@@ -487,6 +499,37 @@ window.SW = window.SW || {};
 
   /* ======================= who is involved =========================== */
 
+  // Each member picks their own starting split mode per group.
+  function defaultModeFor(gid) {
+    const mine = (SW.ledger.myMembership || {})[gid];
+    const mode = mine && mine.default_split_mode;
+    return SW.SPLIT_MODES.some(function (m) { return m.key === mode; }) ? mode : 'equal';
+  }
+
+  function openNoteSheet() {
+    SW.sheet({
+      title: 'Note',
+      rawBody:
+        '<div class="sheet-body">' +
+          '<textarea class="input" id="exp-f-note-text" rows="5" maxlength="500" ' +
+                    'placeholder="Anything worth remembering about this one" ' +
+                    'style="resize:vertical;line-height:1.5">' + esc(f.note || '') +
+          '</textarea>' +
+        '</div>',
+      confirm: 'Save',
+      onOpen: function () {
+        const t = document.getElementById('exp-f-note-text');
+        t.focus();
+        t.setSelectionRange(t.value.length, t.value.length);
+      },
+      onConfirm: function () {
+        f.note = document.getElementById('exp-f-note-text').value.trim();
+        return true;
+      },
+      onClose: function () { if (f) SW.openExpenseSheet({ keepState: true }); },
+    });
+  }
+
   function groupMembers(gid) {
     const me = SW.ledger.me;
     const members = (SW.ledger.members[gid] || []).slice();
@@ -579,8 +622,10 @@ window.SW = window.SW || {};
       },
       onConfirm: function () {
         if (groupId) {
+          const changed = groupId !== f.groupId;
           f.groupId = groupId;
           f.people = groupMembers(groupId);
+          if (changed) f.mode = defaultModeFor(groupId);
         } else {
           f.groupId = null;
           f.people = [me].concat(chosen);

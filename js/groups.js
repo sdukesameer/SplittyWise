@@ -302,6 +302,14 @@ window.SW = window.SW || {};
       : (state === 'owed' ? 'Overall, you are owed ' + SW.money(net)
                           : 'Overall, you owe ' + SW.money(net));
 
+    if (SW.applyGroupCover) SW.applyGroupCover(isLoose ? null : g.cover_path);
+
+    // A settle-up date is a promise the group made, so show it where the
+    // balance is.
+    if (!isLoose && g.settle_up_on) {
+      bal.textContent += ' · settle up by ' + SW.formatDate(g.settle_up_on);
+    }
+
     renderGroupExpenses(gid);
     renderGroupBalances(gid, summary);
     renderGroupTotals(gid, summary, memberIds);
@@ -473,75 +481,7 @@ window.SW = window.SW || {};
   /* ======================= group settings ============================= */
 
   document.getElementById('grp-settings').addEventListener('click', function () {
-    const gid = SW.currentGroupId;
-    if (!gid) return;
-    const g = SW.ledger.groups[gid];
-    if (!g) return;
-
-    const members = (SW.ledger.members[gid] || []);
-    const iOwn = false; // determined server-side; delete simply fails if not
-    const simplify = g.simplify_debts !== false;
-
-    SW.sheet({
-      title: g.name,
-      rawBody:
-        '<div class="card-head">' + members.length +
-          (members.length === 1 ? ' member' : ' members') + '</div>' +
-        '<div class="list">' + members.map(function (id) {
-          const p = SW.person(id);
-          return '<div class="list-row" style="cursor:default;padding-top:8px;padding-bottom:8px">' +
-            SW.avatar(id, p.avatar_emoji) +
-            '<span class="row-main"><span class="row-title" style="font-size:15px">' +
-              esc(id === SW.ledger.me ? 'You' : p.full_name) + '</span>' +
-              (p.email ? '<span class="row-sub">' + esc(p.email) + '</span>' : '') +
-            '</span></div>';
-        }).join('') + '</div>' +
-
-        '<div class="switch-row" style="margin-top:6px">' +
-          '<span class="grow">' +
-            '<span class="set-title">Simplify debts</span>' +
-            '<span class="set-sub">Net three-way chains into single payments</span>' +
-          '</span>' +
-          '<button type="button" class="switch' + (simplify ? ' is-on' : '') +
-                  '" id="grp-simplify" role="switch" aria-checked="' + simplify +
-                  '" aria-label="Simplify debts"></button>' +
-        '</div>' +
-
-        '<div class="sheet-actions">' +
-          '<button type="button" class="btn btn-ghost" id="grp-add-member">Add people</button>' +
-          '<button type="button" class="btn btn-ghost" id="grp-invite">🔗 Invite with a link</button>' +
-          '<button type="button" class="btn-text" id="grp-leave" ' +
-                  'style="color:var(--danger);align-self:center;padding:10px">Leave this group</button>' +
-        '</div>',
-      confirm: null,
-      cancel: 'Done',
-      onOpen: function () {
-        document.getElementById('grp-simplify').addEventListener('click', async function () {
-          const on = !this.classList.contains('is-on');
-          this.classList.toggle('is-on', on);
-          this.setAttribute('aria-checked', String(on));
-          const { error } = await db.from('groups')
-            .update({ simplify_debts: on }).eq('id', gid);
-          if (error) return SW.toast(error.message, 'error');
-          g.simplify_debts = on;
-        });
-
-        document.getElementById('grp-add-member').addEventListener('click', function () {
-          SW.closeSheet();
-          openAddMember(gid);
-        });
-
-        document.getElementById('grp-invite').addEventListener('click', function () {
-          SW.closeSheet();
-          SW.shareInvite(gid);
-        });
-
-        document.getElementById('grp-leave').addEventListener('click', function () {
-          SW.closeSheet();
-          confirmLeave(gid, g);
-        });
-      },
-    });
+    if (SW.currentGroupId) SW.navigate('gsettings/' + SW.currentGroupId);
   });
 
   SW.openAddMember = function (gid) { openAddMember(gid); };
@@ -672,33 +612,6 @@ window.SW = window.SW || {};
         await SW.refreshLedger();
         const n = chosen.length + (email ? 1 : 0);
         SW.toast(n === 1 ? 'Added to the group' : n + ' people added', 'ok');
-        return true;
-      },
-    });
-  }
-
-  function confirmLeave(gid, g) {
-    const net = SW.groupSummary(gid).myNet;
-    SW.sheet({
-      title: 'Leave ' + g.name + '?',
-      body: net !== 0
-        ? '<p style="color:var(--owe);font-size:14.5px;font-weight:700">' +
-          (net > 0 ? 'You are still owed ' : 'You still owe ') + SW.money(net) +
-          ' in this group.</p><p style="color:var(--muted);font-size:14.5px;margin-top:8px">' +
-          'Leaving does not clear that. Settle up first if you meant to.</p>'
-        : '<p style="color:var(--muted);font-size:14.5px">You are settled up here, so ' +
-          'nothing is outstanding. The expenses stay on record for everyone else.</p>',
-      confirm: 'Leave group',
-      onConfirm: async function (btn) {
-        SW.busy(btn, true);
-        const { error } = await db.from('group_members').delete()
-          .eq('group_id', gid).eq('user_id', SW.ledger.me);
-        SW.busy(btn, false);
-        if (error) { SW.toast(error.message, 'error'); return false; }
-
-        await SW.refreshLedger();
-        SW.navigate('groups');
-        SW.toast('You left ' + g.name, 'ok');
         return true;
       },
     });

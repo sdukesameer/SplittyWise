@@ -24,6 +24,7 @@ window.SW = window.SW || {};
     'expense-detail': { tab: null,       action: null,           summary: false, chrome: false, fab: false },
     insights:         { tab: 'account',  action: null,           summary: false, chrome: false, fab: false },
     search:           { tab: null,       action: null,           summary: false, chrome: false, fab: false },
+    'group-settings': { tab: 'groups',   action: null,           summary: false, chrome: false, fab: false },
   };
 
   // Views register their renderer here; showView calls it on every entry.

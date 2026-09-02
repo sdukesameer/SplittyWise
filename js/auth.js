@@ -22,7 +22,7 @@ window.SW = window.SW || {};
   const APP_VIEWS = ['friends', 'groups', 'activity', 'account', 'insights', 'search'];
   // Routes carrying an id, e.g. #/friend/<uuid>. The value is the view name.
   const PARAM_ROUTES = { friend: 'friend-detail', group: 'group-detail',
-                         expense: 'expense-detail' };
+                         expense: 'expense-detail', gsettings: 'group-settings' };
   const DEFAULT_VIEW = 'friends';
 
   SW.APP_VIEWS = APP_VIEWS;

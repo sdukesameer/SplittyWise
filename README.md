@@ -53,7 +53,7 @@ amounts, by percentage, by shares, or by adjustment.
 for t in tests/*.test.js; do node "$t"; done
 ```
 
-Nine suites, no database and no browser needed:
+Ten suites, no database and no browser needed:
 
 | Suite | Covers |
 |---|---|
@@ -65,6 +65,7 @@ Nine suites, no database and no browser needed:
 | `scan.test.js` | Receipt parsing from realistic OCR output, and itemised splits |
 | `insights.test.js` | Categories, monthly buckets, search, and CSV including formula-injection guarding |
 | `splitmodes.test.js` | All five split modes, checked against the reference app's own on-screen numbers |
+| `payers.test.js` | Multiple payers: one payer still behaves identically, and several net into the fewest transfers |
 | `wiring.test.js` | That the app is actually connected: every RPC exists with the arguments passed, every column selected exists, every button has a handler, every screen can render, and the offline shell is complete |
 
 The full database — 8 tables, 27 row-level-security policies, 6 write RPCs — is
@@ -534,7 +535,7 @@ against the reference app.
 | 9 | PWA install, offline, realtime notifications | Done |
 | 10 | Deploy hardening, CSP, security audit | Done |
 | 11 | Five split modes, per-person include toggles | Done |
-| 12 | Ad-hoc people picker, multiple payers, invite link | Next |
-| 13 | Notes, group rename/delete, cover photo, whiteboard | |
-| 14 | Activity detail, settled-history collapse, nudges | |
+| 12 | Ad-hoc people picker, multiple payers, invite link | Done |
+| 13 | Notes, group rename/delete, cover photo, whiteboard | Done |
+| 14 | Activity detail, settled-history collapse, nudges | Next |
 | 15 | Per-group export, friend charts, chart navigator | |

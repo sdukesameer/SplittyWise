@@ -38,6 +38,9 @@ create table if not exists public.groups (
                   check (group_type in ('trip','home','couple','event','other')),
   emoji           text not null default '👥',
   simplify_debts  boolean not null default true,
+  cover_path      text,          -- object in the `covers` bucket
+  whiteboard      text,          -- shared free-text notes for the group
+  settle_up_on    date,          -- the date everyone has agreed to square up by
   created_by      uuid not null references public.profiles(id) on delete cascade,
   created_at      timestamptz not null default now()
 );
@@ -46,6 +49,10 @@ create table if not exists public.group_members (
   group_id   uuid not null references public.groups(id) on delete cascade,
   user_id    uuid not null references public.profiles(id) on delete cascade,
   role       text not null default 'member' check (role in ('owner','member')),
+  -- Which split mode new expenses in this group start on. Per member, not
+  -- per group: it is a personal preference, as in the reference app.
+  default_split_mode text not null default 'equal'
+                     check (default_split_mode in ('equal','exact','percent','shares','adjust')),
   joined_at  timestamptz not null default now(),
   primary key (group_id, user_id)
 );
@@ -126,6 +133,21 @@ create table if not exists public.notifications (
   is_read     boolean not null default false,
   created_at  timestamptz not null default now()
 );
+
+-- Columns added after the first release. Safe to re-run.
+alter table public.groups        add column if not exists cover_path   text;
+alter table public.groups        add column if not exists whiteboard   text;
+alter table public.groups        add column if not exists settle_up_on date;
+alter table public.group_members add column if not exists default_split_mode text
+                                 not null default 'equal';
+
+do $$
+begin
+  alter table public.group_members drop constraint if exists group_members_default_split_mode_check;
+  alter table public.group_members add constraint group_members_default_split_mode_check
+    check (default_split_mode in ('equal','exact','percent','shares','adjust'));
+exception when undefined_table then null;
+end $$;
 
 -- Widen the split-mode constraint on a database created before percentages,
 -- shares and adjustments existed. Safe to re-run.
@@ -304,6 +326,13 @@ create policy group_members_insert on public.group_members
   for insert to authenticated
   with check (public.is_group_member(group_id, auth.uid())
            or public.is_group_owner(group_id, auth.uid()));
+
+-- Your own membership row is yours to change — that is where your personal
+-- default split mode for the group lives.
+drop policy if exists group_members_update on public.group_members;
+create policy group_members_update on public.group_members
+  for update to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 -- Leave a group yourself, or be removed by the owner.
 drop policy if exists group_members_delete on public.group_members;
@@ -1102,6 +1131,31 @@ create policy receipts_delete on storage.objects
   for delete to authenticated
   using (
     bucket_id = 'receipts'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+insert into storage.buckets (id, name, public)
+values ('covers', 'covers', false)
+on conflict (id) do nothing;
+
+drop policy if exists covers_insert on storage.objects;
+create policy covers_insert on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id = 'covers'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists covers_select on storage.objects;
+create policy covers_select on storage.objects
+  for select to authenticated
+  using (bucket_id = 'covers');
+
+drop policy if exists covers_delete on storage.objects;
+create policy covers_delete on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id = 'covers'
     and (storage.foldername(name))[1] = auth.uid()::text
   );
 

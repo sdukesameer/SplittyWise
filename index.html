@@ -696,6 +696,95 @@
       </div>
     </div>
 
+    <!-- ---------- Group settings ---------- -->
+    <div data-view="group-settings">
+      <header class="detail-header">
+        <div class="detail-bar">
+          <button class="icon-btn round" id="gs-back" aria-label="Back to the group">
+            <svg aria-hidden="true"><use href="#ic-back"/></svg>
+          </button>
+          <span class="grow"></span>
+        </div>
+        <div class="detail-hero">
+          <div class="detail-hero-text"><h1>Group settings</h1></div>
+        </div>
+      </header>
+
+      <div class="card">
+        <button class="set-row" id="gs-cover">
+          <span class="grow">
+            <span class="set-title">Cover photo</span>
+            <span class="set-sub" id="gs-cover-sub">Add a picture for the group</span>
+          </span>
+          <img id="gs-cover-thumb" class="receipt-thumb" alt="" hidden>
+          <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
+        </button>
+        <input type="file" id="gs-cover-file" accept="image/*" hidden>
+
+        <button class="set-row" id="gs-name">
+          <span class="grow">
+            <span class="set-title">Name and icon</span>
+            <span class="set-sub" id="gs-name-sub">&nbsp;</span>
+          </span>
+          <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
+        </button>
+
+        <button class="set-row" id="gs-settle-date">
+          <span class="grow">
+            <span class="set-title">Settle-up date</span>
+            <span class="set-sub" id="gs-settle-sub">No date set</span>
+          </span>
+          <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
+        </button>
+
+        <button class="set-row" id="gs-whiteboard">
+          <span class="grow">
+            <span class="set-title">Whiteboard</span>
+            <span class="set-sub" id="gs-wb-sub">Shared notes everyone in the group can see</span>
+          </span>
+          <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
+        </button>
+      </div>
+
+      <div class="card">
+        <div class="card-head" id="gs-members-head">Members</div>
+        <div class="list" id="gs-members"></div>
+        <div class="card-body" style="padding-top:4px">
+          <button type="button" class="btn btn-ghost" id="gs-add">Add people</button>
+          <button type="button" class="btn btn-ghost" id="gs-invite">🔗 Invite with a link</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">Advanced</div>
+        <div class="switch-row">
+          <span class="grow">
+            <span class="set-title">Simplify group debts</span>
+            <span class="set-sub">Net three-way chains into single payments</span>
+          </span>
+          <button type="button" class="switch" id="gs-simplify" role="switch"
+                  aria-checked="false" aria-label="Simplify group debts"></button>
+        </div>
+        <div class="card-body">
+          <div class="card-head" style="padding:0 0 6px">Your default split here</div>
+          <div class="seg" id="gs-default-split" role="group" aria-label="Default split mode"></div>
+          <span class="hint">Only affects you. New expenses in this group start on this.</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <button class="set-row is-danger" id="gs-leave">
+          <span class="grow"><span class="set-title">Leave this group</span></span>
+        </button>
+        <button class="set-row is-danger" id="gs-delete" hidden>
+          <span class="grow">
+            <span class="set-title">Delete this group</span>
+            <span class="set-sub">Removes it for everyone, permanently</span>
+          </span>
+        </button>
+      </div>
+    </div>
+
     <!-- ---------- Insights ---------- -->
     <div data-view="insights">
       <header class="detail-header">
@@ -816,6 +905,7 @@
 <script src="js/expense.js"></script>
 <script src="js/groups.js"></script>
 <script src="js/settle.js"></script>
+<script src="js/groupsettings.js"></script>
 <script src="js/insights.js"></script>
 <script src="js/search.js"></script>
 <script src="js/realtime.js"></script>

@@ -309,8 +309,9 @@ window.SW = window.SW || {};
       db.from('settlements').select(
         'id, group_id, from_user, to_user, amount, note, settled_on, created_at'
       ).order('settled_on', { ascending: false }),
-      db.from('groups').select('id, name, emoji, simplify_debts'),
-      db.from('group_members').select('group_id, user_id'),
+      db.from('groups').select(
+        'id, name, emoji, group_type, simplify_debts, cover_path, whiteboard, settle_up_on'),
+      db.from('group_members').select('group_id, user_id, role, default_split_mode'),
     ]);
 
     const firstError = friendRes.error || expRes.error || setRes.error ||
@@ -356,8 +357,10 @@ window.SW = window.SW || {};
 
     // group id -> member ids, which is what a group expense splits across.
     const membersByGroup = {};
+    const myMembership = {};
     memRes.data.forEach(function (m) {
       (membersByGroup[m.group_id] = membersByGroup[m.group_id] || []).push(m.user_id);
+      if (m.user_id === me) myMembership[m.group_id] = m;
     });
 
     SW.ledger = {
@@ -366,6 +369,7 @@ window.SW = window.SW || {};
       people: peopleById,
       groups: groupsById,
       members: membersByGroup,
+      myMembership: myMembership,   // group id -> my own group_members row
       expenses: expRes.data,
       settlements: setRes.data,
     };
