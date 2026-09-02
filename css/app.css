@@ -2612,3 +2612,120 @@ button.is-loading .spinner { display: block; }
 .budget-line .bl-name { flex: 1; font-weight: 700; }
 .budget-line .bl-num { font-variant-numeric: tabular-nums; font-weight: 800; }
 .budget-line .bl-num.is-over { color: var(--owe); }
+
+/* ==========================================================================
+   Trash, change history, and the friend trend line
+   ========================================================================== */
+
+.trash-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.trash-row:last-child { border-bottom: 0; }
+.trash-main { flex: 1; min-width: 0; }
+.trash-title { display: block; font-size: 15.5px; font-weight: 700; }
+.trash-sub { display: block; font-size: 12.5px; color: var(--muted); }
+.trash-amt {
+  flex: none;
+  font-size: 15px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.trash-actions { display: flex; gap: 4px; flex: none; }
+
+/* What changed, and to what. */
+.history { padding: 4px 0 8px; }
+.history-row {
+  display: flex;
+  gap: 11px;
+  padding: 7px 18px;
+  align-items: flex-start;
+  font-size: 13.5px;
+}
+.history-when {
+  flex: none;
+  width: 58px;
+  color: var(--faint);
+  font-size: 11.5px;
+  font-weight: 700;
+  padding-top: 2px;
+}
+.history-what { flex: 1; min-width: 0; color: var(--muted); line-height: 1.5; }
+.history-what b { color: var(--text); font-weight: 700; }
+.history-what del { color: var(--faint); text-decoration-thickness: 1px; }
+
+/* A twelve-month balance line, small enough to sit inside a list row. */
+.trend { flex: none; width: 54px; height: 22px; display: block; }
+.trend path { fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.trend .trend-up { stroke: var(--owed); }
+.trend .trend-down { stroke: var(--owe); }
+.trend .trend-flat { stroke: var(--line-strong); }
+.trend .trend-zero { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 2; }
+
+/* ==========================================================================
+   Listening, and the lock screen
+   ========================================================================== */
+
+.listening {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.62);
+}
+.listening-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  box-shadow: var(--shadow-fab);
+}
+.listening-dot {
+  width: 46px; height: 46px;
+  border-radius: 50%;
+  background: var(--teal);
+  animation: pulse 1.25s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { transform: scale(0.86); opacity: 0.65; }
+  50% { transform: scale(1); opacity: 1; }
+}
+.listening-text { font-size: 17px; font-weight: 800; }
+.listening-hint { font-size: 13.5px; color: var(--muted); }
+
+.mic-btn {
+  flex: none;
+  width: 42px; height: 42px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  font-size: 18px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.mic-btn:hover { border-color: var(--teal); }
+
+.lock {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: calc(24px + var(--safe-top)) 24px calc(24px + var(--safe-bottom));
+  text-align: center;
+}
+.lock svg.brand-mark { width: 68px; height: 68px; border-radius: 18px; }
+.lock h1 { font-size: 23px; }
+.lock p { color: var(--muted); font-size: 15px; max-width: 30ch; }
+.lock .btn { max-width: 300px; }

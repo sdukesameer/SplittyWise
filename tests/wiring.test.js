@@ -197,6 +197,16 @@ console.log('\n--- element ids ---');
 const htmlIds = new Set([...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]));
 const runtimeIds = new Set([...allJs.matchAll(/id="(\w[\w-]*)"/g)].map(m => m[1])
   .concat([...allJs.matchAll(/\bid = '([\w-]+)'/g)].map(m => m[1])));
+
+// A module that builds an id from a variable — `id="' + id + '"` — can
+// create any of the id-shaped literals it holds, so those count as
+// generated. Without this the check reports elements that do exist.
+for (const src of Object.values(js)) {
+  if (!/id="'\s*\+/.test(src)) continue;
+  for (const m of src.matchAll(/'([a-z][a-z0-9]*(?:-[a-z0-9]+)+)'/g)) {
+    runtimeIds.add(m[1]);
+  }
+}
 const unresolved = [];
 for (const [file, src] of Object.entries(js)) {
   for (const id of [...src.matchAll(/getElementById\('([^']+)'\)/g)].map(m => m[1])) {
@@ -309,9 +319,10 @@ for (const [file, src] of Object.entries(js)) {
       '(?:const|let|var|function)\\s+' + name + '\\b').test(src);
     if (!declared) undefinedLocals.push(file + ': ' + name + '() used ' + uses + 'x');
   }
-  // `db` is used as a value, not called.
-  const usesDb = /\bdb\./.test(src);
-  if (usesDb && !/(?:const|let|var)\s+db\b/.test(src)) {
+  // `db` is used as a value rather than called. Only a BARE `db.` counts —
+  // `SW.db.auth` is qualified and needs no local.
+  const usesBareDb = /(^|[^.\w])db\./m.test(src.replace(/SW\.db/g, 'SW_DB'));
+  if (usesBareDb && !/(?:const|let|var)\s+db\b/.test(src)) {
     undefinedLocals.push(file + ': db never declared');
   }
 }

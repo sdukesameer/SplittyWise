@@ -57,7 +57,14 @@ straight into WhatsApp.
 An order can be pasted as text rather than scanned, which parses exactly
 instead of being guessed at. Things you enter twice become one-tap
 templates. Categories are yours to add, and any of them can carry a monthly
-cap. People and groups can have a photo, kept under 100 KB. Groups carry a cover photo, a whiteboard, a settle-up date and
+cap. People and groups can have a photo, kept under 100 KB.
+
+Splits can round to whole rupees for a group that settles in cash, and an
+uneven split you agreed once can be saved and reused. A group that always
+splits the same way opens that way. Deleting is recoverable for thirty days,
+an expense records what changed and to what, friends can be renamed, and the
+app can be locked behind Face ID. An expense can be spoken rather than
+typed. Groups carry a cover photo, a whiteboard, a settle-up date and
 your own default split. Invite links let someone join by signing up.
 
 ### Running the tests
@@ -66,7 +73,7 @@ your own default split. Invite links let someone join by signing up.
 for t in tests/*.test.js; do node "$t"; done
 ```
 
-Fourteen suites, no database and no browser needed:
+Sixteen suites, no database and no browser needed:
 
 | Suite | Covers |
 |---|---|
@@ -82,6 +89,8 @@ Fourteen suites, no database and no browser needed:
 | `history.test.js` | Folding away settled history, shared groups, and scoping charts and exports by group, friend and month |
 | `upi.test.js` | UPI link building, and recurrence dates that must not drift |
 | `templates.test.js` | Templates built from habit, and what is deliberately left out |
+| `rounding.test.js` | Whole-rupee rounding still landing on the total, and inferring a group's usual people |
+| `voice.test.js` | Spoken amounts in words as well as digits, and never inventing one |
 | `calc.test.js` | Arithmetic in the amount field, including what it must refuse |
 | `wiring.test.js` | That the app is actually connected: every RPC exists with the arguments passed, every column selected exists, every button has a handler, every screen can render, every CSS token is defined at the base, the accessibility floor holds, and the offline shell is complete |
 
@@ -484,6 +493,16 @@ used to be completely silent on a phone; the app now shows it as a red
 toast naming the file and line, which is what to quote if something
 misbehaves.
 
+**The bell badge is not counting something**
+Check **Account → Notifications**. A muted event type is still recorded in
+Activity but does not contribute to the badge, which is the point — a badge
+that counts everything is a badge people learn to ignore.
+
+**Face ID is turned on and the credential is gone**
+The lock screen always offers **Sign out instead**, which clears it. Being
+permanently locked out of your own ledger would be far worse than the risk
+the lock guards against, so there is always a way past it.
+
 **A picture will not upload**
 It is re-encoded on the device until it fits under 100 KB. A very large or
 very detailed image can fail that after several attempts, and the toast says
@@ -521,6 +540,9 @@ js/friends.js           friends list, add/remove, filters, one friend's page
 js/emoji.js             description-to-icon guessing, and the picker
 js/image.js             squeezes a picture under 100 KB before upload
 js/categories.js        your own categories, and monthly caps
+js/trash.js             deleted things, and restoring them
+js/voice.js             speaking an expense instead of typing it
+js/lock.js              Face ID or fingerprint on the installed app
 js/expense.js           add/edit form, splitting, one expense's page
 js/groups.js            groups list, one group's page, membership, settings
 js/settle.js            recording payments, and the plan to clear a group
@@ -573,6 +595,25 @@ the database. Adding a friend by email therefore goes through
 address without exposing the table.
 
 ---
+
+## The one thing still outstanding
+
+Balances are derived from the whole ledger on the device, which is why they
+can never drift — but it means `loadLedger` fetches every live expense at
+each launch. That is imperceptible at a few hundred and a noticeable pause
+approaching a couple of thousand.
+
+Paginating the fetch is not enough on its own: a partial ledger produces a
+wrong balance, silently. Doing it properly means computing pairwise balances
+in Postgres and having the phone read totals rather than build them, after
+which the expense lists can page freely. That is the remaining work, and it
+is deliberately not started — the client engine is heavily tested, and
+replacing it before the size actually calls for it would trade certainty for
+speed nobody needs yet.
+
+The soft-delete filter (`deleted_at is null`) and the per-user index on it
+are already in place, so the query that summarisation would replace is at
+least the right shape.
 
 ## Roadmap
 

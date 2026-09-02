@@ -15,7 +15,8 @@ where schemaname = 'public'
   and tablename in ('profiles','friendships','groups','group_members',
                     'expenses','expense_splits','expense_payers','settlements',
                     'notifications','invites','recurring_expenses',
-                    'expense_comments','user_categories');
+                    'expense_comments','user_categories','nicknames',
+                    'split_presets','expense_history');
 
 -- 2. Which ones, if any, are unprotected.
 select tablename, rowsecurity
@@ -121,7 +122,7 @@ where schemaname = 'public'
     'profiles','friendships','groups','group_members','expenses',
     'expense_splits','expense_payers','expense_comments','settlements',
     'notifications','invites','recurring_expenses','expense_comments',
-    'user_categories'
+    'user_categories','nicknames','split_presets','expense_history'
   )
 order by tablename;
 

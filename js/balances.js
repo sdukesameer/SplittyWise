@@ -127,6 +127,29 @@ window.SW = window.SW || {};
   // Returns { byUser, assigned, valid, message, hint }. byUser always covers
   // every participant, with 0 for anyone left out; the caller drops the zeros
   // when building the payload so nobody appears on an expense owing nothing.
+  // Cash groups do not deal in paise. Each share is rounded to a whole
+  // rupee and the leftover goes to the payer, so the total still matches to
+  // the paise while every figure is payable in notes.
+  SW.applyRounding = function (byUser, ids, totalPaise, payerId) {
+    let assigned = 0;
+    ids.forEach(function (id) {
+      byUser[id] = Math.round((byUser[id] || 0) / 100) * 100;
+      assigned += byUser[id];
+    });
+
+    const drift = totalPaise - assigned;
+    if (drift === 0) return byUser;
+
+    // The payer absorbs it, since they are the one out of pocket.
+    const absorber = (payerId && byUser[payerId] !== undefined) ? payerId : ids[0];
+    byUser[absorber] += drift;
+    if (byUser[absorber] < 0) {
+      // Rounding cannot be allowed to make somebody owe less than nothing.
+      byUser[absorber] = 0;
+    }
+    return byUser;
+  };
+
   SW.computeSplit = function (mode, amountPaise, ids, state) {
     const byUser = {};
     ids.forEach(function (id) { byUser[id] = 0; });
@@ -135,6 +158,10 @@ window.SW = window.SW || {};
       return ids.reduce(function (t, id) { return t + byUser[id]; }, 0);
     };
     const done = function (valid, message, hint) {
+      // Rounding is applied last, and only to a split that already balances.
+      if (valid && state.rounding === 'rupee') {
+        SW.applyRounding(byUser, ids, amountPaise, state.payerId);
+      }
       return { byUser: byUser, assigned: sum(), valid: valid, message: message, hint: hint };
     };
 
@@ -357,6 +384,75 @@ window.SW = window.SW || {};
       });
   };
 
+  // The set of people a group's expenses usually involve. If groceries in
+  // the flat are always three ways excluding Dev, the form should open that
+  // way rather than making you untick him every time.
+  SW.usualPeopleFor = function (groupId) {
+    const L = SW.ledger;
+    if (!L) return null;
+    const me = L.me;
+    const counts = {};
+    let total = 0;
+
+    L.expenses.forEach(function (e) {
+      if ((e.group_id || null) !== groupId) return;
+      if (e.created_by !== me) return;
+      const key = (e.expense_splits || [])
+        .map(function (sp) { return sp.user_id; })
+        .sort()
+        .join(',');
+      if (!key) return;
+      counts[key] = (counts[key] || 0) + 1;
+      total++;
+    });
+
+    // Below three entries there is no pattern, only coincidence.
+    if (total < 3) return null;
+
+    const best = Object.keys(counts).sort(function (a, b) {
+      return counts[b] - counts[a] || (a < b ? -1 : 1);
+    })[0];
+
+    // And it has to actually be the usual case, not merely the most common.
+    if (!best || counts[best] / total < 0.6) return null;
+    return best.split(',');
+  };
+
+  // Twelve months of my own share with one friend, oldest first, for a
+  // sparkline. Whether a balance is growing matters more than today's value.
+  SW.friendTrend = function (friendId, months) {
+    const L = SW.ledger;
+    if (!L) return [];
+    const span = months || 12;
+    const buckets = [];
+    const index = {};
+    const now = new Date();
+
+    for (let i = span - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+      const entry = { key: key, paise: 0 };
+      index[key] = entry;
+      buckets.push(entry);
+    }
+
+    L.expenses.forEach(function (e) {
+      const bucket = index[String(e.expense_date).slice(0, 7)];
+      if (!bucket) return;
+      SW.expenseEdges(e).forEach(function (edge) {
+        if (edge.from === friendId && edge.to === L.me) bucket.paise += edge.amount;
+        else if (edge.from === L.me && edge.to === friendId) bucket.paise -= edge.amount;
+      });
+    });
+
+    // A running balance reads better than per-month deltas.
+    let running = 0;
+    return buckets.map(function (b) {
+      running += b.paise;
+      return { key: b.key, paise: running };
+    });
+  };
+
   /* ======================= amount arithmetic ========================= */
 
   // "240+80*2" in the amount field. Hand-rolled recursive descent rather
@@ -428,6 +524,78 @@ window.SW = window.SW || {};
   // show the total it works out to.
   SW.isExpression = function (text) {
     return /[+\-*/()]/.test(String(text || '').replace(/^\s*-/, ''));
+  };
+
+  /* ======================= spoken amounts ============================ */
+
+  const WORD_NUMBERS = {
+    zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+    eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13,
+    fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18,
+    nineteen: 19, twenty: 20, thirty: 30, forty: 40, fourty: 40, fifty: 50,
+    sixty: 60, seventy: 70, eighty: 80, ninety: 90,
+  };
+  const WORD_SCALES = {
+    hundred: 100, thousand: 1000, lakh: 100000, lac: 100000, crore: 10000000,
+  };
+
+  // "chai forty rupees" -> 4000 paise. Speech comes back as words as often
+  // as digits, and "two hundred fifty" has to add rather than concatenate.
+  SW.parseSpokenAmount = function (text) {
+    const words = String(text || '').toLowerCase()
+      .replace(/[^a-z0-9. ]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+
+    let total = 0;      // completed scales
+    let current = 0;    // the group being built
+    let seen = false;
+
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i];
+
+      if (/^\d+(\.\d{1,2})?$/.test(w)) {
+        current += parseFloat(w);
+        seen = true;
+        continue;
+      }
+      if (WORD_NUMBERS[w] !== undefined) {
+        current += WORD_NUMBERS[w];
+        seen = true;
+        continue;
+      }
+      if (WORD_SCALES[w] !== undefined) {
+        const scale = WORD_SCALES[w];
+        // "two hundred" multiplies what is pending; "hundred" alone is 100.
+        if (scale === 100) current = (current || 1) * 100;
+        else { total += (current || 1) * scale; current = 0; }
+        seen = true;
+        continue;
+      }
+      // Anything else ends the number, so "chai forty rupees dinner" does
+      // not quietly fold two amounts together.
+      if (seen && (total + current) > 0 && /^(rupees?|rs|only)$/.test(w)) break;
+    }
+
+    if (!seen) return null;
+    const rupees = total + current;
+    if (!(rupees > 0) || rupees > 5000000) return null;
+    return Math.round(rupees * 100);
+  };
+
+  // What is left once the amount and its filler words are taken out — that
+  // is the description.
+  SW.stripSpokenAmount = function (text) {
+    const filler = new RegExp(
+      '\\b(' + Object.keys(WORD_NUMBERS).join('|') + '|' +
+      Object.keys(WORD_SCALES).join('|') + '|rupees?|rs|only|for|and)\\b', 'gi');
+
+    return String(text || '')
+      .replace(/\d+(\.\d{1,2})?/g, ' ')
+      .replace(filler, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+      .replace(/^./, function (c) { return c.toUpperCase(); });
   };
 
   /* ======================= UPI ======================================== */
@@ -597,22 +765,28 @@ window.SW = window.SW || {};
     const db = SW.db;
     const me = SW.user.id;
 
-    const [friendRes, expRes, setRes, grpRes, memRes, catRes] = await Promise.all([
+    const [friendRes, expRes, setRes, grpRes, memRes, catRes, nickRes, presetRes] =
+      await Promise.all([
       db.from('friendships').select('user_a, user_b'),
+      // Live rows only. Deleted ones live on for thirty days so a mistake
+      // can be undone, but they must not touch a balance meanwhile.
       db.from('expenses').select(
         'id, group_id, payer_id, amount, description, emoji, category, split_mode, ' +
-        'notes, expense_date, created_at, ' +
+        'notes, expense_date, created_at, created_by, ' +
         'expense_splits(user_id, amount), expense_payers(user_id, amount)'
-      ).order('expense_date', { ascending: false }),
+      ).is('deleted_at', null).order('expense_date', { ascending: false }),
       db.from('settlements').select(
         'id, group_id, from_user, to_user, amount, note, settled_on, created_at'
-      ).order('settled_on', { ascending: false }),
+      ).is('deleted_at', null).order('settled_on', { ascending: false }),
       db.from('groups').select(
-        'id, name, emoji, group_type, simplify_debts, cover_path, whiteboard, settle_up_on'),
+        'id, name, emoji, group_type, simplify_debts, cover_path, whiteboard, ' +
+        'settle_up_on, rounding, created_by'),
       db.from('group_members').select('group_id, user_id, role, default_split_mode'),
       db.from('user_categories')
         .select('id, name, emoji, budget_paise, is_custom, sort_order')
         .order('sort_order', { ascending: true }),
+      db.from('nicknames').select('other_id, nickname'),
+      db.from('split_presets').select('id, group_id, name, mode, config'),
     ]);
 
     // Categories are a convenience rather than part of the ledger, so a
@@ -674,6 +848,14 @@ window.SW = window.SW || {};
       members: membersByGroup,
       myMembership: myMembership,   // group id -> my own group_members row
       categories: (catRes && !catRes.error && catRes.data) || [],
+      nicknames: (function () {
+        const out = {};
+        if (nickRes && !nickRes.error) {
+          (nickRes.data || []).forEach(function (r) { out[r.other_id] = r.nickname; });
+        }
+        return out;
+      })(),
+      presets: (presetRes && !presetRes.error && presetRes.data) || [],
       expenses: expRes.data,
       settlements: setRes.data,
     };
@@ -717,8 +899,13 @@ window.SW = window.SW || {};
     if (id === SW.ledger.me) {
       return { id: id, full_name: 'You', email: '', avatar_emoji: (SW.profile || {}).avatar_emoji };
     }
-    return SW.ledger.people[id] ||
-           { id: id, full_name: 'Someone', email: '', avatar_emoji: '👤' };
+    const found = SW.ledger.people[id];
+    if (!found) return { id: id, full_name: 'Someone', email: '', avatar_emoji: '👤' };
+
+    // What you call them wins over what they call themselves, everywhere.
+    const nick = (SW.ledger.nicknames || {})[id];
+    if (!nick) return found;
+    return Object.assign({}, found, { full_name: nick, real_name: found.full_name });
   };
 
   /* ======================= balance maths ============================== */

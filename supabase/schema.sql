@@ -21,6 +21,10 @@ create table if not exists public.profiles (
   -- An object in the `avatars` bucket. Capped at 100 KB by the client, so a
   -- few hundred people still cost only tens of megabytes.
   avatar_path   text,
+  -- Which events reach you, and which parts of the expense form you want to
+  -- see. Kept as JSON because both are lists of small flags that will grow.
+  notify_prefs  jsonb not null default '{}'::jsonb,
+  ui_prefs      jsonb not null default '{}'::jsonb,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
@@ -45,6 +49,9 @@ create table if not exists public.groups (
   emoji           text not null default '👥',
   simplify_debts  boolean not null default true,
   cover_path      text,          -- object in the `covers` bucket
+  -- 'paise' splits to the exact paise; 'rupee' rounds each share to a whole
+  -- rupee and gives the remainder to the payer, for groups settling in cash.
+  rounding        text not null default 'paise' check (rounding in ('paise','rupee')),
   whiteboard      text,          -- shared free-text notes for the group
   settle_up_on    date,          -- the date everyone has agreed to square up by
   created_by      uuid not null references public.profiles(id) on delete cascade,
@@ -78,7 +85,9 @@ create table if not exists public.expenses (
   notes         text,
   created_by    uuid not null references public.profiles(id),
   created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now()
+  updated_at    timestamptz not null default now(),
+  -- Set rather than removed, so a mistaken delete is recoverable.
+  deleted_at    timestamptz
 );
 
 -- Who owes what on a given expense. Splits must sum to expenses.amount;
@@ -164,6 +173,38 @@ create table if not exists public.user_categories (
   unique (user_id, name)
 );
 
+-- What you call somebody, which need not be what they call themselves.
+-- Private to you: nobody is told their nickname.
+create table if not exists public.nicknames (
+  user_id    uuid not null references public.profiles(id) on delete cascade,
+  other_id   uuid not null references public.profiles(id) on delete cascade,
+  nickname   text not null check (length(trim(nickname)) between 1 and 40),
+  primary key (user_id, other_id)
+);
+
+-- A split you agreed once and should never have to re-derive. `config` holds
+-- whatever that mode needs: exact amounts, percentages, shares or extras.
+create table if not exists public.split_presets (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references public.profiles(id) on delete cascade,
+  group_id    uuid references public.groups(id) on delete cascade,
+  name        text not null check (length(trim(name)) between 1 and 40),
+  mode        text not null check (mode in ('equal','exact','percent','shares','adjust')),
+  config      jsonb not null default '{}'::jsonb,
+  created_at  timestamptz not null default now(),
+  unique (user_id, group_id, name)
+);
+
+-- What changed on an expense, and to what. "Ali changed Groceries" is not
+-- checkable; "₹1,240 became ₹1,420" is.
+create table if not exists public.expense_history (
+  id          uuid primary key default gen_random_uuid(),
+  expense_id  uuid not null references public.expenses(id) on delete cascade,
+  actor_id    uuid references public.profiles(id) on delete set null,
+  changed_at  timestamptz not null default now(),
+  changes     jsonb not null
+);
+
 -- A payback. Never edits an expense; balances are (expenses - settlements).
 create table if not exists public.settlements (
   id          uuid primary key default gen_random_uuid(),
@@ -175,6 +216,7 @@ create table if not exists public.settlements (
   settled_on  date not null default current_date,
   created_by  uuid not null references public.profiles(id),
   created_at  timestamptz not null default now(),
+  deleted_at  timestamptz,
   constraint settlement_distinct check (from_user <> to_user)
 );
 
@@ -194,6 +236,21 @@ create table if not exists public.notifications (
 -- Columns added after the first release. Safe to re-run.
 alter table public.profiles       add column if not exists upi_id      text;
 alter table public.profiles       add column if not exists avatar_path text;
+alter table public.profiles       add column if not exists notify_prefs jsonb not null default '{}'::jsonb;
+alter table public.profiles       add column if not exists ui_prefs     jsonb not null default '{}'::jsonb;
+alter table public.groups         add column if not exists rounding     text not null default 'paise';
+
+do $$
+begin
+  alter table public.groups drop constraint if exists groups_rounding_check;
+  alter table public.groups add constraint groups_rounding_check
+    check (rounding in ('paise','rupee'));
+exception when undefined_table then null;
+end $$;
+
+-- Deleting is now recoverable for thirty days rather than immediate.
+alter table public.expenses    add column if not exists deleted_at timestamptz;
+alter table public.settlements add column if not exists deleted_at timestamptz;
 
 -- Receipt images are no longer stored: a scan happens on the device and the
 -- picture is discarded, so nothing accumulates. The column and its bucket
@@ -242,6 +299,14 @@ create index if not exists idx_recurring_due       on public.recurring_expenses(
 create index if not exists idx_recurring_creator   on public.recurring_expenses(created_by);
 create index if not exists idx_comments_expense    on public.expense_comments(expense_id, created_at);
 create index if not exists idx_user_categories     on public.user_categories(user_id, sort_order);
+create index if not exists idx_nicknames           on public.nicknames(user_id);
+create index if not exists idx_presets             on public.split_presets(user_id, group_id);
+create index if not exists idx_history_expense     on public.expense_history(expense_id, changed_at desc);
+-- Live rows only: every read filters on this.
+create index if not exists idx_expenses_live       on public.expenses(group_id)
+  where deleted_at is null;
+create index if not exists idx_settlements_live    on public.settlements(group_id)
+  where deleted_at is null;
 create index if not exists idx_splits_user         on public.expense_splits(user_id);
 create index if not exists idx_settle_from         on public.settlements(from_user);
 create index if not exists idx_settle_to           on public.settlements(to_user);
@@ -332,6 +397,9 @@ alter table public.invites        enable row level security;
 alter table public.recurring_expenses enable row level security;
 alter table public.expense_comments enable row level security;
 alter table public.user_categories enable row level security;
+alter table public.nicknames       enable row level security;
+alter table public.split_presets   enable row level security;
+alter table public.expense_history enable row level security;
 alter table public.settlements    enable row level security;
 alter table public.notifications  enable row level security;
 
@@ -544,6 +612,25 @@ drop policy if exists categories_all on public.user_categories;
 create policy categories_all on public.user_categories
   for all to authenticated
   using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- ---- nicknames and presets -------------------------------------------------
+-- Both are entirely yours; nobody else can read either.
+drop policy if exists nicknames_all on public.nicknames;
+create policy nicknames_all on public.nicknames
+  for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+drop policy if exists presets_all on public.split_presets;
+create policy presets_all on public.split_presets
+  for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- ---- expense_history -------------------------------------------------------
+-- Readable by anyone who can see the expense; written only by update_expense.
+drop policy if exists history_select on public.expense_history;
+create policy history_select on public.expense_history
+  for select to authenticated
+  using (public.can_see_expense(expense_id, auth.uid()));
 
 -- ---- settlements -----------------------------------------------------------
 drop policy if exists settlements_select on public.settlements;
@@ -1082,14 +1169,16 @@ declare
   was_on      uuid[];
   actor_name  text;
   gname       text;
+  before_row  public.expenses;
+  diff        jsonb := '{}'::jsonb;
 begin
   if me is null then raise exception 'Not authenticated'; end if;
   if not public.can_see_expense(p_expense_id, me) then
     raise exception 'You cannot edit this expense';
   end if;
 
-  select coalesce(p_payer_id, e.payer_id) into payer
-    from public.expenses e where e.id = p_expense_id;
+  select * into before_row from public.expenses where id = p_expense_id;
+  payer := coalesce(p_payer_id, before_row.payer_id);
 
   payers := coalesce(p_payers, jsonb_build_array(
     jsonb_build_object('user_id', payer, 'amount', round(p_amount, 2))));
@@ -1185,6 +1274,40 @@ begin
   insert into public.expense_payers (expense_id, user_id, amount)
   select p_expense_id, (s->>'user_id')::uuid, round((s->>'amount')::numeric, 2)
   from jsonb_array_elements(payers) s;
+
+  -- Only the fields that actually moved, so the history reads as a change
+  -- rather than a snapshot.
+  if before_row.amount <> round(p_amount, 2) then
+    diff := diff || jsonb_build_object('amount',
+      jsonb_build_object('from', before_row.amount, 'to', round(p_amount, 2)));
+  end if;
+  if before_row.description <> trim(p_description) then
+    diff := diff || jsonb_build_object('description',
+      jsonb_build_object('from', before_row.description, 'to', trim(p_description)));
+  end if;
+  if before_row.payer_id <> payer then
+    diff := diff || jsonb_build_object('payer',
+      jsonb_build_object('from', before_row.payer_id, 'to', payer));
+  end if;
+  if coalesce(before_row.group_id::text, '') <> coalesce(p_group_id::text, '') then
+    diff := diff || jsonb_build_object('group',
+      jsonb_build_object('from', before_row.group_id, 'to', p_group_id));
+  end if;
+  if before_row.expense_date <> coalesce(p_expense_date, before_row.expense_date) then
+    diff := diff || jsonb_build_object('date',
+      jsonb_build_object('from', before_row.expense_date,
+                         'to', coalesce(p_expense_date, before_row.expense_date)));
+  end if;
+  if before_row.split_mode <> coalesce(p_split_mode, before_row.split_mode) then
+    diff := diff || jsonb_build_object('split',
+      jsonb_build_object('from', before_row.split_mode,
+                         'to', coalesce(p_split_mode, before_row.split_mode)));
+  end if;
+
+  if diff <> '{}'::jsonb then
+    insert into public.expense_history (expense_id, actor_id, changes)
+    values (p_expense_id, me, diff);
+  end if;
 
   select full_name into actor_name from public.profiles where id = me;
   if p_group_id is not null then
@@ -1468,6 +1591,78 @@ begin
   return json_build_object('ok', true);
 end $$;
 
+-- Deleting is now a soft delete, so the BEFORE DELETE trigger no longer
+-- fires on the way out. This does the same job, and is also what restores.
+create or replace function public.set_expense_deleted(
+  p_expense_id uuid,
+  p_deleted    boolean
+) returns void language plpgsql security definer set search_path = public as $$
+declare
+  me          uuid := auth.uid();
+  row_before  public.expenses;
+  actor_name  text;
+  gname       text;
+begin
+  if me is null then raise exception 'Not authenticated'; end if;
+  if not public.can_see_expense(p_expense_id, me) then
+    raise exception 'You cannot change this expense';
+  end if;
+
+  select * into row_before from public.expenses where id = p_expense_id;
+  if row_before.id is null then return; end if;
+
+  update public.expenses
+  set deleted_at = case when p_deleted then now() else null end,
+      updated_at = now()
+  where id = p_expense_id;
+
+  select full_name into actor_name from public.profiles where id = me;
+  if row_before.group_id is not null then
+    select name into gname from public.groups where id = row_before.group_id;
+  end if;
+
+  insert into public.notifications (user_id, actor_id, type, title, body, group_id)
+  select sp.user_id, me,
+         case when p_deleted then 'expense_deleted' else 'expense_restored' end,
+         actor_name || case when p_deleted then ' deleted "' else ' restored "' end
+           || row_before.description || '"',
+         '₹' || to_char(row_before.amount, 'FM999999990.00')
+             || coalesce(' in ' || gname, ''),
+         row_before.group_id
+  from public.expense_splits sp
+  where sp.expense_id = p_expense_id and sp.user_id <> me;
+end $$;
+
+-- Anything in your trash for more than thirty days goes for good. Called at
+-- launch, so the bin empties itself without a scheduler.
+create or replace function public.purge_trash()
+returns json language plpgsql security definer set search_path = public as $$
+declare
+  me      uuid := auth.uid();
+  gone_e  int;
+  gone_s  int;
+begin
+  if me is null then raise exception 'Not authenticated'; end if;
+
+  with removed as (
+    delete from public.expenses
+    where created_by = me
+      and deleted_at is not null
+      and deleted_at < now() - interval '30 days'
+    returning 1
+  ) select count(*) into gone_e from removed;
+
+  with removed as (
+    delete from public.settlements
+    where created_by = me
+      and deleted_at is not null
+      and deleted_at < now() - interval '30 days'
+    returning 1
+  ) select count(*) into gone_s from removed;
+
+  return json_build_object('ok', true, 'expenses', gone_e, 'settlements', gone_s);
+end $$;
+
 -- ============================================================================
 --  10. NOTIFICATIONS — bulk helpers
 -- ============================================================================
@@ -1561,6 +1756,8 @@ grant execute on function public.create_invite(uuid)                    to authe
 grant execute on function public.redeem_invite(text)                    to authenticated;
 grant execute on function public.nudge(uuid, uuid, numeric)              to authenticated;
 grant execute on function public.run_due_recurring()                     to authenticated;
+grant execute on function public.set_expense_deleted(uuid, boolean)      to authenticated;
+grant execute on function public.purge_trash()                           to authenticated;
 grant execute on function public.next_occurrence(date, text, int)        to authenticated;
 grant execute on function public.create_expense(
   numeric, text, jsonb, uuid, uuid, text, text, text, date, text, jsonb) to authenticated;

@@ -131,6 +131,42 @@ window.SW = window.SW || {};
     }).join('') + '</div>';
   }
 
+  // Whether a balance is growing matters more than today's figure, and the
+  // line fits in the space the row already has. Drawn rather than charted:
+  // one path, no library, and it takes its colour from the direction.
+  function trendSvg(id) {
+    const points = SW.friendTrend(id, 12);
+    const values = points.map(function (p) { return p.paise; });
+    const active = values.filter(function (v) { return v !== 0; }).length;
+    if (active < 2) return '';   // a flat line says nothing
+
+    const W = 54, H = 22, pad = 2;
+    const max = Math.max.apply(null, values);
+    const min = Math.min.apply(null, values);
+    const span = (max - min) || 1;
+
+    const x = function (i) { return pad + (i / (values.length - 1)) * (W - pad * 2); };
+    const y = function (v) { return H - pad - ((v - min) / span) * (H - pad * 2); };
+
+    const path = values.map(function (v, i) {
+      return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1);
+    }).join(' ');
+
+    const last = values[values.length - 1];
+    const previous = values[values.length - 2];
+    const cls = last > previous ? 'trend-up' : (last < previous ? 'trend-down' : 'trend-flat');
+
+    // A dashed line at zero, so above and below it read as owed and owing.
+    const zero = (min <= 0 && max >= 0)
+      ? '<path class="trend-zero" d="M' + pad + ' ' + y(0).toFixed(1) +
+        ' L' + (W - pad) + ' ' + y(0).toFixed(1) + '"></path>'
+      : '';
+
+    return '<svg class="trend" viewBox="0 0 ' + W + ' ' + H + '" ' +
+      'role="img" aria-label="Balance over the last twelve months">' +
+      zero + '<path class="' + cls + '" d="' + path + '"></path></svg>';
+  }
+
   function rowHtml(id, bucket) {
     const p = SW.person(id);
     const net = bucket.net;
@@ -149,6 +185,7 @@ window.SW = window.SW || {};
     return '<button class="list-row is-' + state + '" data-friend="' + esc(id) + '">' +
              SW.avatar(id, p.avatar_emoji) +
              '<span class="row-main"><span class="row-title">' + esc(p.full_name) + '</span></span>' +
+             trendSvg(id) +
              '<span class="row-amount">' + amount + '</span>' +
            '</button>' +
            breakdownHtml(p.full_name, bucket);
@@ -472,6 +509,50 @@ window.SW = window.SW || {};
 
   document.getElementById('friend-add-expense').addEventListener('click', function () {
     SW.openExpenseSheet({ friendId: SW.currentFriendId });
+  });
+
+  document.getElementById('friend-rename').addEventListener('click', function () {
+    const id = SW.currentFriendId;
+    const p = SW.person(id);
+    const real = p.real_name || p.full_name;
+    const current = (SW.ledger.nicknames || {})[id] || '';
+
+    SW.sheet({
+      title: 'What to call them',
+      body:
+        '<p style="color:var(--muted);font-size:14.5px">They signed up as ' +
+          '<strong style="color:var(--text)">' + esc(real) + '</strong>. A name ' +
+          'you set here is private — they are never told.</p>' +
+        '<div class="field" style="margin-top:12px">' +
+          '<label for="nick-input">Name</label>' +
+          '<input class="input" id="nick-input" type="text" maxlength="40" ' +
+                 'placeholder="' + esc(real) + '" value="' + esc(current) + '">' +
+          '<div class="field-error" id="nick-error"></div>' +
+        '</div>',
+      confirm: 'Save',
+      cancel: current ? 'Use their real name' : 'Cancel',
+      onOpen: function () { document.getElementById('nick-input').focus(); },
+      onConfirm: async function (btn) {
+        const value = document.getElementById('nick-input').value.trim();
+        SW.busy(btn, true);
+
+        let error;
+        if (!value) {
+          ({ error } = await db.from('nicknames').delete()
+            .eq('user_id', SW.ledger.me).eq('other_id', id));
+        } else {
+          ({ error } = await db.from('nicknames').upsert({
+            user_id: SW.ledger.me, other_id: id, nickname: value,
+          }, { onConflict: 'user_id,other_id' }));
+        }
+        SW.busy(btn, false);
+        if (error) { SW.setError('nick-error', error.message); return false; }
+
+        await SW.refreshLedger();
+        SW.toast(value ? 'Now shown as ' + value : 'Using their real name', 'ok');
+        return true;
+      },
+    });
   });
 
   document.getElementById('friend-charts').addEventListener('click', function () {

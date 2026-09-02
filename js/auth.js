@@ -20,7 +20,7 @@ window.SW = window.SW || {};
 
   const AUTH_SCREENS = ['login', 'signup', 'verify', 'forgot', 'forgot-sent', 'reset'];
   const APP_VIEWS = ['friends', 'groups', 'activity', 'account', 'insights',
-                     'search', 'recurring', 'categories'];
+                     'search', 'recurring', 'categories', 'trash'];
   // Routes carrying an id, e.g. #/friend/<uuid>. The value is the view name.
   const PARAM_ROUTES = { friend: 'friend-detail', group: 'group-detail',
                          expense: 'expense-detail', gsettings: 'group-settings' };
@@ -409,6 +409,11 @@ window.SW = window.SW || {};
     if (recoveryMode) {
       SW.navigate('reset', { replace: true });
     } else if (SW.session) {
+      // Nothing is painted until the lock is satisfied.
+      if (SW.checkLock) {
+        const passed = await SW.checkLock();
+        if (!passed) return;
+      }
       const r = routeFromHash();
       const dest = r && isAppRoute(r.name)
         ? r.name + (r.param ? '/' + r.param : '')

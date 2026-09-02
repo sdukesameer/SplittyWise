@@ -112,6 +112,7 @@ window.SW = window.SW || {};
         f.groupId = opts.groupId;
         f.people = groupMembers(opts.groupId);
         f.mode = defaultModeFor(opts.groupId);
+        applyUsualPeople(opts.groupId);
       }
     }
 
@@ -152,10 +153,14 @@ window.SW = window.SW || {};
           '</div>' +
           '<div class="calc-hint" id="exp-f-calc" hidden></div>' +
 
-          '<div class="field">' +
+          '<div class="field" style="flex-direction:row;align-items:center;gap:8px">' +
             '<input class="input" id="exp-f-desc" type="text" maxlength="80" ' +
                    'placeholder="What was it for?" value="' + esc(f.description) + '" ' +
                    'aria-label="Description">' +
+            (SW.voiceAvailable
+              ? '<button type="button" class="mic-btn" id="exp-f-mic" ' +
+                'aria-label="Say it instead">🎙</button>'
+              : '') +
           '</div>' +
 
           '<div class="picker-group">' +
@@ -184,37 +189,7 @@ window.SW = window.SW || {};
 
           '<div id="exp-f-split"></div>' +
 
-          '<button type="button" class="picker-row" id="exp-f-category" ' +
-                  'style="border:1px solid var(--line);border-radius:var(--r-md)">' +
-            '<span class="pr-label">Category</span>' +
-            '<span class="pr-value">' +
-              esc(f.category || SW.categoryForEmoji(f.emoji)) + '</span>' +
-            '<svg class="chev" width="17" height="17" aria-hidden="true">' +
-              '<use href="#ic-chev"/></svg>' +
-          '</button>' +
-
-          '<button type="button" class="picker-row" id="exp-f-repeat" ' +
-                  'style="border:1px solid var(--line);border-radius:var(--r-md)">' +
-            '<span class="pr-label">Repeats</span>' +
-            '<span class="pr-value' + (f.repeat ? '' : ' is-empty') + '">' +
-              esc(f.repeat ? SW.cadenceLabel(f.repeat) : 'Never') + '</span>' +
-            '<svg class="chev" width="17" height="17" aria-hidden="true">' +
-              '<use href="#ic-chev"/></svg>' +
-          '</button>' +
-
-          '<button type="button" class="btn btn-ghost" id="exp-f-scan">' +
-            '🧾 Scan a receipt to itemise' +
-          '</button>' +
-
-          '<button type="button" class="picker-row" id="exp-f-note" ' +
-                  'style="border:1px solid var(--line);border-radius:var(--r-md)">' +
-            '<span class="pr-label">Note</span>' +
-            '<span class="pr-value' + (f.note ? '' : ' is-empty') + '">' +
-              esc(f.note ? f.note.slice(0, 40) + (f.note.length > 40 ? '…' : '')
-                         : 'Add a note') + '</span>' +
-            '<svg class="chev" width="17" height="17" aria-hidden="true">' +
-              '<use href="#ic-chev"/></svg>' +
-          '</button>' +
+          optionalRows() +
 
 
 
@@ -225,6 +200,47 @@ window.SW = window.SW || {};
       onConfirm: save,
     });
   };
+
+  // Category, Repeats, Scan and Note can each be switched off from Account,
+  // so they are built here rather than inline: a row of nested ternaries in
+  // the middle of a long concatenation is how the expression broke once.
+  function pickerRow(id, label, value, empty) {
+    return '<button type="button" class="picker-row" id="' + id + '" ' +
+             'style="border:1px solid var(--line);border-radius:var(--r-md)">' +
+        '<span class="pr-label">' + esc(label) + '</span>' +
+        '<span class="pr-value' + (empty ? ' is-empty' : '') + '">' +
+          esc(value) + '</span>' +
+        '<svg class="chev" width="17" height="17" aria-hidden="true">' +
+          '<use href="#ic-chev"/></svg>' +
+      '</button>';
+  }
+
+  function shows(key) {
+    return !SW.formShows || SW.formShows(key);
+  }
+
+  function optionalRows() {
+    let out = '';
+
+    if (shows('category')) {
+      out += pickerRow('exp-f-category', 'Category',
+        f.category || SW.categoryForEmoji(f.emoji), false);
+    }
+    if (shows('repeat')) {
+      out += pickerRow('exp-f-repeat', 'Repeats',
+        f.repeat ? SW.cadenceLabel(f.repeat) : 'Never', !f.repeat);
+    }
+    if (shows('scan')) {
+      out += '<button type="button" class="btn btn-ghost" id="exp-f-scan">' +
+        '🧾 Scan a receipt to itemise</button>';
+    }
+    if (shows('note')) {
+      out += pickerRow('exp-f-note', 'Note',
+        f.note ? f.note.slice(0, 40) + (f.note.length > 40 ? '…' : '') : 'Add a note',
+        !f.note);
+    }
+    return out;
+  }
 
   // Built from habit, so this row is empty until something has been entered
   // twice — a template nobody asked for is just clutter.
@@ -330,6 +346,32 @@ window.SW = window.SW || {};
       openEmojiPicker();
     });
 
+    const mic = document.getElementById('exp-f-mic');
+    if (mic) mic.addEventListener('click', function () {
+      SW.listen(function (result) {
+        if (result.description) {
+          f.description = result.description;
+          desc.value = result.description;
+          if (!f.emojiManual) {
+            f.emoji = SW.guessEmoji(result.description);
+            document.getElementById('exp-f-emoji').textContent = f.emoji;
+          }
+        }
+        if (result.amountPaise) {
+          f.amountPaise = result.amountPaise;
+          f.amountText = SW.rupees(result.amountPaise);
+          amount.value = f.amountText;
+        }
+        renderSplit();
+
+        // Show what was heard, so a misheard amount is obvious rather than
+        // silently wrong.
+        SW.toast('Heard "' + result.heard + '"' +
+          (result.amountPaise ? '' : ' — no amount in that'),
+          result.amountPaise ? 'ok' : undefined);
+      });
+    });
+
     const templates = document.getElementById('exp-f-templates');
     if (templates) templates.addEventListener('click', function (e) {
       const b = e.target.closest('[data-template]');
@@ -338,22 +380,26 @@ window.SW = window.SW || {};
       if (t) applyTemplate(t);
     });
 
-    document.getElementById('exp-f-category').addEventListener('click', function () {
+    const exp_f_category = document.getElementById('exp-f-category');
+    if (exp_f_category) exp_f_category.addEventListener('click', function () {
       SW.closeSheet();
       openCategorySheet();
     });
 
-    document.getElementById('exp-f-repeat').addEventListener('click', function () {
+    const exp_f_repeat = document.getElementById('exp-f-repeat');
+    if (exp_f_repeat) exp_f_repeat.addEventListener('click', function () {
       SW.closeSheet();
       openRepeatSheet();
     });
 
-    document.getElementById('exp-f-note').addEventListener('click', function () {
+    const exp_f_note = document.getElementById('exp-f-note');
+    if (exp_f_note) exp_f_note.addEventListener('click', function () {
       SW.closeSheet();
       openNoteSheet();
     });
 
-    document.getElementById('exp-f-scan').addEventListener('click', function () {
+    const scanBtn = document.getElementById('exp-f-scan');
+    if (scanBtn) scanBtn.addEventListener('click', function () {
       const people = participants();
       if (people.length < 2) {
         return SW.setError('exp-f-error',
@@ -391,9 +437,14 @@ window.SW = window.SW || {};
   }
 
   function splitState() {
+    const group = f.groupId ? SW.ledger.groups[f.groupId] : null;
     return {
       included: f.included, exact: f.exact,
       percent: f.percent, shares: f.shares, adjust: f.adjust,
+      // A cash group rounds to whole rupees, and the payer absorbs the
+      // leftover so the total still matches to the paise.
+      rounding: (group && group.rounding) || 'paise',
+      payerId: f.payerId,
     };
   }
 
@@ -427,10 +478,12 @@ window.SW = window.SW || {};
         '</div>' +
         '<div class="split-foot">' +
           '<span class="sf-state ' + (result.valid ? 'is-ok' : 'is-off') + '">' +
-            esc(result.message) + '</span>' +
+            esc(result.message) +
+            (splitState().rounding === 'rupee' ? ' · whole rupees' : '') + '</span>' +
           '<span class="sf-total">' + esc(result.hint || SW.money(result.assigned) +
             ' of ' + SW.money(f.amountPaise)) + '</span>' +
         '</div>' +
+        presetBar() +
       '</div>';
 
     wireSplit();
@@ -493,7 +546,60 @@ window.SW = window.SW || {};
     '</div>';
   }
 
+  // Presets are per group, so a flat's rent split does not clutter a trip.
+  function relevantPresets() {
+    return ((SW.ledger && SW.ledger.presets) || []).filter(function (pr) {
+      return (pr.group_id || null) === (f.groupId || null);
+    });
+  }
+
+  function presetBar() {
+    const saved = relevantPresets();
+    const canSave = f.mode !== 'equal' && f.amountPaise > 0;
+    if (!saved.length && !canSave) return '';
+
+    return '<div class="split-modes" id="exp-f-presets" ' +
+             'style="border-bottom:0;border-top:1px solid var(--line)" ' +
+             'aria-label="Saved splits">' +
+      saved.map(function (pr) {
+        return '<button type="button" data-preset="' + esc(pr.id) + '">' +
+          esc(pr.name) + '</button>';
+      }).join('') +
+      (canSave
+        ? '<button type="button" data-preset-save="1" ' +
+          'style="border-style:dashed">Save this split</button>'
+        : '') +
+    '</div>';
+  }
+
   function wireSplit() {
+    const presets = document.getElementById('exp-f-presets');
+    if (presets) presets.addEventListener('click', function (e) {
+      const save = e.target.closest('[data-preset-save]');
+      if (save) return openSavePreset();
+
+      const use = e.target.closest('[data-preset]');
+      if (!use) return;
+      const pr = relevantPresets().filter(function (x) {
+        return x.id === use.getAttribute('data-preset');
+      })[0];
+      if (!pr) return;
+
+      f.mode = pr.mode;
+      const cfg = pr.config || {};
+      // Only the people still involved: a preset naming somebody who has
+      // left the group must not resurrect them.
+      const here = participants();
+      ['included', 'exact', 'percent', 'shares', 'adjust'].forEach(function (key) {
+        f[key] = {};
+        Object.keys(cfg[key] || {}).forEach(function (id) {
+          if (here.indexOf(id) > -1) f[key][id] = cfg[key][id];
+        });
+      });
+      renderSplit();
+      SW.toast('Applied "' + pr.name + '"');
+    });
+
     document.getElementById('exp-f-mode').addEventListener('click', function (e) {
       const b = e.target.closest('[data-mode]');
       if (!b) return;
@@ -524,6 +630,55 @@ window.SW = window.SW || {};
     bind('data-shares', function (id, raw) {
       const n = parseInt(String(raw).replace(/[^0-9]/g, ''), 10);
       f.shares[id] = isFinite(n) ? Math.min(99, n) : 0;
+    });
+  }
+
+  function openSavePreset() {
+    const mode = f.mode;
+    const snapshot = {
+      included: Object.assign({}, f.included),
+      exact: Object.assign({}, f.exact),
+      percent: Object.assign({}, f.percent),
+      shares: Object.assign({}, f.shares),
+      adjust: Object.assign({}, f.adjust),
+    };
+    const gid = f.groupId || null;
+
+    SW.sheet({
+      title: 'Save this split',
+      body:
+        '<p style="color:var(--muted);font-size:14.5px">Saved for ' +
+          (gid ? esc(SW.ledger.groups[gid].name) : 'expenses outside a group') +
+          ', so it is one tap next time.</p>' +
+        '<div class="field" style="margin-top:12px">' +
+          '<label for="preset-name">Name</label>' +
+          '<input class="input" id="preset-name" type="text" maxlength="40" ' +
+                 'placeholder="Rent, Bills, Weekend">' +
+          '<div class="field-error" id="preset-error"></div>' +
+        '</div>',
+      confirm: 'Save',
+      onOpen: function () { document.getElementById('preset-name').focus(); },
+      onConfirm: async function (btn) {
+        const name = document.getElementById('preset-name').value.trim();
+        if (!name) { SW.setError('preset-error', 'Give it a name.'); return false; }
+
+        SW.busy(btn, true);
+        const { error } = await db.from('split_presets').insert({
+          user_id: SW.user.id, group_id: gid, name: name,
+          mode: mode, config: snapshot,
+        });
+        SW.busy(btn, false);
+        if (error) {
+          SW.setError('preset-error', /duplicate|unique/i.test(error.message)
+            ? 'You already have one with that name here.' : error.message);
+          return false;
+        }
+
+        await SW.refreshLedger();
+        SW.toast('Saved as "' + name + '"', 'ok');
+        return true;
+      },
+      onClose: function () { if (f) SW.openExpenseSheet({ keepState: true }); },
     });
   }
 
@@ -581,6 +736,17 @@ window.SW = window.SW || {};
   }
 
   /* ======================= who is involved =========================== */
+
+  // If a group's expenses are usually three ways excluding one person, open
+  // that way rather than making them be unticked every single time.
+  function applyUsualPeople(gid) {
+    const usual = SW.usualPeopleFor(gid);
+    if (!usual) return;
+    const members = groupMembers(gid);
+    members.forEach(function (id) {
+      if (usual.indexOf(id) === -1) f.included[id] = false;
+    });
+  }
 
   // Each member picks their own starting split mode per group.
   function defaultModeFor(gid) {
@@ -771,7 +937,11 @@ window.SW = window.SW || {};
           const changed = groupId !== f.groupId;
           f.groupId = groupId;
           f.people = groupMembers(groupId);
-          if (changed) f.mode = defaultModeFor(groupId);
+          if (changed) {
+            f.mode = defaultModeFor(groupId);
+            f.included = {};
+            applyUsualPeople(groupId);
+          }
         } else {
           f.groupId = null;
           f.people = [me].concat(chosen);
@@ -1233,12 +1403,14 @@ window.SW = window.SW || {};
       document.getElementById('exp-added').textContent = '';
       document.querySelector('.comment-form').hidden = true;
       document.getElementById('exp-comments').innerHTML = '';
+      document.getElementById('exp-history').innerHTML = '';
       return;
     }
     missing.hidden = true;
     if (bar) bar.hidden = false;
     document.querySelector('.comment-form').hidden = false;
     loadComments(id);
+    loadHistory(id);
 
     const me = SW.ledger.me;
     const total = SW.toPaise(e.amount);
@@ -1414,6 +1586,72 @@ window.SW = window.SW || {};
     if (e.key === 'Enter') { e.preventDefault(); postComment(); }
   });
 
+  /* ======================= what changed ============================== */
+
+  const FIELD_LABEL = {
+    amount: 'Amount', description: 'Description', payer: 'Paid by',
+    group: 'Group', date: 'Date', split: 'Split',
+  };
+
+  function describe(field, change) {
+    const from = change.from;
+    const to = change.to;
+
+    if (field === 'amount') {
+      return '<b>Amount</b> <del>' + SW.money(SW.toPaise(from)) + '</del> → <b>' +
+        SW.money(SW.toPaise(to)) + '</b>';
+    }
+    if (field === 'payer') {
+      return '<b>Paid by</b> <del>' + esc(SW.person(from).full_name) + '</del> → <b>' +
+        esc(SW.person(to).full_name) + '</b>';
+    }
+    if (field === 'group') {
+      const name = function (g) {
+        return g ? ((SW.ledger.groups[g] || {}).name || 'a group') : 'no group';
+      };
+      return '<b>Group</b> <del>' + esc(name(from)) + '</del> → <b>' +
+        esc(name(to)) + '</b>';
+    }
+    if (field === 'date') {
+      return '<b>Date</b> <del>' + esc(SW.formatDate(from)) + '</del> → <b>' +
+        esc(SW.formatDate(to)) + '</b>';
+    }
+    return '<b>' + esc(FIELD_LABEL[field] || field) + '</b> <del>' +
+      esc(String(from)) + '</del> → <b>' + esc(String(to)) + '</b>';
+  }
+
+  async function loadHistory(expenseId) {
+    const host = document.getElementById('exp-history');
+    if (!host) return;
+    host.innerHTML = '';
+
+    const { data, error } = await db
+      .from('expense_history')
+      .select('id, actor_id, changed_at, changes')
+      .eq('expense_id', expenseId)
+      .order('changed_at', { ascending: false })
+      .limit(20);
+
+    if (error || !data || !data.length) return;
+    if (SW.currentExpenseId !== expenseId) return;
+
+    host.innerHTML =
+      '<div class="section-label">What changed</div>' +
+      '<div class="history">' + data.map(function (h) {
+        const who = h.actor_id === SW.ledger.me ? 'You' : SW.person(h.actor_id).full_name;
+        const when = new Date(h.changed_at).toLocaleDateString('en-IN',
+          { day: 'numeric', month: 'short' });
+        const lines = Object.keys(h.changes || {}).map(function (field) {
+          return describe(field, h.changes[field]);
+        });
+        return '<div class="history-row">' +
+          '<span class="history-when">' + esc(when) + '</span>' +
+          '<span class="history-what">' + esc(who) + ' changed ' +
+            lines.join('<br>') + '</span>' +
+        '</div>';
+      }).join('') + '</div>';
+  }
+
   SW.viewHooks['expense-detail'] = function (param) { SW.renderExpenseDetail(param); };
 
   /* ======================= detail actions ============================= */
@@ -1430,53 +1668,36 @@ window.SW = window.SW || {};
     SW.openExpenseSheet({ expenseId: SW.currentExpenseId });
   });
 
-  function restore(index, row) {
-    if (!SW.ledger || !row) return;
-    const already = SW.ledger.expenses.some(function (x) { return x.id === row.id; });
-    if (already) return;
-    const at = Math.min(Math.max(0, index), SW.ledger.expenses.length);
-    SW.ledger.expenses.splice(at, 0, row);
-    SW.bumpLedger();
-  }
-
-  document.getElementById('exp-delete').addEventListener('click', function () {
+  document.getElementById('exp-delete').addEventListener('click', async function () {
     const id = SW.currentExpenseId;
     const e = findExpense(id);
     if (!e) return;
 
-    // Optimistic: drop it from the ledger now so balances move immediately,
-    // and only commit the delete when the undo window closes. Undo therefore
-    // cancels rather than reverses — nothing is reconstructed and nobody
-    // gets a second round of notifications.
-    const index = SW.ledger.expenses.findIndex(function (x) { return x.id === id; });
-    const removed = SW.ledger.expenses.splice(index, 1)[0];
-    SW.bumpLedger();
-    SW.recompute();
+    // Marked rather than removed, so the five-second undo is a convenience
+    // and not the only chance to change your mind — it sits in the trash for
+    // thirty days either way.
+    const { error } = await db.rpc('set_expense_deleted', {
+      p_expense_id: id, p_deleted: true,
+    });
+    if (error) return SW.toast(error.message, 'error');
 
+    await SW.refreshLedger();
     if (history.length > 1) history.back();
     else SW.navigate('friends');
 
     SW.toastAction(
       'Deleted "' + e.description + '"',
       'Undo',
-      function () {
-        // A realtime event or a foreground resync may already have refetched
-        // the ledger, in which case the expense is back and re-inserting it
-        // would double-count it.
-        restore(index, removed);
-        SW.recompute();
-      },
       async function () {
-        const { error } = await db.from('expenses').delete().eq('id', id);
-        if (error) {
-          restore(index, removed);
-          SW.recompute();
-          SW.toast('Could not delete it: ' + error.message, 'error');
-          return;
-        }
+        const undo = await db.rpc('set_expense_deleted', {
+          p_expense_id: id, p_deleted: false,
+        });
+        if (undo.error) return SW.toast(undo.error.message, 'error');
         await SW.refreshLedger();
+        SW.toast('Restored', 'ok');
       },
-      5000
+      null,
+      6000
     );
   });
 

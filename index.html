@@ -306,6 +306,17 @@
   </div>
 </section>
 
+<!-- ===================== locked ===================== -->
+<section data-screen="lock" class="lock">
+  <svg class="brand-mark" viewBox="0 0 512 512" aria-hidden="true"><use href="#sw-logo"/></svg>
+  <h1>SplittyWise is locked</h1>
+  <p>Unlock with the same face or fingerprint you use for this phone.</p>
+  <button type="button" class="btn btn-primary" id="lock-unlock">
+    <span class="spinner"></span><span class="btn-label">Unlock</span>
+  </button>
+  <button type="button" class="btn-text" id="lock-signout">Sign out instead</button>
+</section>
+
 <!-- ===================== signed in — app shell ===================== -->
 <section data-screen="app" class="shell">
 
@@ -499,6 +510,13 @@
       </div>
 
       <div class="card">
+        <button class="set-row" id="row-trash">
+          <span class="grow">
+            <span class="set-title">Trash</span>
+            <span class="set-sub" id="sub-trash">Deleted things, recoverable for 30 days</span>
+          </span>
+          <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
+        </button>
         <button class="set-row" id="row-categories">
           <span class="grow">
             <span class="set-title">Categories and budgets</span>
@@ -540,6 +558,35 @@
           </span>
           <button type="button" class="switch" id="black-switch" role="switch"
                   aria-checked="false" aria-label="True black"></button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">Notifications</div>
+        <div class="card-body" style="padding-bottom:6px">
+          <span class="hint">Which of these reach you. Everything is still
+            recorded in Activity either way.</span>
+        </div>
+        <div id="notify-prefs"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">The expense form</div>
+        <div class="card-body" style="padding-bottom:6px">
+          <span class="hint">Hide rows you never use.</span>
+        </div>
+        <div id="form-prefs"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">Locking</div>
+        <div class="switch-row">
+          <span class="grow">
+            <span class="set-title">Require Face ID or fingerprint</span>
+            <span class="set-sub" id="sub-lock">Asks every time the app opens</span>
+          </span>
+          <button type="button" class="switch" id="lock-switch" role="switch"
+                  aria-checked="false" aria-label="Require Face ID or fingerprint"></button>
         </div>
       </div>
 
@@ -592,6 +639,7 @@
           <button type="button" class="chip" id="friend-charts" hidden>Charts</button>
           <button type="button" class="chip" id="friend-share">Share</button>
           <button type="button" class="chip" id="friend-export">Export</button>
+          <button type="button" class="chip" id="friend-rename">Rename</button>
           <button type="button" class="chip" id="friend-remove">Remove friend</button>
         </div>
       </header>
@@ -648,6 +696,8 @@
 
       <div class="section-label">Split</div>
       <div class="list" id="exp-splits"></div>
+
+      <div id="exp-history"></div>
 
       <div class="section-label">Comments</div>
       <div class="comments" id="exp-comments"></div>
@@ -836,6 +886,15 @@
           <button type="button" class="switch" id="gs-simplify" role="switch"
                   aria-checked="false" aria-label="Simplify group debts"></button>
         </div>
+        <div class="switch-row">
+          <span class="grow">
+            <span class="set-title">Round to whole rupees</span>
+            <span class="set-sub">For a group that settles in cash. The payer
+              absorbs the odd paise</span>
+          </span>
+          <button type="button" class="switch" id="gs-rounding" role="switch"
+                  aria-checked="false" aria-label="Round to whole rupees"></button>
+        </div>
         <div class="card-body">
           <div class="card-head" style="padding:0 0 6px">Your default split here</div>
           <div class="seg" id="gs-default-split" role="group" aria-label="Default split mode"></div>
@@ -909,6 +968,33 @@
       <div class="list" id="cat-custom"></div>
       <div style="padding:10px 14px 24px">
         <button type="button" class="btn btn-ghost" id="cat-add">Add a category</button>
+      </div>
+    </div>
+
+    <!-- ---------- Trash ---------- -->
+    <div data-view="trash">
+      <header class="detail-header">
+        <div class="detail-bar">
+          <button class="icon-btn round" id="trash-back" aria-label="Back">
+            <svg aria-hidden="true"><use href="#ic-back"/></svg>
+          </button>
+          <span class="grow"></span>
+        </div>
+        <div class="detail-hero">
+          <div class="detail-hero-text">
+            <h1>Trash</h1>
+            <div class="detail-balance" style="color:var(--muted)">Deleted things wait thirty days before going for good</div>
+          </div>
+        </div>
+      </header>
+
+      <div id="trash-list"></div>
+
+      <div class="empty" id="trash-empty" hidden>
+        <div class="empty-art">🗑️</div>
+        <h3>Nothing deleted</h3>
+        <p>Anything you delete waits here for thirty days, so a mistake is
+           always recoverable.</p>
       </div>
     </div>
 
@@ -1016,6 +1102,9 @@
 <script src="js/groupsettings.js"></script>
 <script src="js/recurring.js"></script>
 <script src="js/categories.js"></script>
+<script src="js/trash.js"></script>
+<script src="js/voice.js"></script>
+<script src="js/lock.js"></script>
 <script src="js/insights.js"></script>
 <script src="js/search.js"></script>
 <script src="js/realtime.js"></script>

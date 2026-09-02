@@ -56,6 +56,11 @@ window.SW = window.SW || {};
     sw.classList.toggle('is-on', simplify);
     sw.setAttribute('aria-checked', String(simplify));
 
+    const rounded = g.rounding === 'rupee';
+    const rs = document.getElementById('gs-rounding');
+    rs.classList.toggle('is-on', rounded);
+    rs.setAttribute('aria-checked', String(rounded));
+
     document.getElementById('gs-default-split').innerHTML =
       SW.SPLIT_MODES.map(function (m) {
         return '<button type="button" data-dsm="' + m.key + '"' +
@@ -311,6 +316,17 @@ window.SW = window.SW || {};
     const { error } = await db.from('groups').update({ simplify_debts: on }).eq('id', gid);
     if (error) return SW.toast(error.message, 'error');
     group().simplify_debts = on;
+  });
+
+  document.getElementById('gs-rounding').addEventListener('click', async function () {
+    const on = !this.classList.contains('is-on');
+    this.classList.toggle('is-on', on);
+    this.setAttribute('aria-checked', String(on));
+    const { error } = await db.from('groups')
+      .update({ rounding: on ? 'rupee' : 'paise' }).eq('id', gid);
+    if (error) return SW.toast(error.message, 'error');
+    group().rounding = on ? 'rupee' : 'paise';
+    SW.toast(on ? 'Splitting to whole rupees' : 'Splitting to the paise', 'ok');
   });
 
   document.getElementById('gs-default-split').addEventListener('click', async function (e) {

@@ -35,6 +35,7 @@ window.SW = window.SW || {};
     'group-settings': { tab: 'groups',   action: null,           summary: false, chrome: false, fab: false },
     recurring:        { tab: 'account',  action: null,           summary: false, chrome: false, fab: false },
     categories:       { tab: 'account',  action: null,           summary: false, chrome: false, fab: false },
+    trash:            { tab: 'account',  action: null,           summary: false, chrome: false, fab: false },
   };
 
   // Views register their renderer here; showView calls it on every entry.
@@ -280,14 +281,16 @@ window.SW = window.SW || {};
       return;
     }
 
-    if (!data.length) {
+    const shown = data.filter(function (n) { return SW.notifyAllows(n.type); });
+
+    if (!shown.length) {
       list.innerHTML = '';
       empty.hidden = false;
       return;
     }
 
     empty.hidden = true;
-    list.innerHTML = data.map(function (n) {
+    list.innerHTML = shown.map(function (n) {
       return '<div class="list-row" style="cursor:default">' +
         '<div class="avatar" style="background:var(--surface-2)">' +
           (TYPE_EMOJI[n.type] || '🔔') + '</div>' +
@@ -301,7 +304,7 @@ window.SW = window.SW || {};
     }).join('');
 
     // Opening the tab is the read receipt.
-    const unread = data.filter(function (n) { return !n.is_read; });
+    const unread = shown.filter(function (n) { return !n.is_read; });
     if (unread.length) {
       await db.rpc('mark_all_notifications_read');
       refreshUnread();
@@ -309,16 +312,19 @@ window.SW = window.SW || {};
   }
 
   async function refreshUnread() {
-    const { count, error } = await db
+    // Counted by type rather than with head:true, because a muted type must
+    // not contribute to the badge.
+    const { data, error } = await db
       .from('notifications')
-      .select('id', { count: 'exact', head: true })
-      .eq('is_read', false);
+      .select('type')
+      .eq('is_read', false)
+      .limit(500);
 
     if (error) return;
 
     const badge = document.getElementById('bell-badge');
     const tabDot = document.getElementById('tab-badge-activity');
-    const n = count || 0;
+    const n = (data || []).filter(function (r) { return SW.notifyAllows(r.type); }).length;
 
     badge.textContent = n > 99 ? '99+' : String(n);
     badge.classList.toggle('is-on', n > 0);
@@ -580,6 +586,120 @@ window.SW = window.SW || {};
     SW.navigate('categories');
   });
 
+  document.getElementById('row-trash').addEventListener('click', function () {
+    SW.navigate('trash');
+  });
+
+  const lockSwitch = document.getElementById('lock-switch');
+
+  function syncLock() {
+    const on = SW.lockEnabled && SW.lockEnabled();
+    lockSwitch.classList.toggle('is-on', !!on);
+    lockSwitch.setAttribute('aria-checked', String(!!on));
+    lockSwitch.disabled = !SW.lockAvailable;
+    document.getElementById('sub-lock').textContent = SW.lockAvailable
+      ? (on ? 'Asked every time the app opens' : 'Asks every time the app opens')
+      : 'Not available on this device or over plain http';
+  }
+
+  lockSwitch.addEventListener('click', async function () {
+    if (!SW.lockAvailable) return;
+    if (SW.lockEnabled()) SW.disableLock();
+    else await SW.enableLock();
+    syncLock();
+  });
+
+  /* ---- what reaches you, and what the form shows ---- */
+
+  // The row is still written either way — it belongs in Activity — but the
+  // bell and the feed respect this, which is what stops a badge that
+  // everyone learns to ignore.
+  const NOTIFY_KINDS = [
+    { key: 'expense_added',   label: 'Expenses added' },
+    { key: 'expense_updated', label: 'Expenses changed' },
+    { key: 'expense_deleted', label: 'Expenses deleted' },
+    { key: 'settlement',      label: 'Payments recorded' },
+    { key: 'comment',         label: 'Comments' },
+    { key: 'nudge',           label: 'Reminders' },
+    { key: 'friend_added',    label: 'New friends' },
+    { key: 'group_added',     label: 'Being added to a group' },
+  ];
+
+  const FORM_ROWS = [
+    { key: 'note',     label: 'Note' },
+    { key: 'repeat',   label: 'Repeats' },
+    { key: 'category', label: 'Category' },
+    { key: 'scan',     label: 'Scan a receipt' },
+  ];
+
+  SW.notifyAllows = function (type) {
+    const prefs = (SW.profile && SW.profile.notify_prefs) || {};
+    // Absent means on: a new event type should not be silently muted.
+    return prefs[type] !== false;
+  };
+
+  SW.formShows = function (key) {
+    const prefs = (SW.profile && SW.profile.ui_prefs) || {};
+    return prefs['hide_' + key] !== true;
+  };
+
+  function renderPrefs() {
+    document.getElementById('notify-prefs').innerHTML = NOTIFY_KINDS.map(function (k) {
+      const on = SW.notifyAllows(k.key);
+      return '<div class="switch-row">' +
+        '<span class="grow"><span class="set-title">' + esc(k.label) + '</span></span>' +
+        '<button type="button" class="switch' + (on ? ' is-on' : '') +
+          '" data-notify="' + k.key + '" role="switch" aria-checked="' + on +
+          '" aria-label="' + esc(k.label) + '"></button>' +
+      '</div>';
+    }).join('');
+
+    document.getElementById('form-prefs').innerHTML = FORM_ROWS.map(function (k) {
+      const on = SW.formShows(k.key);
+      return '<div class="switch-row">' +
+        '<span class="grow"><span class="set-title">' + esc(k.label) + '</span></span>' +
+        '<button type="button" class="switch' + (on ? ' is-on' : '') +
+          '" data-formrow="' + k.key + '" role="switch" aria-checked="' + on +
+          '" aria-label="Show ' + esc(k.label) + '"></button>' +
+      '</div>';
+    }).join('');
+  }
+
+  async function savePrefs(column, value) {
+    const patch = {};
+    patch[column] = value;
+    patch.updated_at = new Date().toISOString();
+    const { error } = await db.from('profiles').update(patch).eq('id', SW.user.id);
+    if (error) SW.toast(error.message, 'error');
+  }
+
+  document.getElementById('notify-prefs').addEventListener('click', function (e) {
+    const b = e.target.closest('[data-notify]');
+    if (!b) return;
+    const key = b.getAttribute('data-notify');
+    const on = !b.classList.contains('is-on');
+    b.classList.toggle('is-on', on);
+    b.setAttribute('aria-checked', String(on));
+
+    SW.profile.notify_prefs = Object.assign({}, SW.profile.notify_prefs || {});
+    SW.profile.notify_prefs[key] = on;
+    savePrefs('notify_prefs', SW.profile.notify_prefs);
+    if (SW.refreshUnread) SW.refreshUnread();
+  });
+
+  document.getElementById('form-prefs').addEventListener('click', function (e) {
+    const b = e.target.closest('[data-formrow]');
+    if (!b) return;
+    const key = b.getAttribute('data-formrow');
+    const on = !b.classList.contains('is-on');
+    b.classList.toggle('is-on', on);
+    b.setAttribute('aria-checked', String(on));
+
+    SW.profile.ui_prefs = Object.assign({}, SW.profile.ui_prefs || {});
+    SW.profile.ui_prefs['hide_' + key] = !on;
+    savePrefs('ui_prefs', SW.profile.ui_prefs);
+  });
+
   document.getElementById('row-emoji').addEventListener('click', openEmojiPicker);
   document.getElementById('profile-emoji').addEventListener('click', openEmojiPicker);
 
@@ -632,7 +752,7 @@ window.SW = window.SW || {};
   /* ======================= signed-in hook ============================= */
 
   SW.viewHooks.activity = function () { loadActivity(); };
-  SW.viewHooks.account = function () { renderAccount(); };
+  SW.viewHooks.account = function () { renderAccount(); renderPrefs(); syncLock(); };
 
   SW.refreshUnread = refreshUnread;
 
@@ -688,6 +808,9 @@ window.SW = window.SW || {};
       try { checked = localStorage.getItem(stampKey); } catch (e) { /* ignore */ }
       if (checked === todayStamp) throw new Error('already checked today');
       try { localStorage.setItem(stampKey, todayStamp); } catch (e) { /* ignore */ }
+
+      // Same daily window covers emptying the bin of anything past 30 days.
+      db.rpc('purge_trash').then(function () {}, function () {});
 
       const { data } = await db.rpc('run_due_recurring');
       if (data && data.posted > 0) {

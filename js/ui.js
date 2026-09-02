@@ -5,7 +5,8 @@
 window.SW = window.SW || {};
 
 (function () {
-  const SCREENS = ['login', 'signup', 'verify', 'forgot', 'forgot-sent', 'reset', 'app'];
+  const SCREENS = ['login', 'signup', 'verify', 'forgot', 'forgot-sent', 'reset',
+                   'lock', 'app'];
 
   /* ---- screens --------------------------------------------------------- */
 
