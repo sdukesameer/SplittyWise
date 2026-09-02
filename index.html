@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SplittyWise — split expenses with friends</title>
+<meta name="description" content="Split bills with friends and groups. Track who owes what, settle up, and keep everyone square.">
+
+<meta name="theme-color" content="#141817" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F4F7F6" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SplittyWise">
+
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<link rel="icon" type="image/png" sizes="64x64" href="icons/favicon-64.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:ital,wght@0,600;0,700;0,800;1,600&display=swap">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<!-- Reusable logo, referenced by <use> so it is defined exactly once. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="sw-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22D3A6"/>
+      <stop offset=".55" stop-color="#14B8A6"/>
+      <stop offset="1" stop-color="#6366F1"/>
+    </linearGradient>
+    <g id="sw-logo">
+      <rect width="512" height="512" rx="116" fill="url(#sw-bg)"/>
+      <g transform="rotate(-24 256 256)">
+        <path d="M256 108 A148 148 0 0 0 256 404 Z" transform="translate(-25 0)" fill="#fff"/>
+        <path d="M256 108 A148 148 0 0 1 256 404 Z" transform="translate(25 0)" fill="#fff" fill-opacity=".58"/>
+      </g>
+      <g transform="translate(132 196) scale(2.2)" fill="none" stroke="#0C8C79" stroke-width="8"
+         stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 6h28M6 18h28M27 6c0 11-8 15-18 15l21 25"/>
+      </g>
+    </g>
+  </defs>
+</svg>
+
+<!-- ===================== boot ===================== -->
+<div class="boot" id="boot">
+  <div class="spinner spinner-lg" role="status" aria-label="Loading SplittyWise"></div>
+</div>
+
+<!-- ===================== log in ===================== -->
+<section data-screen="login" class="auth">
+  <div class="auth-inner">
+    <div class="brand">
+      <svg viewBox="0 0 512 512" aria-hidden="true"><use href="#sw-logo"/></svg>
+      <div>
+        <div class="brand-name">SplittyWise</div>
+        <div class="brand-tag">Split it. Settle it. Forget it.</div>
+      </div>
+    </div>
+
+    <h1>Welcome back</h1>
+    <p class="auth-sub">Log in to see who owes what.</p>
+
+    <form class="form" id="form-login" novalidate>
+      <div class="field">
+        <label for="login-email">Email</label>
+        <input class="input" type="email" id="login-email" name="email"
+               autocomplete="email" inputmode="email" placeholder="you@example.com" required>
+      </div>
+
+      <div class="field">
+        <div class="row-between">
+          <label for="login-password">Password</label>
+          <button type="button" class="btn-text" data-go="forgot" style="font-size:13px">Forgot?</button>
+        </div>
+        <div class="pw-wrap">
+          <input class="input" type="password" id="login-password" name="password"
+                 autocomplete="current-password" placeholder="Your password" required>
+          <button type="button" class="pw-toggle" data-pw-toggle="login-password">Show</button>
+        </div>
+      </div>
+
+      <div class="field-error" id="login-error" role="alert"></div>
+
+      <button type="submit" class="btn btn-primary" id="login-submit">
+        <span class="spinner"></span><span class="btn-label">Log in</span>
+      </button>
+    </form>
+
+    <div class="auth-foot">
+      New to SplittyWise?
+      <button type="button" class="btn-text" data-go="signup">Create an account</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== sign up ===================== -->
+<section data-screen="signup" class="auth">
+  <div class="auth-inner">
+    <div class="brand">
+      <svg viewBox="0 0 512 512" aria-hidden="true"><use href="#sw-logo"/></svg>
+      <div>
+        <div class="brand-name">SplittyWise</div>
+        <div class="brand-tag">Split it. Settle it. Forget it.</div>
+      </div>
+    </div>
+
+    <h1>Create your account</h1>
+    <p class="auth-sub">Friends will find you by this email address, so use the one they know.</p>
+
+    <form class="form" id="form-signup" novalidate>
+      <div class="field">
+        <label for="signup-name">Your name</label>
+        <input class="input" type="text" id="signup-name" name="full_name"
+               autocomplete="name" placeholder="Md Sameer" required>
+      </div>
+
+      <div class="field">
+        <label for="signup-email">Email</label>
+        <input class="input" type="email" id="signup-email" name="email"
+               autocomplete="email" inputmode="email" placeholder="you@example.com" required>
+      </div>
+
+      <div class="field">
+        <label for="signup-password">Password</label>
+        <div class="pw-wrap">
+          <input class="input" type="password" id="signup-password" name="password"
+                 autocomplete="new-password" placeholder="At least 8 characters" required>
+          <button type="button" class="pw-toggle" data-pw-toggle="signup-password">Show</button>
+        </div>
+        <span class="hint">8 characters minimum.</span>
+      </div>
+
+      <div class="field-error" id="signup-error" role="alert"></div>
+
+      <button type="submit" class="btn btn-primary" id="signup-submit">
+        <span class="spinner"></span><span class="btn-label">Create account</span>
+      </button>
+    </form>
+
+    <div class="auth-foot">
+      Already have an account?
+      <button type="button" class="btn-text" data-go="login">Log in</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== verify email ===================== -->
+<section data-screen="verify" class="auth">
+  <div class="auth-inner">
+    <div class="notice">
+      <div class="notice-icon">📬</div>
+      <h2>Confirm your email</h2>
+      <p>We sent a confirmation link to <strong id="verify-email">your inbox</strong>.
+         Open it on this phone and you will land back here, logged in.</p>
+      <div class="callout">
+        <strong>Not there after a minute?</strong> Check spam or promotions —
+        confirmation mail from a new project often lands there the first time.
+      </div>
+      <button type="button" class="btn btn-ghost" id="verify-resend">
+        <span class="spinner"></span><span class="btn-label">Resend the link</span>
+      </button>
+      <button type="button" class="btn-text" data-go="login">Back to log in</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== forgot password ===================== -->
+<section data-screen="forgot" class="auth">
+  <div class="auth-inner">
+    <h1>Reset your password</h1>
+    <p class="auth-sub">Enter your email and we will send you a link to set a new one.</p>
+
+    <form class="form" id="form-forgot" novalidate>
+      <div class="field">
+        <label for="forgot-email">Email</label>
+        <input class="input" type="email" id="forgot-email" name="email"
+               autocomplete="email" inputmode="email" placeholder="you@example.com" required>
+      </div>
+
+      <div class="field-error" id="forgot-error" role="alert"></div>
+
+      <button type="submit" class="btn btn-primary" id="forgot-submit">
+        <span class="spinner"></span><span class="btn-label">Send reset link</span>
+      </button>
+    </form>
+
+    <div class="auth-foot">
+      Remembered it?
+      <button type="button" class="btn-text" data-go="login">Back to log in</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== reset link sent ===================== -->
+<section data-screen="forgot-sent" class="auth">
+  <div class="auth-inner">
+    <div class="notice">
+      <div class="notice-icon">🔑</div>
+      <h2>Check your email</h2>
+      <p>If <strong id="forgot-sent-email">that address</strong> has an account, a reset
+         link is on its way. The link works once and expires in an hour.</p>
+      <div class="callout">
+        <strong>Check spam or promotions</strong> if it has not arrived in a minute or two.
+      </div>
+      <button type="button" class="btn-text" data-go="login">Back to log in</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== set new password ===================== -->
+<section data-screen="reset" class="auth">
+  <div class="auth-inner">
+    <h1>Set a new password</h1>
+    <p class="auth-sub">Choose something you have not used here before.</p>
+
+    <form class="form" id="form-reset" novalidate>
+      <div class="field">
+        <label for="reset-password">New password</label>
+        <div class="pw-wrap">
+          <input class="input" type="password" id="reset-password" name="password"
+                 autocomplete="new-password" placeholder="At least 8 characters" required>
+          <button type="button" class="pw-toggle" data-pw-toggle="reset-password">Show</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="reset-confirm">Confirm password</label>
+        <input class="input" type="password" id="reset-confirm" name="confirm"
+               autocomplete="new-password" placeholder="Type it again" required>
+      </div>
+
+      <div class="field-error" id="reset-error" role="alert"></div>
+
+      <button type="submit" class="btn btn-primary" id="reset-submit">
+        <span class="spinner"></span><span class="btn-label">Save new password</span>
+      </button>
+    </form>
+  </div>
+</section>
+
+<!-- ===================== signed in (placeholder until phase 2) ===================== -->
+<section data-screen="app" class="holding">
+  <div class="avatar-lg" id="app-avatar">🙂</div>
+  <div>
+    <h1 id="app-greeting">You are logged in</h1>
+    <p class="who" id="app-who"></p>
+  </div>
+  <p class="next">Phase 1 done: auth works end to end. The Friends, Groups, Activity
+     and Account tabs arrive in phase 2.</p>
+  <div class="mono" id="app-uid"></div>
+  <button type="button" class="btn btn-ghost" id="app-logout" style="max-width:280px">
+    <span class="spinner"></span><span class="btn-label">Log out</span>
+  </button>
+</section>
+
+<div class="toast-host" id="toast-host" aria-live="polite"></div>
+
+<!-- Supabase JS v2, pinned. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="js/config.js"></script>
+<script src="js/db.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/auth.js"></script>
+</body>
+</html>

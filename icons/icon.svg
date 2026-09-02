@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="SplittyWise">
+  <defs>
+    <linearGradient id="sw-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0"   stop-color="#22D3A6"/>
+      <stop offset=".55" stop-color="#14B8A6"/>
+      <stop offset="1"   stop-color="#6366F1"/>
+    </linearGradient>
+    <linearGradient id="sw-shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="116" fill="url(#sw-bg)"/>
+  <rect width="512" height="512" rx="116" fill="url(#sw-shine)"/>
+
+  <!-- One disc, cut on the diagonal, halves pulled well apart so the split
+       still registers at 40px. -->
+  <g transform="rotate(-24 256 256)">
+    <path d="M256 108 A148 148 0 0 0 256 404 Z" transform="translate(-25 0)" fill="#fff"/>
+    <path d="M256 108 A148 148 0 0 1 256 404 Z" transform="translate(25 0)"  fill="#fff" fill-opacity=".58"/>
+  </g>
+
+  <!-- Rupee mark punched into the solid half. -->
+  <g transform="translate(132 196) scale(2.2)" fill="none" stroke="#0C8C79" stroke-width="8"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 6h28M6 18h28M27 6c0 11-8 15-18 15l21 25"/>
+  </g>
+</svg>
