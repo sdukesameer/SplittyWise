@@ -135,41 +135,106 @@ window.SW = window.SW || {};
     return '₹' + Math.round(r);
   }
 
+  /* ======================= a reusable chart block ==================== */
+
+  // Renders a period navigator, the headline totals, a category doughnut and
+  // the monthly bars into one container. Used by the Insights page, a group's
+  // Charts pane and a friend's charts, so all three behave identically.
+  //
+  // Period state lives on the element, so two blocks on screen cannot fight
+  // over one shared variable.
+  SW.renderChartBlock = function (host, scope, opts) {
+    opts = opts || {};
+    if (!SW.ledger) return;
+
+    const months = SW.monthsWithSpending(scope);
+    if (host._period === undefined) host._period = null;   // null means all time
+    if (host._period && months.indexOf(host._period) === -1) host._period = null;
+
+    const period = host._period;
+    const at = period ? months.indexOf(period) : -1;
+
+    const scoped = Object.assign({}, scope, { month: period });
+    const totals = SW.periodTotals(scoped);
+    const cats = SW.spendByCategory(scoped);
+    const bars = SW.spendByMonth(Object.assign({}, scope, { months: 6 }));
+
+    host.innerHTML =
+      '<div class="period-bar">' +
+        '<button type="button" class="pb-all' + (period ? '' : ' is-on') + '" ' +
+                'data-period="all">All time</button>' +
+        '<span class="pb-spacer"></span>' +
+        '<button type="button" class="pb-nav" data-step="1" ' +
+                (at + 1 >= months.length ? 'disabled' : '') + ' ' +
+                'aria-label="Earlier">&lsaquo;</button>' +
+        '<span class="pb-label">' +
+          (period ? esc(SW.monthLabel(period + '-01')) : 'All time') + '</span>' +
+        '<button type="button" class="pb-nav" data-step="-1" ' +
+                (!period || at <= 0 ? 'disabled' : '') + ' ' +
+                'aria-label="Later">&rsaquo;</button>' +
+      '</div>' +
+
+      '<div class="stat-row">' +
+        '<div class="stat">' +
+          '<div class="s-label">' + (opts.totalLabel || 'Total spent') + '</div>' +
+          '<div class="s-value">' + SW.money(totals.total) + '</div>' +
+          '<div class="s-note">' + totals.count +
+            (totals.count === 1 ? ' expense' : ' expenses') + '</div>' +
+        '</div>' +
+        '<div class="stat">' +
+          '<div class="s-label">Your share</div>' +
+          '<div class="s-value">' + SW.money(totals.mine) + '</div>' +
+          '<div class="s-note">' +
+            (totals.pct === null ? 'nothing recorded'
+              : totals.pct + '% of ' + (opts.ofLabel || 'the total')) + '</div>' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="chart-card">' +
+        '<h3>Where it goes</h3>' +
+        '<div class="ch-sub">Your share by category' +
+          (period ? ' in ' + esc(SW.monthLabel(period + '-01')) : ', all time') + '</div>' +
+        donutHtml(cats) +
+      '</div>' +
+
+      '<div class="chart-card">' +
+        '<h3>Month by month</h3>' +
+        '<div class="ch-sub">Your share, last six months</div>' +
+        barsHtml(bars) +
+      '</div>';
+
+    host.querySelector('.period-bar').addEventListener('click', function (e) {
+      const all = e.target.closest('[data-period]');
+      if (all) {
+        host._period = null;
+        return SW.renderChartBlock(host, scope, opts);
+      }
+      const nav = e.target.closest('[data-step]');
+      if (!nav || nav.disabled) return;
+
+      const step = parseInt(nav.getAttribute('data-step'), 10);
+      // months is newest-first, so stepping "earlier" moves forward in it.
+      const from = host._period ? months.indexOf(host._period) : -1;
+      const next = from + step;
+      host._period = (next < 0 || next >= months.length) ? null : months[next];
+      SW.renderChartBlock(host, scope, opts);
+    });
+  };
+
   /* ======================= the insights view ========================= */
 
   function renderInsights() {
     if (!SW.ledger) return;
-
-    const cats = SW.spendByCategory();
-    const months = SW.spendByMonth({ months: 6 });
     const empty = document.getElementById('ins-empty');
+    const host = document.getElementById('ins-charts');
 
-    const anySpend = cats.length > 0;
-    empty.hidden = anySpend;
-    ['ins-donut', 'ins-bars'].forEach(function (id) {
-      document.getElementById(id).parentElement.hidden = !anySpend;
-    });
-    document.querySelector('[data-view="insights"] .stat-row').hidden = !anySpend;
-    document.getElementById('ins-csv').parentElement.hidden = !anySpend;
-    if (!anySpend) return;
+    const any = SW.ledger.expenses.some(function (e) { return SW.myShareOf(e) > 0; });
+    empty.hidden = any;
+    host.hidden = !any;
+    document.getElementById('ins-csv').parentElement.hidden = !any;
+    if (!any) return;
 
-    const thisMonth = months[months.length - 1].paise;
-    const withData = months.filter(function (m) { return m.paise > 0; });
-    const avg = withData.length
-      ? Math.round(months.reduce(function (s, m) { return s + m.paise; }, 0) / months.length)
-      : 0;
-
-    document.getElementById('ins-month').textContent = SW.money(thisMonth);
-    document.getElementById('ins-avg').textContent = SW.money(avg);
-
-    const prev = months[months.length - 2];
-    document.getElementById('ins-month-note').textContent = prev && prev.paise
-      ? (thisMonth >= prev.paise ? '↑ ' : '↓ ') +
-        SW.money(Math.abs(thisMonth - prev.paise)) + ' vs last month'
-      : 'first month with spending';
-
-    document.getElementById('ins-donut').innerHTML = donutHtml(cats);
-    document.getElementById('ins-bars').innerHTML = barsHtml(months);
+    SW.renderChartBlock(host, {}, { ofLabel: 'everything recorded' });
   }
 
   SW.viewHooks.insights = renderInsights;
@@ -184,20 +249,38 @@ window.SW = window.SW || {};
   /* ======================= group charts pane ========================= */
 
   SW.renderGroupCharts = function (groupId) {
-    const cats = SW.spendByCategory({ groupId: groupId });
-    const months = SW.spendByMonth({ groupId: groupId, months: 6 });
-    document.getElementById('grp-donut').innerHTML = donutHtml(cats);
-    document.getElementById('grp-bars').innerHTML = barsHtml(months);
+    const host = document.getElementById('grp-charts');
+    if (!host) return;
+    SW.renderChartBlock(host, { groupId: groupId }, {
+      totalLabel: 'Group spending',
+      ofLabel: 'total group spending',
+    });
+  };
+
+  // A friend's charts, scoped to expenses the two of you are both on.
+  SW.openFriendCharts = function (friendId) {
+    const p = SW.person(friendId);
+    SW.sheet({
+      title: 'Charts with ' + p.full_name.split(' ')[0],
+      rawBody: '<div id="fr-charts"></div>',
+      confirm: null,
+      cancel: 'Close',
+      onOpen: function () {
+        SW.renderChartBlock(document.getElementById('fr-charts'),
+          { withFriend: friendId },
+          { totalLabel: 'Spent together', ofLabel: 'what you spent together' });
+      },
+    });
   };
 
   /* ======================= CSV export ================================ */
 
-  document.getElementById('ins-csv').addEventListener('click', function () {
+  SW.exportCsv = function (scope, label) {
     if (!SW.ledger) return;
 
-    const csv = SW.buildCsv();
+    const csv = SW.buildCsv(scope || {});
     const stamp = new Date().toISOString().slice(0, 10);
-    const name = 'splittywise-' + stamp + '.csv';
+    const name = 'splittywise-' + (label ? label + '-' : '') + stamp + '.csv';
 
     try {
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -212,9 +295,14 @@ window.SW = window.SW || {};
       setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
 
       const rows = csv.split('\r\n').length - 2;
+      if (rows <= 0) return SW.toast('Nothing to export', 'error');
       SW.toast(rows + ' rows exported', 'ok');
     } catch (err) {
       SW.toast('Could not build the file: ' + (err.message || err), 'error');
     }
+  };
+
+  document.getElementById('ins-csv').addEventListener('click', function () {
+    SW.exportCsv({}, null);
   });
 })();

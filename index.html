@@ -542,12 +542,22 @@
 
         <div class="chip-row">
           <button type="button" class="chip is-primary" id="friend-settle">Settle up</button>
+          <button type="button" class="chip" id="friend-nudge" hidden>Remind</button>
           <button type="button" class="chip" id="friend-add-expense">Add expense</button>
+          <button type="button" class="chip" id="friend-charts" hidden>Charts</button>
+          <button type="button" class="chip" id="friend-export">Export</button>
           <button type="button" class="chip" id="friend-remove">Remove friend</button>
         </div>
       </header>
 
+      <div id="friend-shared" hidden>
+        <div class="section-label">Groups you share</div>
+        <div class="list" id="friend-shared-list"></div>
+      </div>
+
       <div id="friend-ledger"></div>
+
+      <button type="button" class="settled-toggle" id="friend-settled-more" hidden></button>
 
       <div class="empty" id="friend-empty" hidden>
         <div class="empty-art">🧾</div>
@@ -634,11 +644,13 @@
           <button type="button" class="chip" data-pane-btn="balances">Balances</button>
           <button type="button" class="chip" data-pane-btn="totals">Totals</button>
           <button type="button" class="chip" data-pane-btn="charts">Charts</button>
+          <button type="button" class="chip" id="grp-export">Export</button>
         </div>
       </header>
 
       <div data-pane="expenses" class="is-active">
         <div id="grp-expenses"></div>
+        <button type="button" class="settled-toggle" id="grp-settled-more" hidden></button>
         <div class="empty" id="grp-solo" hidden>
           <div class="empty-art">👥</div>
           <h3>It is just you in here</h3>
@@ -676,16 +688,7 @@
       </div>
 
       <div data-pane="charts">
-        <div class="chart-card">
-          <h3>Where this group spends</h3>
-          <div class="ch-sub">Your share within this group</div>
-          <div id="grp-donut"></div>
-        </div>
-        <div class="chart-card">
-          <h3>Month by month</h3>
-          <div class="ch-sub">Your share in this group, last 6 months</div>
-          <div id="grp-bars"></div>
-        </div>
+        <div id="grp-charts"></div>
       </div>
 
       <div class="empty" id="grp-missing" hidden>
@@ -802,30 +805,7 @@
         </div>
       </header>
 
-      <div class="stat-row">
-        <div class="stat">
-          <div class="s-label">This month</div>
-          <div class="s-value" id="ins-month">₹0.00</div>
-          <div class="s-note" id="ins-month-note">&nbsp;</div>
-        </div>
-        <div class="stat">
-          <div class="s-label">Monthly average</div>
-          <div class="s-value" id="ins-avg">₹0.00</div>
-          <div class="s-note" id="ins-avg-note">last 6 months</div>
-        </div>
-      </div>
-
-      <div class="chart-card">
-        <h3>Where it goes</h3>
-        <div class="ch-sub" id="ins-cat-sub">By category, all time</div>
-        <div id="ins-donut"></div>
-      </div>
-
-      <div class="chart-card">
-        <h3>Month by month</h3>
-        <div class="ch-sub">Your share of expenses, last 6 months</div>
-        <div id="ins-bars"></div>
-      </div>
+      <div id="ins-charts"></div>
 
       <div style="padding:0 14px 10px">
         <button type="button" class="btn btn-ghost" id="ins-csv">Export everything as CSV</button>

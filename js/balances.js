@@ -690,12 +690,31 @@ window.SW = window.SW || {};
     return mine ? SW.toPaise(mine.amount) : 0;
   };
 
-  // opts: { groupId } to scope to one group, or omitted for everything.
+  // Everyone an expense touches, payers included.
+  function peopleOn(e) {
+    return Object.keys(SW.paidMap(e))
+      .concat((e.expense_splits || []).map(function (s) { return s.user_id; }));
+  }
+
+  // opts: { groupId } one group (null for the non-group bucket),
+  //       { withFriend } only expenses the two of us are both on,
+  //       { month } 'YYYY-MM' to narrow to one month.
+  SW.inScope = function (e, opts) {
+    if (opts.groupId !== undefined && (e.group_id || null) !== opts.groupId) return false;
+    if (opts.month && String(e.expense_date).slice(0, 7) !== opts.month) return false;
+    if (opts.withFriend) {
+      const people = peopleOn(e);
+      if (people.indexOf(opts.withFriend) === -1) return false;
+      if (people.indexOf(SW.ledger.me) === -1) return false;
+    }
+    return true;
+  };
+
   SW.spendByCategory = function (opts) {
     opts = opts || {};
     const totals = {};
     SW.ledger.expenses.forEach(function (e) {
-      if (opts.groupId !== undefined && (e.group_id || null) !== opts.groupId) return;
+      if (!SW.inScope(e, opts)) return;
       const mine = SW.myShareOf(e);
       if (mine <= 0) return;
       const cat = SW.categoryOf(e);
@@ -729,14 +748,53 @@ window.SW = window.SW || {};
       buckets.push(entry);
     }
 
+    // The month filter is deliberately ignored here: the bars are how you
+    // move between months, so narrowing them to one would leave one bar.
+    const scope = Object.assign({}, opts);
+    delete scope.month;
+
     SW.ledger.expenses.forEach(function (e) {
-      if (opts.groupId !== undefined && (e.group_id || null) !== opts.groupId) return;
+      if (!SW.inScope(e, scope)) return;
       const key = String(e.expense_date).slice(0, 7);
       if (!index[key]) return;
       index[key].paise += SW.myShareOf(e);
     });
 
     return buckets;
+  };
+
+  // What was spent in scope, and how much of it was mine. The percentage is
+  // the figure the reference app calls "% of total group spending".
+  SW.periodTotals = function (opts) {
+    opts = opts || {};
+    let total = 0;
+    let mine = 0;
+    let count = 0;
+
+    SW.ledger.expenses.forEach(function (e) {
+      if (!SW.inScope(e, opts)) return;
+      total += SW.toPaise(e.amount);
+      mine += SW.myShareOf(e);
+      count++;
+    });
+
+    return {
+      total: total,
+      mine: mine,
+      count: count,
+      pct: total ? Math.round((mine / total) * 1000) / 10 : null,
+    };
+  };
+
+  // Months that actually have something in them, newest first, for the
+  // period navigator.
+  SW.monthsWithSpending = function (opts) {
+    const seen = {};
+    SW.ledger.expenses.forEach(function (e) {
+      if (!SW.inScope(e, Object.assign({}, opts, { month: null }))) return;
+      seen[String(e.expense_date).slice(0, 7)] = true;
+    });
+    return Object.keys(seen).sort().reverse();
   };
 
   /* ======================= search ===================================== */
@@ -793,13 +851,16 @@ window.SW = window.SW || {};
     return /[",\n\r]/.test(risky) ? '"' + risky.replace(/"/g, '""') + '"' : risky;
   }
 
-  SW.buildCsv = function () {
+  SW.buildCsv = function (opts) {
+    opts = opts || {};
     const L = SW.ledger;
     const header = ['Date', 'Description', 'Category', 'Group', 'Paid by',
                     'Total (INR)', 'Your share (INR)', 'Your net (INR)', 'Note'];
     const lines = [header.map(csvCell).join(',')];
 
-    L.expenses.slice().sort(function (a, b) {
+    L.expenses.filter(function (e) {
+      return SW.inScope(e, opts);
+    }).sort(function (a, b) {
       return a.expense_date < b.expense_date ? -1 : 1;
     }).forEach(function (e) {
       const total = SW.toPaise(e.amount);
@@ -821,7 +882,14 @@ window.SW = window.SW || {};
       ].map(csvCell).join(','));
     });
 
-    L.settlements.slice().sort(function (a, b) {
+    L.settlements.filter(function (st) {
+      if (opts.groupId !== undefined && (st.group_id || null) !== opts.groupId) return false;
+      if (opts.withFriend) {
+        if (st.from_user !== opts.withFriend && st.to_user !== opts.withFriend) return false;
+      }
+      if (opts.month && String(st.settled_on).slice(0, 7) !== opts.month) return false;
+      return true;
+    }).sort(function (a, b) {
       return a.settled_on < b.settled_on ? -1 : 1;
     }).forEach(function (st) {
       const paise = SW.toPaise(st.amount);
@@ -844,6 +912,57 @@ window.SW = window.SW || {};
 
     // A BOM so Excel opens the ₹ and any Indian names as UTF-8.
     return '\ufeff' + lines.join('\r\n') + '\r\n';
+  };
+
+  /* ======================= settled history =========================== */
+
+  // Walking a two-person ledger oldest-first, the balance returns to zero
+  // every time they square up. Everything at or before the LAST such point
+  // is finished business and can be folded away.
+  //
+  // `items` arrive newest-first. Returns how many of the newest to show, and
+  // marks the entries that brought the balance back to zero.
+  SW.settledCutoff = function (items) {
+    const oldestFirst = items.slice().reverse();
+    let running = 0;
+    let lastZero = -1;
+
+    oldestFirst.forEach(function (it, i) {
+      running += it.delta;
+      it.clearsBalance = false;
+      if (running === 0) { lastZero = i; it.clearsBalance = true; }
+    });
+
+    // Never balanced, so nothing is settled history.
+    if (lastZero < 0) return items.length;
+    return items.length - (lastZero + 1);
+  };
+
+  // My side of one expense, for a group feed.
+  SW.myDeltaOn = function (e) {
+    const me = SW.ledger.me;
+    let delta = 0;
+    SW.expenseEdges(e).forEach(function (edge) {
+      if (edge.to === me) delta += edge.amount;
+      else if (edge.from === me) delta -= edge.amount;
+    });
+    return delta;
+  };
+
+  // Groups the two of us are both in.
+  SW.sharedGroups = function (friendId) {
+    const L = SW.ledger;
+    const nets = SW.friendBalances();
+    const mine = (nets[friendId] || { byGroup: {} }).byGroup;
+
+    return Object.keys(L.groups).filter(function (gid) {
+      const m = L.members[gid] || [];
+      return m.indexOf(L.me) > -1 && m.indexOf(friendId) > -1;
+    }).map(function (gid) {
+      return { id: gid, group: L.groups[gid], net: mine[gid] || 0 };
+    }).sort(function (a, b) {
+      return Math.abs(b.net) - Math.abs(a.net) || a.group.name.localeCompare(b.group.name);
+    });
   };
 
   /* ======================= dates ====================================== */

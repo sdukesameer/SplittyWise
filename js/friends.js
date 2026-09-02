@@ -23,6 +23,7 @@ window.SW = window.SW || {};
   let filter = read(FILTER_KEY, 'none');
   let hideSettled = read(COLLAPSE_KEY, '0') === '1';
   let nets = {};
+  let showSettledHistory = false;
 
   function read(key, fallback) {
     try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
@@ -322,6 +323,7 @@ window.SW = window.SW || {};
   SW.currentFriendId = null;
 
   function renderFriendDetail(friendId) {
+    if (friendId !== SW.currentFriendId) showSettledHistory = false;
     SW.currentFriendId = friendId;
     if (!friendId || !SW.ledger) return;
 
@@ -341,28 +343,74 @@ window.SW = window.SW || {};
           ? p.full_name + ' owes you ' + SW.money(net)
           : 'You owe ' + p.full_name + ' ' + SW.money(net));
 
+    // Remind only makes sense when they are the one who owes.
+    document.getElementById('friend-nudge').hidden = !(net > 0);
+    document.getElementById('friend-charts').hidden = false;
+
+    // Groups the two of you share, so the friend page says where the money
+    // actually sits rather than only the total.
+    const shared = SW.sharedGroups(friendId);
+    const sharedWrap = document.getElementById('friend-shared');
+    sharedWrap.hidden = !shared.length;
+    if (shared.length) {
+      document.getElementById('friend-shared-list').innerHTML = shared.map(function (sg) {
+        const state = stateOf(sg.net);
+        return '<button class="list-row is-' + state + '" data-group="' + esc(sg.id) + '">' +
+          '<span class="avatar" style="background:var(--surface-2)">' +
+            esc(sg.group.emoji) + '</span>' +
+          '<span class="row-main"><span class="row-title">' + esc(sg.group.name) +
+            '</span></span>' +
+          '<span class="row-amount">' + (sg.net === 0
+            ? '<span class="val">settled up</span>'
+            : '<span class="lbl">' + (sg.net > 0 ? 'owes you' : 'you owe') + '</span>' +
+              '<span class="val">' + SW.money(sg.net) + '</span>') +
+          '</span></button>';
+      }).join('');
+    }
+
     const items = SW.pairLedger(friendId);
     const host = document.getElementById('friend-ledger');
     const empty = document.getElementById('friend-empty');
+    const more = document.getElementById('friend-settled-more');
 
     if (!items.length) {
       host.innerHTML = '';
+      more.hidden = true;
       empty.hidden = false;
       return;
     }
     empty.hidden = true;
 
+    // Everything older than the last time you squared up is finished
+    // business, so it is folded away by default.
+    const showCount = SW.settledCutoff(items);
+    const hiddenCount = items.length - showCount;
+    const visible = showSettledHistory ? items : items.slice(0, showCount);
+
     let html = '';
     let month = null;
-    items.forEach(function (it) {
+    visible.forEach(function (it) {
       const m = SW.monthLabel(it.date);
       if (m !== month) {
         month = m;
         html += '<div class="month-head">' + esc(m) + '</div>';
       }
       html += itemHtml(it, p.full_name);
+      if (it.clearsBalance) {
+        html += '<div class="cleared-mark">You fully settled up here</div>';
+      }
     });
     host.innerHTML = html;
+
+    if (hiddenCount > 0) {
+      more.hidden = false;
+      more.textContent = showSettledHistory
+        ? 'Hide ' + hiddenCount + ' settled ' + (hiddenCount === 1 ? 'entry' : 'entries')
+        : 'Everything before this has been settled up.\nTap to show ' + hiddenCount +
+          ' settled ' + (hiddenCount === 1 ? 'entry' : 'entries');
+    } else {
+      more.hidden = true;
+    }
   }
 
   function itemHtml(it, friendName) {
@@ -412,6 +460,49 @@ window.SW = window.SW || {};
 
   document.getElementById('friend-add-expense').addEventListener('click', function () {
     SW.openExpenseSheet({ friendId: SW.currentFriendId });
+  });
+
+  document.getElementById('friend-charts').addEventListener('click', function () {
+    if (SW.openFriendCharts) SW.openFriendCharts(SW.currentFriendId);
+  });
+
+  document.getElementById('friend-export').addEventListener('click', function () {
+    const p = SW.person(SW.currentFriendId);
+    SW.exportCsv({ withFriend: SW.currentFriendId },
+      p.full_name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+  });
+
+  document.getElementById('friend-settled-more').addEventListener('click', function () {
+    showSettledHistory = !showSettledHistory;
+    renderFriendDetail(SW.currentFriendId);
+  });
+
+  document.getElementById('friend-shared-list').addEventListener('click', function (e) {
+    const row = e.target.closest('[data-group]');
+    if (row) SW.navigate('group/' + row.getAttribute('data-group'));
+  });
+
+  document.getElementById('friend-nudge').addEventListener('click', async function () {
+    const id = SW.currentFriendId;
+    const owed = SW.friendNet(id);
+    if (owed <= 0) return;
+
+    SW.busy(this, true);
+    const { data, error } = await db.rpc('nudge', {
+      p_user_id: id, p_group_id: null, p_amount: SW.rupees(owed),
+    });
+    SW.busy(this, false);
+
+    if (error) return SW.toast(error.message, 'error');
+    if (!data || !data.ok) {
+      const why = {
+        too_soon: 'You reminded them recently — give it a few hours.',
+        self: 'That is you.',
+        stranger: 'You are not connected to them.',
+      };
+      return SW.toast(why[data && data.error] || 'Could not send that', 'error');
+    }
+    SW.toast('Reminder sent to ' + SW.person(id).full_name, 'ok');
   });
 
   /* ---- remove a friend ---- */

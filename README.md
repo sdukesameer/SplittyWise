@@ -45,7 +45,9 @@ notifications, and it installs to the home screen on both iPhone and
 Android.
 
 Expenses split five ways: equally (with anyone tickable out), by exact
-amounts, by percentage, by shares, or by adjustment.
+amounts, by percentage, by shares, or by adjustment. More than one person can
+have paid. Groups carry a cover photo, a whiteboard, a settle-up date and
+your own default split. Invite links let someone join by signing up.
 
 ### Running the tests
 
@@ -53,7 +55,7 @@ amounts, by percentage, by shares, or by adjustment.
 for t in tests/*.test.js; do node "$t"; done
 ```
 
-Ten suites, no database and no browser needed:
+Eleven suites, no database and no browser needed:
 
 | Suite | Covers |
 |---|---|
@@ -66,6 +68,7 @@ Ten suites, no database and no browser needed:
 | `insights.test.js` | Categories, monthly buckets, search, and CSV including formula-injection guarding |
 | `splitmodes.test.js` | All five split modes, checked against the reference app's own on-screen numbers |
 | `payers.test.js` | Multiple payers: one payer still behaves identically, and several net into the fewest transfers |
+| `history.test.js` | Folding away settled history, shared groups, and scoping charts and exports by group, friend and month |
 | `wiring.test.js` | That the app is actually connected: every RPC exists with the arguments passed, every column selected exists, every button has a handler, every screen can render, and the offline shell is complete |
 
 The full database — 8 tables, 27 row-level-security policies, 6 write RPCs — is
@@ -518,8 +521,7 @@ address without exposing the table.
 
 ## Roadmap
 
-Phases 0 to 11 are complete. Phases 12 to 15 close the remaining gaps
-against the reference app.
+All fifteen phases are complete.
 
 | Phase | | Status |
 |---|---|---|
@@ -537,5 +539,5 @@ against the reference app.
 | 11 | Five split modes, per-person include toggles | Done |
 | 12 | Ad-hoc people picker, multiple payers, invite link | Done |
 | 13 | Notes, group rename/delete, cover photo, whiteboard | Done |
-| 14 | Activity detail, settled-history collapse, nudges | Next |
-| 15 | Per-group export, friend charts, chart navigator | |
+| 14 | Activity detail, settled-history collapse, nudges | Done |
+| 15 | Per-group export, friend charts, chart navigator | Done |

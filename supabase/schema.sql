@@ -956,6 +956,9 @@ declare
   payer_total numeric(12,2);
   n_splits    int;
   bad         uuid;
+  was_on      uuid[];
+  actor_name  text;
+  gname       text;
 begin
   if me is null then raise exception 'Not authenticated'; end if;
   if not public.can_see_expense(p_expense_id, me) then
@@ -1046,6 +1049,11 @@ begin
     updated_at   = now()
   where id = p_expense_id;
 
+  -- Capture who was on it before, so people removed by this edit are told
+  -- too — otherwise a share silently vanishes from their balance.
+  select array_agg(user_id) into was_on
+    from public.expense_splits where expense_id = p_expense_id;
+
   delete from public.expense_splits where expense_id = p_expense_id;
   insert into public.expense_splits (expense_id, user_id, amount)
   select p_expense_id, (s->>'user_id')::uuid, round((s->>'amount')::numeric, 2)
@@ -1055,6 +1063,24 @@ begin
   insert into public.expense_payers (expense_id, user_id, amount)
   select p_expense_id, (s->>'user_id')::uuid, round((s->>'amount')::numeric, 2)
   from jsonb_array_elements(payers) s;
+
+  select full_name into actor_name from public.profiles where id = me;
+  if p_group_id is not null then
+    select name into gname from public.groups where id = p_group_id;
+  end if;
+
+  insert into public.notifications (user_id, actor_id, type, title, body, group_id, expense_id)
+  select uid, me, 'expense_updated',
+         actor_name || ' changed "' || trim(p_description) || '"',
+         '₹' || to_char(round(p_amount, 2), 'FM999999990.00')
+             || coalesce(' in ' || gname, ''),
+         p_group_id, p_expense_id
+  from (
+    select unnest(coalesce(was_on, '{}'::uuid[])) as uid
+    union
+    select (s->>'user_id')::uuid from jsonb_array_elements(p_splits) s
+  ) touched
+  where uid <> me;
 end $$;
 
 -- ============================================================================
@@ -1087,10 +1113,129 @@ begin
   return null;
 end $$;
 
+-- Fires BEFORE the row goes, so the splits are still there to tell.
+-- expense_id is deliberately left null: notifications cascade from expenses,
+-- so a notification about a deletion would delete itself.
+create or replace function public.notify_expense_deleted()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  me          uuid := auth.uid();
+  actor_name  text;
+  gname       text;
+begin
+  if me is null then return old; end if;
+
+  select full_name into actor_name from public.profiles where id = me;
+  if old.group_id is not null then
+    select name into gname from public.groups where id = old.group_id;
+  end if;
+
+  insert into public.notifications (user_id, actor_id, type, title, body, group_id)
+  select sp.user_id, me, 'expense_deleted',
+         coalesce(actor_name, 'Someone') || ' deleted "' || old.description || '"',
+         '₹' || to_char(old.amount, 'FM999999990.00') || coalesce(' in ' || gname, ''),
+         old.group_id
+  from public.expense_splits sp
+  where sp.expense_id = old.id and sp.user_id <> me;
+
+  return old;
+end $$;
+
+drop trigger if exists on_expense_deleted on public.expenses;
+create trigger on_expense_deleted
+  before delete on public.expenses
+  for each row execute function public.notify_expense_deleted();
+
+-- "You created the group X" in your own activity feed.
+create or replace function public.notify_group_created()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.notifications (user_id, actor_id, type, title, body, group_id)
+  values (new.created_by, new.created_by, 'group_created',
+          'You created ' || new.name, 'Add people to start splitting.', new.id);
+  return new;
+end $$;
+
+drop trigger if exists on_group_created on public.groups;
+create trigger on_group_created
+  after insert on public.groups
+  for each row execute function public.notify_group_created();
+
+-- Again BEFORE, so the membership rows still exist, and with group_id left
+-- null so the notification does not cascade away with the group.
+create or replace function public.notify_group_deleted()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  me          uuid := auth.uid();
+  actor_name  text;
+begin
+  select full_name into actor_name from public.profiles where id = me;
+
+  insert into public.notifications (user_id, actor_id, type, title, body)
+  select gm.user_id, me, 'group_deleted',
+         case when gm.user_id = me then 'You deleted ' || old.name
+              else coalesce(actor_name, 'Someone') || ' deleted ' || old.name end,
+         'Its expenses went with it.'
+  from public.group_members gm
+  where gm.group_id = old.id;
+
+  return old;
+end $$;
+
+drop trigger if exists on_group_deleted on public.groups;
+create trigger on_group_deleted
+  before delete on public.groups
+  for each row execute function public.notify_group_deleted();
+
 drop trigger if exists on_settlement_created on public.settlements;
 create trigger on_settlement_created
   after insert on public.settlements
   for each row execute function public.notify_settlement();
+
+-- Nudge someone who owes you. Rate limited to once every twelve hours per
+-- person, because a reminder button with no limit is a way to harass people.
+create or replace function public.nudge(
+  p_user_id  uuid,
+  p_group_id uuid default null,
+  p_amount   numeric default null
+) returns json language plpgsql security definer set search_path = public as $$
+declare
+  me       uuid := auth.uid();
+  my_name  text;
+  gname    text;
+  recent   timestamptz;
+begin
+  if me is null then raise exception 'Not authenticated'; end if;
+  if p_user_id = me then
+    return json_build_object('ok', false, 'error', 'self');
+  end if;
+  if not (public.are_friends(me, p_user_id)
+          or exists (select 1 from public.group_peers(me) g where g = p_user_id)) then
+    return json_build_object('ok', false, 'error', 'stranger');
+  end if;
+
+  select max(created_at) into recent
+    from public.notifications
+    where user_id = p_user_id and actor_id = me and type = 'nudge';
+
+  if recent is not null and recent > now() - interval '12 hours' then
+    return json_build_object('ok', false, 'error', 'too_soon');
+  end if;
+
+  select full_name into my_name from public.profiles where id = me;
+  if p_group_id is not null then
+    select name into gname from public.groups where id = p_group_id;
+  end if;
+
+  insert into public.notifications (user_id, actor_id, type, title, body, group_id)
+  values (p_user_id, me, 'nudge',
+          my_name || ' sent you a reminder',
+          coalesce('You owe ₹' || to_char(p_amount, 'FM999999990.00'), 'You have a balance outstanding')
+            || coalesce(' in ' || gname, ''),
+          p_group_id);
+
+  return json_build_object('ok', true);
+end $$;
 
 -- ============================================================================
 --  10. NOTIFICATIONS — bulk helpers
@@ -1170,6 +1315,7 @@ grant execute on function public.mark_all_notifications_read()          to authe
 grant execute on function public.add_group_members(uuid, uuid[])        to authenticated;
 grant execute on function public.create_invite(uuid)                    to authenticated;
 grant execute on function public.redeem_invite(text)                    to authenticated;
+grant execute on function public.nudge(uuid, uuid, numeric)              to authenticated;
 grant execute on function public.create_expense(
   numeric, text, jsonb, uuid, uuid, text, text, text, date, text, text, jsonb) to authenticated;
 grant execute on function public.update_expense(

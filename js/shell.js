@@ -154,8 +154,14 @@ window.SW = window.SW || {};
   const TYPE_EMOJI = {
     friend_added: '👋',
     group_added: '🏠',
+    group_created: '🏠',
+    group_deleted: '🗑️',
     expense_added: '🧾',
+    expense_updated: '✏️',
+    expense_deleted: '🗑️',
     settlement: '✅',
+    nudge: '🔔',
+    invite_accepted: '🤝',
   };
 
   async function loadActivity(force) {

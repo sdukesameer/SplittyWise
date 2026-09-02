@@ -2229,3 +2229,90 @@ button.is-loading .spinner { display: block; }
 .sp-unit input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .sp-unit .suffix { color: var(--muted); font-size: 12.5px; font-weight: 700; flex: none; }
 .sp-unit .prefix { color: var(--muted); font-size: 13px; font-weight: 700; flex: none; }
+
+/* ==========================================================================
+   PHASE 14 — settled history, and what a settlement cleared
+   ========================================================================== */
+
+.settled-toggle {
+  display: block;
+  width: calc(100% - 36px);
+  margin: 6px 18px 4px;
+  padding: 12px;
+  background: none;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--muted);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+  line-height: 1.45;
+}
+.settled-toggle:hover { border-color: var(--teal); color: var(--teal); }
+
+/* The moment a balance came back to zero. */
+.cleared-mark {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 18px 8px 70px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--owed);
+}
+.cleared-mark::before {
+  content: '';
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--owed);
+  flex: none;
+}
+
+/* ==========================================================================
+   PHASE 15 — period navigator
+   ========================================================================== */
+
+.period-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+}
+.period-bar .pb-all {
+  flex: none;
+  border: 1.5px solid var(--line);
+  background: none;
+  color: var(--muted);
+  border-radius: var(--r-pill);
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.period-bar .pb-all.is-on {
+  border-color: var(--teal); color: var(--teal); background: var(--teal-soft);
+}
+.period-bar .pb-spacer { flex: 1; }
+.period-bar .pb-nav {
+  flex: none;
+  width: 32px; height: 32px;
+  border: 0;
+  background: var(--surface-2);
+  border-radius: 50%;
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.period-bar .pb-nav:disabled { opacity: 0.35; cursor: default; }
+.period-bar .pb-label {
+  flex: none;
+  min-width: 120px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 800;
+}

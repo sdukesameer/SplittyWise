@@ -147,10 +147,15 @@ check('every column referenced exists', colProblems.length === 0, [...new Set(co
 
 console.log('\n--- interactive elements ---');
 const buttonIds = [...html.matchAll(/<button[^>]*\bid="([^"]+)"/g)].map(m => m[1]);
+// Buttons carrying data-go are handled by a delegated listener in ui.js.
+const delegated = new Set(
+  [...html.matchAll(/<button[^>]*\bid="([^"]+)"[^>]*\bdata-go=/g)].map(m => m[1])
+    .concat([...html.matchAll(/<button[^>]*\bdata-go=[^>]*\bid="([^"]+)"/g)].map(m => m[1]))
+);
 const orphanButtons = buttonIds.filter(id =>
+  !delegated.has(id) &&
   !allJs.includes("getElementById('" + id + "')") &&
-  !allJs.includes('#' + id) &&
-  !html.includes('data-go=') // switch links are delegated
+  !allJs.includes('#' + id)
 );
 check(buttonIds.length + ' buttons with ids, all handled',
   orphanButtons.length === 0, orphanButtons);

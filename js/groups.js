@@ -27,6 +27,7 @@ window.SW = window.SW || {};
   let hideSettled = read(COLLAPSE_KEY) === '1';
   let filter = read(FILTER_KEY) || 'none';
   let pane = 'expenses';
+  let showSettledHistory = false;
 
   SW.currentGroupId = null;
 
@@ -336,16 +337,38 @@ window.SW = window.SW || {};
     // The solo prompt already explains an empty group of one.
     const solo = !document.getElementById('grp-solo').hidden;
 
+    const more = document.getElementById('grp-settled-more');
+
     if (!rows.length) {
       host.innerHTML = '';
+      more.hidden = true;
       empty.hidden = solo;
       return;
     }
     empty.hidden = true;
 
+    // Same idea as the friend page: anything older than the last time your
+    // own balance here hit zero is finished business.
+    const withDelta = rows.map(function (e) {
+      return { e: e, delta: SW.myDeltaOn(e) };
+    });
+    const showCount = SW.settledCutoff(withDelta);
+    const hiddenCount = withDelta.length - showCount;
+    const visible = showSettledHistory ? withDelta : withDelta.slice(0, showCount);
+
+    if (hiddenCount > 0) {
+      more.hidden = false;
+      more.textContent = showSettledHistory
+        ? 'Hide ' + hiddenCount + ' settled ' + (hiddenCount === 1 ? 'expense' : 'expenses')
+        : 'Everything before this has been settled up.\nTap to show ' + hiddenCount +
+          ' settled ' + (hiddenCount === 1 ? 'expense' : 'expenses');
+    } else {
+      more.hidden = true;
+    }
+
     let html = '';
     let month = null;
-    rows.forEach(function (e) {
+    visible.map(function (x) { return x.e; }).forEach(function (e) {
       const m = SW.monthLabel(e.expense_date);
       if (m !== month) { month = m; html += '<div class="month-head">' + esc(m) + '</div>'; }
 
@@ -411,12 +434,79 @@ window.SW = window.SW || {};
         amount = '<span class="lbl">' + (v > 0 ? 'is owed' : 'owes') + '</span>' +
                  '<span class="val">' + SW.money(v) + '</span>';
       }
-      return '<div class="list-row is-' + state + '" style="cursor:default">' +
+      // Tappable unless it is you or already square — there is nothing to do
+      // about your own row.
+      const actionable = id !== me && v !== 0;
+      return '<' + (actionable ? 'button' : 'div') + ' class="list-row is-' + state + '"' +
+        (actionable ? ' data-member="' + esc(id) + '"' : ' style="cursor:default"') + '>' +
         SW.avatar(id, p.avatar_emoji) +
-        '<span class="row-main"><span class="row-title">' + esc(name) + '</span></span>' +
-        '<span class="row-amount">' + amount + '</span></div>';
+        '<span class="row-main"><span class="row-title">' + esc(name) + '</span>' +
+          (actionable ? '<span class="row-sub">Tap to settle or remind</span>' : '') +
+        '</span>' +
+        '<span class="row-amount">' + amount + '</span>' +
+        '</' + (actionable ? 'button' : 'div') + '>';
     }).join('');
   }
+
+  document.getElementById('grp-balances').addEventListener('click', function (e) {
+    const row = e.target.closest('[data-member]');
+    if (!row) return;
+    const id = row.getAttribute('data-member');
+    const gid = SW.currentGroupId;
+    const pairNet = SW.myGroupPairs(gid).filter(function (pr) { return pr.id === id; })[0];
+    const between = pairNet ? pairNet.amount : 0;
+    const p = SW.person(id);
+
+    SW.sheet({
+      title: p.full_name,
+      rawBody:
+        '<div class="sheet-body"><p style="color:var(--muted);font-size:14.5px">' +
+          (between === 0
+            ? 'Nothing is outstanding between the two of you in this group, even ' +
+              'though they have a balance with others here.'
+            : (between > 0
+                ? esc(p.full_name) + ' owes you <strong style="color:var(--owed)">' +
+                  SW.money(between) + '</strong> here.'
+                : 'You owe ' + esc(p.full_name) + ' <strong style="color:var(--owe)">' +
+                  SW.money(between) + '</strong> here.')) +
+        '</p></div>' +
+        '<div class="sheet-actions">' +
+          '<button type="button" class="btn btn-primary" id="bal-settle">' +
+            'Record a payment</button>' +
+          (between > 0
+            ? '<button type="button" class="btn btn-ghost" id="bal-nudge">' +
+              'Send a reminder</button>'
+            : '') +
+        '</div>',
+      confirm: null,
+      onOpen: function () {
+        document.getElementById('bal-settle').addEventListener('click', function () {
+          SW.closeSheet();
+          SW.openPaymentSheet({
+            otherId: id, groupId: gid,
+            amountPaise: Math.abs(between), iPay: between < 0,
+          });
+        });
+
+        const nudge = document.getElementById('bal-nudge');
+        if (nudge) nudge.addEventListener('click', async function () {
+          SW.busy(this, true);
+          const res = await db.rpc('nudge', {
+            p_user_id: id, p_group_id: gid, p_amount: SW.rupees(between),
+          });
+          SW.busy(this, false);
+          if (res.error) return SW.toast(res.error.message, 'error');
+          if (!res.data || !res.data.ok) {
+            return SW.toast(res.data && res.data.error === 'too_soon'
+              ? 'You reminded them recently — give it a few hours.'
+              : 'Could not send that', 'error');
+          }
+          SW.closeSheet();
+          SW.toast('Reminder sent to ' + p.full_name, 'ok');
+        });
+      },
+    });
+  });
 
   /* ---- totals pane ---- */
 
@@ -469,6 +559,18 @@ window.SW = window.SW || {};
   });
   document.getElementById('grp-solo-add').addEventListener('click', function () {
     if (SW.currentGroupId) openAddMember(SW.currentGroupId);
+  });
+
+  document.getElementById('grp-export').addEventListener('click', function () {
+    const gid = SW.currentGroupId;
+    const g = gid ? SW.ledger.groups[gid] : null;
+    SW.exportCsv({ groupId: gid },
+      (g ? g.name : 'non-group').toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+  });
+
+  document.getElementById('grp-settled-more').addEventListener('click', function () {
+    showSettledHistory = !showSettledHistory;
+    renderGroupDetail(SW.currentGroupId === null ? LOOSE : SW.currentGroupId);
   });
 
   document.getElementById('grp-back').addEventListener('click', function () {
