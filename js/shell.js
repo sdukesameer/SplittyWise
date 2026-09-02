@@ -114,7 +114,10 @@ window.SW = window.SW || {};
   }, { passive: true });
 
   document.getElementById('header-action').addEventListener('click', function () {
-    if (activeView === 'groups') return SW.toast('Creating groups arrives in phase 4');
+    if (activeView === 'groups') {
+      if (SW.openCreateGroup) SW.openCreateGroup();
+      return;
+    }
     if (SW.addFriendSheet) SW.addFriendSheet();
   });
 

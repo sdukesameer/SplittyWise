@@ -168,8 +168,8 @@ window.SW = window.SW || {};
 
   const scrim = document.getElementById('sheet-scrim');
   const titleEl = document.getElementById('sheet-title');
-  const contentEl = document.getElementById('sheet-content');
   const actionsEl = document.getElementById('sheet-actions');
+  let contentEl = document.getElementById('sheet-content');
 
   // opts: { title, body, rawBody, confirm, cancel, onOpen, onConfirm, onClose }
   //   body     — markup wrapped in .sheet-body padding
@@ -183,6 +183,15 @@ window.SW = window.SW || {};
 
     titleEl.textContent = opts.title || '';
     titleEl.hidden = !opts.title;
+
+    // Swap in a fresh content node every time. Callers legitimately attach
+    // delegated listeners to #sheet-content inside onOpen, and since the node
+    // itself survives innerHTML changes those listeners would otherwise pile
+    // up across every sheet that is ever opened.
+    const fresh = document.createElement('div');
+    fresh.id = 'sheet-content';
+    contentEl.parentNode.replaceChild(fresh, contentEl);
+    contentEl = fresh;
 
     contentEl.innerHTML = opts.rawBody
       ? opts.rawBody

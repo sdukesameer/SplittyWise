@@ -287,6 +287,139 @@ window.SW = window.SW || {};
     }, 0);
   };
 
+  /* ======================= group maths =============================== */
+
+  // Each member's position inside one group, from the group's point of view:
+  //   net > 0  -> the member is owed this much (they overpaid)
+  //   net < 0  -> the member owes this much
+  // The nets always sum to zero, because every expense's splits sum to its
+  // total and every settlement cancels itself out.
+  //
+  // Pass null for the non-group bucket.
+  SW.groupMemberNets = function (groupId) {
+    const L = SW.ledger;
+    const paid = {};
+    const owed = {};
+
+    function bump(map, id, paise) { map[id] = (map[id] || 0) + paise; }
+
+    L.expenses.forEach(function (e) {
+      if ((e.group_id || null) !== groupId) return;
+      bump(paid, e.payer_id, SW.toPaise(e.amount));
+      (e.expense_splits || []).forEach(function (sp) {
+        bump(owed, sp.user_id, SW.toPaise(sp.amount));
+      });
+    });
+
+    L.settlements.forEach(function (st) {
+      if ((st.group_id || null) !== groupId) return;
+      const paise = SW.toPaise(st.amount);
+      // Paying someone back behaves like having paid that much more.
+      bump(paid, st.from_user, paise);
+      bump(owed, st.to_user, paise);
+    });
+
+    const nets = {};
+    Object.keys(paid).forEach(function (id) { nets[id] = 0; });
+    Object.keys(owed).forEach(function (id) { nets[id] = 0; });
+    // Anyone in the group counts, even with no activity yet.
+    (L.members[groupId] || []).forEach(function (id) { nets[id] = 0; });
+
+    Object.keys(nets).forEach(function (id) {
+      nets[id] = (paid[id] || 0) - (owed[id] || 0);
+    });
+
+    return { nets: nets, paid: paid, owed: owed };
+  };
+
+  // My own position in a group, and the total spent in it.
+  SW.groupSummary = function (groupId) {
+    const L = SW.ledger;
+    const { nets, paid, owed } = SW.groupMemberNets(groupId);
+
+    let total = 0;
+    L.expenses.forEach(function (e) {
+      if ((e.group_id || null) === groupId) total += SW.toPaise(e.amount);
+    });
+
+    return {
+      groupId: groupId,
+      myNet: nets[L.me] || 0,
+      nets: nets,
+      paid: paid,
+      owed: owed,
+      total: total,
+      memberIds: Object.keys(nets),
+    };
+  };
+
+  // Every group I am in, plus the pseudo-group for non-group expenses.
+  SW.groupList = function () {
+    const L = SW.ledger;
+    const out = Object.keys(L.groups).map(function (gid) {
+      return { id: gid, group: L.groups[gid], summary: SW.groupSummary(gid) };
+    });
+
+    const loose = SW.groupSummary(null);
+    if (loose.total !== 0 || loose.myNet !== 0) {
+      out.push({
+        id: null,
+        group: { id: null, name: 'Non-group expenses', emoji: '🧾' },
+        summary: loose,
+      });
+    }
+    return out;
+  };
+
+  /* ======================= debt simplification ======================== */
+
+  // Turn a set of member nets into the fewest payments that clear them all.
+  // Repeatedly send the largest debtor's money to the largest creditor: with
+  // n people carrying a balance this settles in at most n-1 transfers,
+  // against up to n(n-1)/2 if everyone pays everyone individually.
+  SW.simplifyDebts = function (nets) {
+    const creditors = [];
+    const debtors = [];
+
+    Object.keys(nets).forEach(function (id) {
+      const v = nets[id];
+      if (v > 0) creditors.push({ id: id, amt: v });
+      else if (v < 0) debtors.push({ id: id, amt: -v });
+    });
+
+    // Sort by size, then id, so the result is stable rather than depending
+    // on object key order.
+    const bySize = function (a, b) { return b.amt - a.amt || (a.id < b.id ? -1 : 1); };
+    creditors.sort(bySize);
+    debtors.sort(bySize);
+
+    const transfers = [];
+    let i = 0, j = 0;
+    while (i < debtors.length && j < creditors.length) {
+      const pay = Math.min(debtors[i].amt, creditors[j].amt);
+      if (pay > 0) {
+        transfers.push({ from: debtors[i].id, to: creditors[j].id, amount: pay });
+      }
+      debtors[i].amt -= pay;
+      creditors[j].amt -= pay;
+      if (debtors[i].amt === 0) i++;
+      if (creditors[j].amt === 0) j++;
+    }
+    return transfers;
+  };
+
+  // What I owe / am owed inside a group, member by member, without netting.
+  SW.myGroupPairs = function (groupId) {
+    const all = SW.friendBalances();
+    const out = [];
+    Object.keys(all).forEach(function (id) {
+      const v = all[id].byGroup[groupId === null ? 'none' : groupId];
+      if (v) out.push({ id: id, amount: v });
+    });
+    out.sort(function (a, b) { return Math.abs(b.amount) - Math.abs(a.amount); });
+    return out;
+  };
+
   /* ======================= one friend's ledger ======================== */
 
   // Every line item between me and one friend, newest first.

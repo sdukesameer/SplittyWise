@@ -43,6 +43,13 @@
       <stop offset=".55" stop-color="#14B8A6"/>
       <stop offset="1" stop-color="#6366F1"/>
     </linearGradient>
+    <symbol id="ic-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3.2"/>
+      <path d="M12 3v2.2M12 18.8V21M4.6 7.8l1.9 1.1M17.5 15.1l1.9 1.1M4.6 16.2l1.9-1.1M17.5 8.9l1.9-1.1"/>
+    </symbol>
+    <symbol id="ic-arrow-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 12h15M13 6l6 6-6 6"/>
+    </symbol>
     <symbol id="ic-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M16.5 3.5l4 4L8 20H4v-4z"/><path d="M13.5 6.5l4 4"/>
     </symbol>
@@ -377,14 +384,40 @@
 
     <!-- ---------- Groups ---------- -->
     <div data-view="groups">
-      <div class="empty">
+      <div id="groups-skel">
+        <div class="skel-row"><div class="skel skel-avatar"></div>
+          <div class="skel-lines"><div class="skel skel-line-1"></div><div class="skel skel-line-2"></div></div>
+          <div class="skel skel-amt"></div></div>
+        <div class="skel-row"><div class="skel skel-avatar"></div>
+          <div class="skel-lines"><div class="skel skel-line-1"></div><div class="skel skel-line-2"></div></div>
+          <div class="skel skel-amt"></div></div>
+      </div>
+
+      <div id="groups-body" hidden>
+        <div class="list" id="groups-list"></div>
+
+        <div id="groups-settled-wrap" hidden>
+          <div class="section-label">
+            <span id="groups-settled-label">Settled up</span>
+            <button type="button" class="btn-text" id="groups-settled-toggle">Hide</button>
+          </div>
+          <div class="list" id="groups-settled-list"></div>
+        </div>
+
+        <div class="list-cta">
+          <button type="button" class="btn btn-ghost" id="groups-add-more">
+            <svg width="19" height="19" aria-hidden="true"><use href="#ic-groups"/></svg>
+            Start a new group
+          </button>
+        </div>
+      </div>
+
+      <div class="empty" id="groups-empty" hidden>
         <div class="empty-art">🏠</div>
         <h3>No groups yet</h3>
         <p>Groups keep a flat, a trip or a shared bill in one place, and split
            every expense across everyone in them.</p>
-        <button type="button" class="btn btn-ghost" data-todo="Groups arrive in phase 4">
-          Start a group
-        </button>
+        <button type="button" class="btn btn-ghost" id="groups-empty-add">Start a group</button>
       </div>
     </div>
 
@@ -494,8 +527,7 @@
         </div>
 
         <div class="chip-row">
-          <button type="button" class="chip is-primary" id="friend-settle"
-                  data-todo="Settling up arrives in phase 6">Settle up</button>
+          <button type="button" class="chip is-primary" id="friend-settle">Settle up</button>
           <button type="button" class="chip" id="friend-add-expense">Add expense</button>
           <button type="button" class="chip" id="friend-remove">Remove friend</button>
         </div>
@@ -553,6 +585,78 @@
       </div>
     </div>
 
+    <!-- ---------- One group ---------- -->
+    <div data-view="group-detail">
+      <header class="detail-header">
+        <div class="detail-bar">
+          <button class="icon-btn round" id="grp-back" aria-label="Back to groups">
+            <svg aria-hidden="true"><use href="#ic-back"/></svg>
+          </button>
+          <span class="grow"></span>
+          <button class="icon-btn round" id="grp-settings" aria-label="Group settings">
+            <svg aria-hidden="true"><use href="#ic-gear"/></svg>
+          </button>
+        </div>
+
+        <div class="detail-hero">
+          <span class="avatar" id="grp-emoji" style="background:var(--surface-2)">👥</span>
+          <div class="detail-hero-text">
+            <h1 id="grp-name">&nbsp;</h1>
+            <span class="pill" id="grp-people">
+              <svg aria-hidden="true"><use href="#ic-groups"/></svg>
+              <span id="grp-people-text">0 people</span>
+            </span>
+          </div>
+        </div>
+
+        <div class="detail-balance" id="grp-balance" style="padding:0 18px 12px">&nbsp;</div>
+
+        <div class="chip-row">
+          <button type="button" class="chip is-primary" id="grp-settle">Settle up</button>
+          <button type="button" class="chip is-on" data-pane-btn="expenses">Expenses</button>
+          <button type="button" class="chip" data-pane-btn="balances">Balances</button>
+          <button type="button" class="chip" data-pane-btn="totals">Totals</button>
+        </div>
+      </header>
+
+      <div data-pane="expenses" class="is-active">
+        <div id="grp-expenses"></div>
+        <div class="empty" id="grp-no-expenses" hidden>
+          <div class="empty-art">🎉</div>
+          <h3>Nothing here yet</h3>
+          <p>Add an expense and it splits across everyone in the group.</p>
+        </div>
+      </div>
+
+      <div data-pane="balances">
+        <div class="list" id="grp-balances"></div>
+      </div>
+
+      <div data-pane="totals">
+        <div class="totals-hero">
+          <div class="th-label">Total spent in this group</div>
+          <div class="th-value" id="grp-total">₹0.00</div>
+        </div>
+        <div class="totals-split">
+          <div class="totals-card">
+            <h4>Who paid</h4>
+            <div id="grp-paid"></div>
+          </div>
+          <div class="totals-card">
+            <h4>Whose share it was</h4>
+            <div id="grp-consumed"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="empty" id="grp-missing" hidden>
+        <div class="empty-art">🤷</div>
+        <h3>Group not found</h3>
+        <p>You may have left it, or it was deleted.</p>
+        <button type="button" class="btn btn-ghost" id="grp-missing-back">Back to groups</button>
+      </div>
+    </div>
+
   </main>
 
   <button class="fab" id="fab">
@@ -599,5 +703,7 @@
 <script src="js/emoji.js"></script>
 <script src="js/friends.js"></script>
 <script src="js/expense.js"></script>
+<script src="js/groups.js"></script>
+<script src="js/settle.js"></script>
 </body>
 </html>

@@ -28,27 +28,32 @@ Amounts are in **INR (₹)** throughout.
 
 ## 1. What works today
 
-**Phases 1, 2 and 3 of 10 are complete.** Sign up, log in, log out, email
+**Phases 1 to 6 of 10 are complete.** The core loop works end to end. Sign up, log in, log out, email
 confirmation and password reset all work end to end. Signing in lands on the
 app shell: four tabs (Friends, Groups, Activity, Account), a bell with an
 unread count, and the Add-expense button.
 
-**Friends** is fully working — add people by email, see your net balance with
-each of them in red / green / grey, expand the per-group breakdown, filter the
-list, and open any friend for the full history of expenses and payments
-between you. **Account** lets you edit your name, pick an avatar, switch
-themes, and change your password. **Activity** reads live from the database.
-Groups shows an empty state until phase 4.
+Add friends by email, create groups, add an expense and split it equally or
+by exact amounts, see who owes whom, and settle up with partial payments.
+Every balance is derived from the ledger, never stored.
+
+Still to come: itemised receipt scanning (phase 7), charts and CSV export
+(phase 8), installable PWA (phase 9), deploy hardening (phase 10).
 
 ### Running the tests
 
 ```bash
-node tests/balances.test.js
+for t in tests/*.test.js; do node "$t"; done
 ```
 
-Covers the balance engine: pairwise netting, per-group breakdown, exclusion of
-the payer's own split, settlements in both directions, and Indian currency
-formatting. It needs no database and no browser.
+Four suites, no database and no browser needed:
+
+| Suite | Covers |
+|---|---|
+| `balances.test.js` | Pairwise netting, per-group breakdown, payer's own split excluded, settlements both ways, ₹ formatting |
+| `splits.test.js` | Equal splits sum back to the total exactly, over 71,430 total/participant combinations |
+| `groups.test.js` | Member nets sum to zero, who-paid vs whose-share, debt simplification clears every balance |
+| `emoji.test.js` | Description-to-icon guessing and rule precedence |
 
 The full database — 8 tables, 27 row-level-security policies, 6 write RPCs — is
 already in `supabase/schema.sql` and supports every later phase.
@@ -378,7 +383,11 @@ js/auth.js              signup, login, logout, password reset, session, routing
 js/balances.js          money, generated avatars, the balance engine
 js/shell.js             tabs, header, theme, Account tab, Activity feed
 js/friends.js           friends list, add/remove, filters, one friend's page
-tests/balances.test.js  balance engine regression test
+js/emoji.js             description-to-icon guessing, and the picker
+js/expense.js           add/edit form, splitting, receipts, one expense's page
+js/groups.js            groups list, one group's page, membership, settings
+js/settle.js            recording payments, and the plan to clear a group
+tests/                  balance, split, group and emoji suites
 icons/                  app icon: SVG source + 5 rendered PNG sizes
 supabase/schema.sql     tables, RLS policies, RPCs, triggers, storage
 netlify.toml            publish settings, redirects, security headers
@@ -427,10 +436,10 @@ address without exposing the table.
 | 1 | Auth — signup, login, reset | Done |
 | 2 | Shell, tab bar, theming, Account tab | Done |
 | 3 | Friends and balances | Done |
-| 4 | Groups | Next |
-| 5 | Expenses, splits, receipts | |
-| 6 | Settle up | |
-| 7 | Activity and notifications | |
+| 4 | Groups | Done |
+| 5 | Expenses, splits, edit, delete | Done |
+| 6 | Settle up, debt simplification | Done |
+| 7 | Itemised receipt scanning | Next |
 | 8 | Charts, search, CSV export | |
 | 9 | PWA install, offline | |
 | 10 | Deploy hardening | |
