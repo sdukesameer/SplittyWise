@@ -59,7 +59,8 @@ create table if not exists public.expenses (
   description   text not null check (length(trim(description)) > 0),
   emoji         text not null default '🧾',
   category      text not null default 'general',
-  split_mode    text not null default 'equal' check (split_mode in ('equal','exact')),
+  split_mode    text not null default 'equal'
+                check (split_mode in ('equal','exact','percent','shares','adjust')),
   expense_date  date not null default current_date,
   receipt_path  text,
   notes         text,
@@ -104,6 +105,16 @@ create table if not exists public.notifications (
   is_read     boolean not null default false,
   created_at  timestamptz not null default now()
 );
+
+-- Widen the split-mode constraint on a database created before percentages,
+-- shares and adjustments existed. Safe to re-run.
+do $$
+begin
+  alter table public.expenses drop constraint if exists expenses_split_mode_check;
+  alter table public.expenses add constraint expenses_split_mode_check
+    check (split_mode in ('equal','exact','percent','shares','adjust'));
+exception when undefined_table then null;
+end $$;
 
 -- ============================================================================
 --  2. INDEXES

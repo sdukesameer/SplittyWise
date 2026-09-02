@@ -34,8 +34,12 @@ window.SW = window.SW || {};
       targetId: null,
       payerId: SW.user.id,
       mode: 'equal',
-      exact: {},             // userId -> paise, only used in exact mode
-      note: '',              // set by the itemised scanner
+      included: {},          // userId -> false to leave someone out of an equal split
+      exact: {},             // userId -> paise
+      percent: {},           // userId -> percent, two decimals
+      shares: {},            // userId -> whole shares
+      adjust: {},            // userId -> paise owed on top
+      note: '',              // typed, or written by the itemised scanner
       receiptPath: null,
       receiptFile: null,
       receiptName: '',
@@ -230,7 +234,7 @@ window.SW = window.SW || {};
       // Participants changed, so a previous payer or exact split may no
       // longer make sense.
       if (participants().indexOf(f.payerId) === -1) f.payerId = SW.ledger.me;
-      f.exact = {};
+      f.included = {}; f.exact = {}; f.percent = {}; f.shares = {}; f.adjust = {};
       renderPayer();
       renderSplit();
     });
@@ -263,6 +267,7 @@ window.SW = window.SW || {};
           f.amountText = SW.rupees(result.grandTotal);
           f.mode = 'exact';
           f.exact = result.totals;
+          f.included = {}; f.percent = {}; f.shares = {}; f.adjust = {};
           f.note = result.note;
           if (!f.description.trim()) {
             const lines = (result.note.match(/;/g) || []).length + 1;
@@ -320,15 +325,15 @@ window.SW = window.SW || {};
     sel.onchange = function () { f.payerId = sel.value; renderSplit(); };
   }
 
-  // Current split, as userId -> paise.
-  function currentSplit() {
-    const people = participants();
-    if (!people.length) return {};
-    if (f.mode === 'equal') return SW.splitEquallyAmong(f.amountPaise, people);
+  function splitState() {
+    return {
+      included: f.included, exact: f.exact,
+      percent: f.percent, shares: f.shares, adjust: f.adjust,
+    };
+  }
 
-    const out = {};
-    people.forEach(function (id) { out[id] = f.exact[id] || 0; });
-    return out;
+  function currentSplit() {
+    return SW.computeSplit(f.mode, f.amountPaise, participants(), splitState());
   }
 
   function renderSplit() {
@@ -336,96 +341,178 @@ window.SW = window.SW || {};
     if (!host) return;
 
     const people = participants();
-    if (!people.length) {
-      host.innerHTML = '';
-      return;
-    }
+    if (!people.length) { host.innerHTML = ''; return; }
 
-    const split = currentSplit();
-    const sum = people.reduce(function (t, id) { return t + (split[id] || 0); }, 0);
-    const diff = f.amountPaise - sum;
+    const mode = SW.SPLIT_MODES.filter(function (m) { return m.key === f.mode; })[0] ||
+                 SW.SPLIT_MODES[0];
+    const result = currentSplit();
 
     host.innerHTML =
       '<div class="split-block">' +
-        '<div class="split-head">' +
-          '<div class="seg" id="exp-f-mode" role="group" aria-label="How to split">' +
-            '<button type="button" data-mode="equal"' +
-              (f.mode === 'equal' ? ' class="is-on"' : '') + '>Equally</button>' +
-            '<button type="button" data-mode="exact"' +
-              (f.mode === 'exact' ? ' class="is-on"' : '') + '>Exact amounts</button>' +
-          '</div>' +
-        '</div>' +
-
-        '<div class="split-list">' +
-          people.map(function (id) {
-            const p = SW.person(id);
-            const name = (id === SW.ledger.me ? 'You' : p.full_name) +
-                         (id === f.payerId ? ' · paid' : '');
-            const value = split[id] ? SW.rupees(split[id]) : '';
-            return '<div class="split-person">' +
-              SW.avatar(id, p.avatar_emoji) +
-              '<span class="sp-name">' + esc(name) + '</span>' +
-              (f.mode === 'equal'
-                ? '<span class="sp-fixed">' + SW.money(split[id] || 0) + '</span>'
-                : '<span class="sp-amount"><span class="cur">₹</span>' +
-                  '<input type="text" inputmode="decimal" data-split="' + esc(id) + '" ' +
-                  'value="' + esc(value) + '" placeholder="0.00" ' +
-                  'aria-label="Share for ' + esc(p.full_name) + '"></span>') +
-            '</div>';
+        '<div class="split-modes" id="exp-f-mode" role="group" aria-label="How to split">' +
+          SW.SPLIT_MODES.map(function (m) {
+            return '<button type="button" data-mode="' + m.key + '"' +
+                   (m.key === f.mode ? ' class="is-on"' : '') + '>' +
+                   esc(m.label) + '</button>';
           }).join('') +
         '</div>' +
-
+        '<div class="split-blurb">' + esc(mode.blurb) + '</div>' +
+        '<div class="split-list">' +
+          people.map(function (id) { return personRow(id, result); }).join('') +
+        '</div>' +
         '<div class="split-foot">' +
-          '<span class="sf-state ' + (diff === 0 && f.amountPaise > 0 ? 'is-ok' : 'is-off') + '">' +
-            (f.amountPaise === 0
-              ? 'Enter an amount'
-              : (diff === 0
-                  ? 'Adds up'
-                  : (diff > 0 ? SW.money(diff) + ' left to assign'
-                              : SW.money(diff) + ' over'))) +
-          '</span>' +
-          '<span class="sf-total">' + SW.money(sum) + ' of ' + SW.money(f.amountPaise) + '</span>' +
+          '<span class="sf-state ' + (result.valid ? 'is-ok' : 'is-off') + '">' +
+            esc(result.message) + '</span>' +
+          '<span class="sf-total">' + esc(result.hint || SW.money(result.assigned) +
+            ' of ' + SW.money(f.amountPaise)) + '</span>' +
         '</div>' +
       '</div>';
 
+    wireSplit();
+  }
+
+  function personRow(id, result) {
+    const p = SW.person(id);
+    const name = (id === SW.ledger.me ? 'You' : p.full_name) +
+                 (id === f.payerId ? ' · paid' : '');
+    const amount = result.byUser[id] || 0;
+    const avatar = SW.avatar(id, p.avatar_emoji);
+    const label = '<span class="sp-name">' + esc(name) + '</span>';
+
+    if (f.mode === 'equal') {
+      const on = f.included[id] !== false;
+      return '<div class="split-person is-toggle ' + (on ? 'is-on' : 'is-off') +
+               '" data-toggle="' + esc(id) + '" role="checkbox" aria-checked="' + on + '">' +
+        avatar + label +
+        '<span class="sp-fixed">' + (on ? SW.money(amount) : '—') + '</span>' +
+        '<span class="sp-check"><svg aria-hidden="true"><use href="#ic-check"/></svg></span>' +
+      '</div>';
+    }
+
+    if (f.mode === 'exact') {
+      return '<div class="split-person">' + avatar + label +
+        '<span class="sp-amount"><span class="cur">₹</span>' +
+        '<input type="text" inputmode="decimal" data-exact="' + esc(id) + '" ' +
+        'value="' + (f.exact[id] ? SW.rupees(f.exact[id]) : '') + '" ' +
+        'placeholder="0.00" aria-label="Amount for ' + esc(p.full_name) + '"></span>' +
+      '</div>';
+    }
+
+    if (f.mode === 'percent') {
+      return '<div class="split-person">' + avatar + label +
+        '<span class="sp-derived">' + SW.money(amount) + '</span>' +
+        '<span class="sp-unit"><input type="text" inputmode="decimal" ' +
+        'data-percent="' + esc(id) + '" value="' + (f.percent[id] || '') + '" ' +
+        'placeholder="0" aria-label="Percent for ' + esc(p.full_name) + '">' +
+        '<span class="suffix">%</span></span>' +
+      '</div>';
+    }
+
+    if (f.mode === 'shares') {
+      return '<div class="split-person">' + avatar + label +
+        '<span class="sp-derived">' + SW.money(amount) + '</span>' +
+        '<span class="sp-unit"><input type="text" inputmode="numeric" ' +
+        'data-shares="' + esc(id) + '" value="' + (f.shares[id] || '') + '" ' +
+        'placeholder="0" aria-label="Shares for ' + esc(p.full_name) + '">' +
+        '<span class="suffix">sh</span></span>' +
+      '</div>';
+    }
+
+    // adjust
+    return '<div class="split-person">' + avatar + label +
+      '<span class="sp-derived">' + SW.money(amount) + '</span>' +
+      '<span class="sp-unit"><span class="prefix">+₹</span>' +
+      '<input type="text" inputmode="decimal" data-adjust="' + esc(id) + '" ' +
+      'value="' + (f.adjust[id] ? SW.rupees(f.adjust[id]) : '') + '" ' +
+      'placeholder="0.00" aria-label="Extra for ' + esc(p.full_name) + '"></span>' +
+    '</div>';
+  }
+
+  function wireSplit() {
     document.getElementById('exp-f-mode').addEventListener('click', function (e) {
       const b = e.target.closest('[data-mode]');
       if (!b) return;
-      const mode = b.getAttribute('data-mode');
-      if (mode === f.mode) return;
-      // Seed the exact inputs from the equal split, so switching does not
-      // wipe what is on screen.
-      if (mode === 'exact') f.exact = SW.splitEquallyAmong(f.amountPaise, participants());
-      f.mode = mode;
+      const next = b.getAttribute('data-mode');
+      if (next === f.mode) return;
+      seedMode(next);
+      f.mode = next;
       renderSplit();
     });
 
-    host.querySelectorAll('[data-split]').forEach(function (input) {
+    // Whole-row toggles for the equal split.
+    document.querySelectorAll('[data-toggle]').forEach(function (row) {
+      row.addEventListener('click', function () {
+        const id = row.getAttribute('data-toggle');
+        f.included[id] = f.included[id] === false;
+        renderSplit();
+      });
+    });
+
+    // Typed inputs update the model and only the derived figures, so focus is
+    // never yanked away mid-edit by a full re-render.
+    bind('data-exact', function (id, raw) { f.exact[id] = parseAmount(raw); });
+    bind('data-adjust', function (id, raw) { f.adjust[id] = parseAmount(raw); });
+    bind('data-percent', function (id, raw) {
+      const n = parseFloat(String(raw).replace(/[^0-9.]/g, ''));
+      f.percent[id] = isFinite(n) ? Math.min(100, n) : 0;
+    });
+    bind('data-shares', function (id, raw) {
+      const n = parseInt(String(raw).replace(/[^0-9]/g, ''), 10);
+      f.shares[id] = isFinite(n) ? Math.min(99, n) : 0;
+    });
+  }
+
+  function bind(attr, apply) {
+    document.querySelectorAll('[' + attr + ']').forEach(function (input) {
       input.addEventListener('input', function () {
-        f.exact[input.getAttribute('data-split')] = parseAmount(input.value);
-        // Only the footer changes, so avoid re-rendering the inputs and
-        // stealing focus mid-typing.
-        updateFoot();
+        apply(input.getAttribute(attr), input.value);
+        updateDerived();
       });
     });
   }
 
-  function updateFoot() {
+  // Switching mode carries the current numbers across rather than blanking
+  // the screen, so a mode can be tried without losing the work.
+  function seedMode(next) {
+    const people = participants();
+    const current = currentSplit().byUser;
+
+    if (next === 'exact') {
+      people.forEach(function (id) { f.exact[id] = current[id] || 0; });
+    } else if (next === 'percent') {
+      const anySet = people.some(function (id) { return f.percent[id]; });
+      if (!anySet && f.amountPaise > 0) {
+        people.forEach(function (id) {
+          f.percent[id] = Math.round(((current[id] || 0) / f.amountPaise) * 10000) / 100;
+        });
+      }
+    } else if (next === 'shares') {
+      const anySet = people.some(function (id) { return f.shares[id]; });
+      if (!anySet) people.forEach(function (id) { f.shares[id] = 1; });
+    }
+    // 'equal' and 'adjust' start from their own defaults, which are already
+    // "everyone in" and "no adjustments".
+  }
+
+  function updateDerived() {
+    const result = currentSplit();
+
+    document.querySelectorAll('.split-person').forEach(function (row) {
+      const input = row.querySelector('[data-percent], [data-shares], [data-adjust]');
+      if (!input) return;
+      const id = input.getAttribute('data-percent') || input.getAttribute('data-shares') ||
+                 input.getAttribute('data-adjust');
+      const cell = row.querySelector('.sp-derived');
+      if (cell) cell.textContent = SW.money(result.byUser[id] || 0);
+    });
+
     const foot = document.querySelector('.split-foot');
     if (!foot) return;
-    const split = currentSplit();
-    const sum = Object.keys(split).reduce(function (t, id) { return t + split[id]; }, 0);
-    const diff = f.amountPaise - sum;
-
     const state = foot.querySelector('.sf-state');
-    state.className = 'sf-state ' + (diff === 0 && f.amountPaise > 0 ? 'is-ok' : 'is-off');
-    state.textContent = f.amountPaise === 0
-      ? 'Enter an amount'
-      : (diff === 0 ? 'Adds up'
-                    : (diff > 0 ? SW.money(diff) + ' left to assign'
-                                : SW.money(diff) + ' over'));
-    foot.querySelector('.sf-total').textContent =
-      SW.money(sum) + ' of ' + SW.money(f.amountPaise);
+    state.className = 'sf-state ' + (result.valid ? 'is-ok' : 'is-off');
+    state.textContent = result.message;
+    foot.querySelector('.sf-total').textContent = result.hint ||
+      (SW.money(result.assigned) + ' of ' + SW.money(f.amountPaise));
   }
 
   /* ======================= emoji sub-sheet ============================ */
@@ -490,17 +577,21 @@ window.SW = window.SW || {};
     }
 
     const people = participants();
-    if (people.length < 2) {
-      return fail('A group needs at least two people before you can split anything.');
+    if (!people.length) {
+      return fail('There is nobody to split this with.');
     }
 
-    const split = currentSplit();
-    const sum = people.reduce(function (t, id) { return t + (split[id] || 0); }, 0);
-    if (sum !== f.amountPaise) {
-      const diff = f.amountPaise - sum;
-      return fail(diff > 0
-        ? SW.money(diff) + ' is still unassigned.'
-        : 'The shares add up to ' + SW.money(diff) + ' more than the total.');
+    const result = currentSplit();
+    if (!result.valid) return fail(result.message + '.');
+
+    // Anyone on zero is simply not part of this expense, so they are left
+    // off it rather than recorded as owing nothing.
+    const split = {};
+    people.forEach(function (id) {
+      if (result.byUser[id] > 0) split[id] = result.byUser[id];
+    });
+    if (!Object.keys(split).length) {
+      return fail('Nobody has been given a share yet.');
     }
 
     SW.busy(btn, true);
@@ -565,9 +656,24 @@ window.SW = window.SW || {};
   function fromExpense(e) {
     const paise = SW.toPaise(e.amount);
     const exact = {};
-    (e.expense_splits || []).forEach(function (s) {
-      exact[s.user_id] = SW.toPaise(s.amount);
+    const included = {};
+    const percent = {};
+
+    (e.expense_splits || []).forEach(function (sp) {
+      exact[sp.user_id] = SW.toPaise(sp.amount);
+      included[sp.user_id] = true;
+      percent[sp.user_id] = paise
+        ? Math.round((SW.toPaise(sp.amount) / paise) * 10000) / 100
+        : 0;
     });
+
+    // Only the amounts are stored, not the shares or adjustments that
+    // produced them. Percentages can be derived back exactly enough; shares
+    // and adjustments cannot, so those open as exact amounts — which
+    // preserves the money rather than silently re-deriving a different split.
+    let mode = e.split_mode || 'equal';
+    if (mode === 'shares' || mode === 'adjust') mode = 'exact';
+
     return {
       id: e.id,
       amountPaise: paise,
@@ -579,8 +685,12 @@ window.SW = window.SW || {};
       targetKind: e.group_id ? 'group' : 'friend',
       targetId: e.group_id || otherPartyOf(e),
       payerId: e.payer_id,
-      mode: e.split_mode === 'exact' ? 'exact' : 'equal',
+      mode: mode,
+      included: included,
       exact: exact,
+      percent: percent,
+      shares: {},
+      adjust: {},
       note: e.notes || '',
       receiptPath: e.receipt_path || null,
       receiptFile: null,

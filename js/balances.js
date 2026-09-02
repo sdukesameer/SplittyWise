@@ -115,6 +115,129 @@ window.SW = window.SW || {};
     return out;
   };
 
+  /* ======================= the five split modes ====================== */
+
+  //   equal    split evenly across whoever is ticked
+  //   exact    type each person's amount
+  //   percent  type each person's share of 100%
+  //   shares   weights — 2 nights is 2 shares, a family of 3 is 3 shares
+  //   adjust   type who owes extra; the remainder is split evenly
+  //
+  // state: { included:{}, exact:{}, percent:{}, shares:{}, adjust:{} }
+  // Returns { byUser, assigned, valid, message, hint }. byUser always covers
+  // every participant, with 0 for anyone left out; the caller drops the zeros
+  // when building the payload so nobody appears on an expense owing nothing.
+  SW.computeSplit = function (mode, amountPaise, ids, state) {
+    const byUser = {};
+    ids.forEach(function (id) { byUser[id] = 0; });
+
+    const sum = function () {
+      return ids.reduce(function (t, id) { return t + byUser[id]; }, 0);
+    };
+    const done = function (valid, message, hint) {
+      return { byUser: byUser, assigned: sum(), valid: valid, message: message, hint: hint };
+    };
+
+    if (!ids.length) return done(false, 'Nobody to split between', '');
+    if (amountPaise <= 0) return done(false, 'Enter an amount', '');
+
+    /* ---- equally, across the ticked people ---- */
+    if (mode === 'equal') {
+      const on = ids.filter(function (id) { return state.included[id] !== false; });
+      if (!on.length) return done(false, 'Tick at least one person', '');
+
+      const parts = SW.splitEqually(amountPaise, on.length);
+      on.forEach(function (id, i) { byUser[id] = parts[i]; });
+
+      return done(true, 'Adds up',
+        SW.money(parts[0]) + '/person (' +
+        (on.length === ids.length ? on.length + (on.length === 1 ? ' person' : ' people')
+                                  : on.length + ' of ' + ids.length) + ')');
+    }
+
+    /* ---- exact amounts ---- */
+    if (mode === 'exact') {
+      ids.forEach(function (id) { byUser[id] = Math.max(0, state.exact[id] || 0); });
+      const diff = amountPaise - sum();
+      if (diff > 0) return done(false, SW.money(diff) + ' left to assign', '');
+      if (diff < 0) return done(false, SW.money(diff) + ' over', '');
+      return done(true, 'Adds up', '');
+    }
+
+    /* ---- percentages ---- */
+    if (mode === 'percent') {
+      // Compared in hundredths of a percent so 33.33 + 33.33 + 33.34 works.
+      const weights = {};
+      let bp = 0;
+      ids.forEach(function (id) {
+        const v = Math.max(0, Math.round((state.percent[id] || 0) * 100));
+        weights[id] = v;
+        bp += v;
+      });
+      if (bp !== 10000) {
+        const off = (10000 - bp) / 100;
+        return done(false,
+          (off > 0 ? off.toFixed(2).replace(/\.00$/, '') + '% left'
+                   : Math.abs(off).toFixed(2).replace(/\.00$/, '') + '% over'),
+          (bp / 100).toFixed(2).replace(/\.00$/, '') + '% of 100%');
+      }
+      const alloc = SW.prorate(amountPaise, weights);
+      ids.forEach(function (id) { byUser[id] = alloc[id] || 0; });
+      return done(true, 'Adds up', '100% of 100%');
+    }
+
+    /* ---- shares ---- */
+    if (mode === 'shares') {
+      const weights = {};
+      let total = 0;
+      ids.forEach(function (id) {
+        const v = Math.max(0, parseInt(state.shares[id], 10) || 0);
+        weights[id] = v;
+        total += v;
+      });
+      if (total <= 0) return done(false, 'Give at least one share', '');
+
+      const alloc = SW.prorate(amountPaise, weights);
+      ids.forEach(function (id) { byUser[id] = alloc[id] || 0; });
+      return done(true, 'Adds up',
+        total + (total === 1 ? ' total share' : ' total shares'));
+    }
+
+    /* ---- adjustments: extras first, remainder split evenly ---- */
+    if (mode === 'adjust') {
+      let extra = 0;
+      ids.forEach(function (id) { extra += (state.adjust[id] || 0); });
+
+      // The remainder can go negative when the adjustments exceed the total,
+      // and splitEqually handles that; what cannot happen is a person ending
+      // up owing less than nothing, because expense_splits forbids it.
+      const base = SW.splitEqually(amountPaise - extra, ids.length);
+      ids.forEach(function (id, i) { byUser[id] = base[i] + (state.adjust[id] || 0); });
+
+      const negative = ids.filter(function (id) { return byUser[id] < 0; });
+      if (negative.length) {
+        return done(false, 'Those adjustments leave someone owing less than nothing', '');
+      }
+      return done(true, 'Adds up',
+        extra ? SW.money(extra) + ' in adjustments' : 'no adjustments yet');
+    }
+
+    return done(false, 'Unknown split mode', '');
+  };
+
+  SW.SPLIT_MODES = [
+    { key: 'equal',   label: 'Equally',
+      blurb: 'Select which people owe an equal share.' },
+    { key: 'exact',   label: 'Exact',
+      blurb: 'Specify exactly how much each person owes.' },
+    { key: 'percent', label: 'Percent',
+      blurb: 'Enter the percentage split that is fair for your situation.' },
+    { key: 'shares',  label: 'Shares',
+      blurb: 'Good for time-based splitting (2 nights is 2 shares) and for families (a family of 3 is 3 shares).' },
+    { key: 'adjust',  label: 'Adjust',
+      blurb: 'Enter who owes extra; the remainder is split equally.' },
+  ];
+
   /* ======================= generated avatars ========================== */
 
   // Deterministic abstract art from a user id, in the spirit of the
