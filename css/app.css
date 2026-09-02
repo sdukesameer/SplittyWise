@@ -332,8 +332,11 @@ button { font: inherit; color: inherit; }
 .spinner-lg { width: 30px; height: 30px; border-width: 3px; color: var(--teal); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.btn .spinner { display: none; }
-.btn.is-loading .spinner { display: block; }
+/* A spinner is idle chrome until its button is actually busy. Scoped to
+   `button` rather than `.btn`, because .set-row buttons carry spinners too
+   and were showing them permanently. */
+button .spinner { display: none; }
+button.is-loading .spinner { display: block; }
 .btn.is-loading .btn-label { opacity: 0.75; }
 
 /* --------------------------------------------------------------------------
@@ -815,8 +818,11 @@ button { font: inherit; color: inherit; }
 .set-row:first-child { border-top: 0; }
 .set-row:hover { background: var(--surface-2); }
 .set-row .grow { flex: 1; min-width: 0; }
-.set-row .set-title { font-size: 15.5px; font-weight: 700; }
-.set-row .set-sub {
+.set-row .set-title,
+.switch-row .set-title { display: block; font-size: 15.5px; font-weight: 700; }
+.set-row .set-sub,
+.switch-row .set-sub {
+  display: block;
   font-size: 13px; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }

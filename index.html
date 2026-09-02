@@ -403,6 +403,13 @@
         </div>
       </div>
 
+      <div class="empty" id="groups-filtered-empty" hidden>
+        <div class="empty-art">🔍</div>
+        <h3>No groups match that filter</h3>
+        <p>Try clearing it to see them all again.</p>
+        <button type="button" class="btn btn-ghost" id="groups-clear-filter">Clear filter</button>
+      </div>
+
       <div class="empty" id="groups-empty" hidden>
         <div class="empty-art">🏠</div>
         <h3>No groups yet</h3>
@@ -444,10 +451,10 @@
       <div class="card">
         <div class="card-head">Your details</div>
         <button class="set-row" id="row-name" style="margin-top:4px">
-          <div class="grow">
-            <div class="set-title">Name</div>
-            <div class="set-sub" id="sub-name">&nbsp;</div>
-          </div>
+          <span class="grow">
+            <span class="set-title">Name</span>
+            <span class="set-sub" id="sub-name">&nbsp;</span>
+          </span>
           <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
         </button>
         <div class="set-row" style="cursor:default">
@@ -457,20 +464,20 @@
           </div>
         </div>
         <button class="set-row" id="row-emoji">
-          <div class="grow">
-            <div class="set-title">Avatar</div>
-            <div class="set-sub">Pick an emoji your friends will recognise</div>
-          </div>
+          <span class="grow">
+            <span class="set-title">Avatar</span>
+            <span class="set-sub">Pick an emoji your friends will recognise</span>
+          </span>
           <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
         </button>
       </div>
 
       <div class="card">
         <button class="set-row" id="row-insights">
-          <div class="grow">
-            <div class="set-title">Spending insights</div>
-            <div class="set-sub">Charts by category and month, and a CSV export</div>
-          </div>
+          <span class="grow">
+            <span class="set-title">Spending insights</span>
+            <span class="set-sub">Charts by category and month, and a CSV export</span>
+          </span>
           <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
         </button>
       </div>
@@ -489,23 +496,24 @@
       <div class="card">
         <div class="card-head">Password</div>
         <button class="set-row" id="row-password" style="margin-top:4px">
-          <div class="grow">
-            <div class="set-title">Change password</div>
-            <div class="set-sub">We email you a link to set a new one</div>
-          </div>
+          <span class="grow">
+            <span class="set-title">Change password</span>
+            <span class="set-sub">We email you a link to set a new one</span>
+          </span>
           <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
         </button>
       </div>
 
       <div class="card">
         <button class="set-row is-danger" id="app-logout">
-          <div class="grow"><div class="set-title">Log out</div></div>
+          <span class="grow"><span class="set-title">Log out</span>
+          </span>
           <span class="spinner" style="color:var(--danger)"></span>
         </button>
       </div>
 
       <p style="text-align:center;color:var(--faint);font-size:12.5px;padding:4px 20px 10px">
-        SplittyWise · phase 2 of 10<br>Friends and balances arrive next.
+        SplittyWise
       </p>
     </div>
 
@@ -616,6 +624,7 @@
 
         <div class="chip-row">
           <button type="button" class="chip is-primary" id="grp-settle">Settle up</button>
+          <button type="button" class="chip" id="grp-add-people">Add people</button>
           <button type="button" class="chip is-on" data-pane-btn="expenses">Expenses</button>
           <button type="button" class="chip" data-pane-btn="balances">Balances</button>
           <button type="button" class="chip" data-pane-btn="totals">Totals</button>
@@ -625,6 +634,14 @@
 
       <div data-pane="expenses" class="is-active">
         <div id="grp-expenses"></div>
+        <div class="empty" id="grp-solo" hidden>
+          <div class="empty-art">👥</div>
+          <h3>It is just you in here</h3>
+          <p>Add someone by their email address and every expense will split
+             across the whole group.</p>
+          <button type="button" class="btn btn-ghost" id="grp-solo-add">Add people</button>
+        </div>
+
         <div class="empty" id="grp-no-expenses" hidden>
           <div class="empty-art">🎉</div>
           <h3>Nothing here yet</h3>

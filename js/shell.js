@@ -128,18 +128,12 @@ window.SW = window.SW || {};
   });
 
   document.getElementById('btn-filter').addEventListener('click', function () {
-    if (activeView === 'friends' && SW.friendFilterSheet) return SW.friendFilterSheet();
-    SW.toast('Filters for this tab arrive with it');
+    if (activeView === 'groups' && SW.groupFilterSheet) return SW.groupFilterSheet();
+    if (SW.friendFilterSheet) SW.friendFilterSheet();
   });
 
   document.getElementById('btn-bell').addEventListener('click', function () {
     SW.navigate('activity');
-  });
-
-  // Anything still stubbed says so plainly rather than silently doing nothing.
-  document.addEventListener('click', function (e) {
-    const el = e.target.closest('[data-todo]');
-    if (el) SW.toast(el.getAttribute('data-todo'));
   });
 
   /* ======================= activity feed ============================== */

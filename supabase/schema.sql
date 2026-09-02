@@ -631,12 +631,34 @@ end $$;
 
 -- Edit an expense and swap its splits in one transaction. RLS on expenses
 -- decides whether the caller is allowed to touch this row at all.
+--
+-- p_group_id is always sent by the client and always applied: null means the
+-- expense is not in a group. Without it, moving an expense between groups
+-- would rewrite the splits to the new members while leaving group_id on the
+-- old group — participants who are not in their own expense's group.
+--
+-- Adding a parameter changes the signature, and `create or replace` would
+-- leave the old one behind as an overload, making every RPC call ambiguous.
+-- So drop every existing version first.
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as sig
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'update_expense'
+  loop
+    execute 'drop function ' || r.sig;
+  end loop;
+end $$;
+
 create or replace function public.update_expense(
   p_expense_id   uuid,
   p_amount       numeric,
   p_description  text,
   p_splits       jsonb,
   p_payer_id     uuid default null,
+  p_group_id     uuid default null,
   p_emoji        text default null,
   p_category     text default null,
   p_split_mode   text default null,
@@ -646,24 +668,76 @@ create or replace function public.update_expense(
 ) returns void language plpgsql security definer set search_path = public as $$
 declare
   me          uuid := auth.uid();
+  payer       uuid;
   split_total numeric(12,2);
+  n_splits    int;
+  bad         uuid;
 begin
   if me is null then raise exception 'Not authenticated'; end if;
   if not public.can_see_expense(p_expense_id, me) then
     raise exception 'You cannot edit this expense';
   end if;
 
-  select coalesce(sum((s->>'amount')::numeric), 0) into split_total
+  select coalesce(p_payer_id, e.payer_id) into payer
+    from public.expenses e where e.id = p_expense_id;
+
+  -- ---- shape checks --------------------------------------------------------
+  if p_splits is null or jsonb_typeof(p_splits) <> 'array' then
+    raise exception 'p_splits must be a JSON array';
+  end if;
+
+  select count(*), coalesce(sum((s->>'amount')::numeric), 0)
+    into n_splits, split_total
     from jsonb_array_elements(p_splits) s;
+
+  if n_splits = 0 then raise exception 'An expense needs at least one split'; end if;
+
+  if n_splits <> (
+    select count(distinct (s->>'user_id')::uuid) from jsonb_array_elements(p_splits) s
+  ) then
+    raise exception 'The same person is listed twice in the split';
+  end if;
+
   if split_total <> round(p_amount, 2) then
     raise exception 'Splits total %, expense is % — they must match',
       split_total, round(p_amount, 2);
   end if;
 
+  -- ---- authorisation, same rules as creating one ---------------------------
+  if p_group_id is not null then
+    if not public.is_group_member(p_group_id, me) then
+      raise exception 'You are not a member of this group';
+    end if;
+    if not public.is_group_member(p_group_id, payer) then
+      raise exception 'The payer is not a member of this group';
+    end if;
+    select (s->>'user_id')::uuid into bad
+      from jsonb_array_elements(p_splits) s
+      where not public.is_group_member(p_group_id, (s->>'user_id')::uuid)
+      limit 1;
+    if bad is not null then
+      raise exception 'User % is not a member of this group', bad;
+    end if;
+  else
+    if payer <> me and not public.are_friends(me, payer) then
+      raise exception 'The payer is not one of your friends';
+    end if;
+    select (s->>'user_id')::uuid into bad
+      from jsonb_array_elements(p_splits) s
+      where (s->>'user_id')::uuid <> me
+        and not public.are_friends(me, (s->>'user_id')::uuid)
+      limit 1;
+    if bad is not null then
+      raise exception 'User % is not one of your friends', bad;
+    end if;
+  end if;
+
+  -- ---- write ---------------------------------------------------------------
   update public.expenses set
     amount       = round(p_amount, 2),
     description  = trim(p_description),
-    payer_id     = coalesce(p_payer_id, payer_id),
+    payer_id     = payer,
+    group_id     = p_group_id,
     emoji        = coalesce(p_emoji, emoji),
     category     = coalesce(p_category, category),
     split_mode   = coalesce(p_split_mode, split_mode),
@@ -767,7 +841,7 @@ grant execute on function public.mark_all_notifications_read()          to authe
 grant execute on function public.create_expense(
   numeric, text, jsonb, uuid, uuid, text, text, text, date, text, text)  to authenticated;
 grant execute on function public.update_expense(
-  uuid, numeric, text, jsonb, uuid, text, text, text, date, text, text)  to authenticated;
+  uuid, numeric, text, jsonb, uuid, uuid, text, text, text, date, text, text) to authenticated;
 
 -- Helpers are called from policies, so authenticated needs execute on them.
 grant execute on function public.is_group_member(uuid, uuid)  to authenticated;

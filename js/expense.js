@@ -523,12 +523,15 @@ window.SW = window.SW || {};
         p_receipt_path: receiptPath,
       };
 
+      // Always sent, for both create and update: null means the expense is
+      // not in a group. Editing the target therefore actually moves it.
+      args.p_group_id = f.targetKind === 'group' ? f.targetId : null;
+
       let error;
       if (f.id) {
         args.p_expense_id = f.id;
         ({ error } = await db.rpc('update_expense', args));
       } else {
-        args.p_group_id = f.targetKind === 'group' ? f.targetId : null;
         ({ error } = await db.rpc('create_expense', args));
       }
       if (error) throw error;

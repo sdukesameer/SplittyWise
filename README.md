@@ -50,7 +50,7 @@ Android.
 for t in tests/*.test.js; do node "$t"; done
 ```
 
-Seven suites, no database and no browser needed:
+Eight suites, no database and no browser needed:
 
 | Suite | Covers |
 |---|---|
@@ -61,6 +61,7 @@ Seven suites, no database and no browser needed:
 | `prorate.test.js` | Fees allocated by order size, landing on the total exactly |
 | `scan.test.js` | Receipt parsing from realistic OCR output, and itemised splits |
 | `insights.test.js` | Categories, monthly buckets, search, and CSV including formula-injection guarding |
+| `wiring.test.js` | That the app is actually connected: every RPC exists with the arguments passed, every column selected exists, every button has a handler, every screen can render, and the offline shell is complete |
 
 The full database — 8 tables, 27 row-level-security policies, 6 write RPCs — is
 already in `supabase/schema.sql` and supports every later phase.
@@ -86,6 +87,12 @@ structure, not data.
 The script is safe to re-run. Every statement is either `if not exists` or
 `drop … / create …`, so if you edit it later you can paste the whole thing again
 without wiping your expenses.
+
+> **Re-run this if you have run an older copy.** `update_expense` gained a
+> `p_group_id` parameter, so editing an expense can move it between groups.
+> Without the update, changing "Split with" on an existing expense rewrites
+> its splits but leaves it in the old group. The script drops the old version
+> before recreating it, so re-running is safe.
 
 ### 2.2 Confirm it worked
 
@@ -421,6 +428,15 @@ blocking `cdn.jsdelivr.net` or `tessdata.projectnaptha.com`.
 **CSV export does nothing on an installed iPhone app**
 iOS in standalone mode blocks downloads a page starts itself. Open the site
 in Safari proper and export from there.
+
+**A group only has me in it**
+Open the group and tap **Add people**, or the gear icon → *Add someone by
+email*. They need a SplittyWise account already. Adding them to a group also
+makes you friends, so your 1:1 balance survives leaving the group later.
+
+**"That group needs at least two people"**
+A group of one cannot split anything. Add someone first — the group page says
+so and offers the button.
 
 **The bell does not update live**
 Realtime is not enabled for `notifications`. See

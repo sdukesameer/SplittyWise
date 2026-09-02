@@ -129,7 +129,7 @@ window.SW = window.SW || {};
     const profile = await loadProfile(user);
 
     // A missing profile row means the signup trigger did not fire — surface
-    // it now rather than as a mystery empty screen in phase 3.
+    // it now rather than as a mystery empty screen later on.
     if (!profile) SW.toast('Your profile row is missing — re-run schema.sql', 'error');
 
     SW.profile = profile || {

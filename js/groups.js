@@ -16,7 +16,16 @@ window.SW = window.SW || {};
   const routeId = function (id) { return id === null ? LOOSE : id; };
   const realId = function (param) { return param === LOOSE ? null : param; };
 
+  const FILTER_KEY = 'splittywise.groupFilter';
+  const FILTERS = {
+    none:        'All groups',
+    outstanding: 'Groups with an outstanding balance',
+    'you-owe':   'Groups where you owe',
+    'owes-you':  'Groups where you are owed',
+  };
+
   let hideSettled = read(COLLAPSE_KEY) === '1';
+  let filter = read(FILTER_KEY) || 'none';
   let pane = 'expenses';
 
   SW.currentGroupId = null;
@@ -85,13 +94,31 @@ window.SW = window.SW || {};
     const wrap = document.getElementById('groups-settled-wrap');
     const settledList = document.getElementById('groups-settled-list');
 
-    const entries = SW.groupList();
-    if (!entries.length) {
+    const filteredEmpty = document.getElementById('groups-filtered-empty');
+    const all = SW.groupList();
+
+    if (!all.length) {
       body.hidden = true;
+      filteredEmpty.hidden = true;
       empty.hidden = false;
       return;
     }
     empty.hidden = true;
+
+    const entries = all.filter(function (e) {
+      const net = e.summary.myNet;
+      if (filter === 'outstanding') return net !== 0;
+      if (filter === 'you-owe') return net < 0;
+      if (filter === 'owes-you') return net > 0;
+      return true;
+    });
+
+    if (!entries.length) {
+      body.hidden = true;
+      filteredEmpty.hidden = false;
+      return;
+    }
+    filteredEmpty.hidden = true;
     body.hidden = false;
 
     const active = entries.filter(function (e) { return e.summary.myNet !== 0; });
@@ -130,6 +157,35 @@ window.SW = window.SW || {};
   document.getElementById('groups-settled-toggle').addEventListener('click', function () {
     hideSettled = !hideSettled;
     write(COLLAPSE_KEY, hideSettled ? '1' : '0');
+    renderGroups();
+  });
+
+  SW.groupFilterSheet = function () {
+    SW.sheet({
+      title: 'Show which groups',
+      rawBody: '<div class="opt-list">' + Object.keys(FILTERS).map(function (k) {
+        return '<button type="button" class="opt' + (k === filter ? ' is-on' : '') +
+               '" data-gfilter="' + k + '">' + esc(FILTERS[k]) +
+               '<svg class="tick" width="19" height="19" aria-hidden="true">' +
+               '<use href="#ic-check"/></svg></button>';
+      }).join('') + '</div>',
+      confirm: null,
+      onOpen: function () {
+        document.querySelector('.opt-list').addEventListener('click', function (e) {
+          const b = e.target.closest('[data-gfilter]');
+          if (!b) return;
+          filter = b.getAttribute('data-gfilter');
+          write(FILTER_KEY, filter);
+          renderGroups();
+          SW.closeSheet();
+        });
+      },
+    });
+  };
+
+  document.getElementById('groups-clear-filter').addEventListener('click', function () {
+    filter = 'none';
+    write(FILTER_KEY, filter);
     renderGroups();
   });
 
@@ -228,6 +284,12 @@ window.SW = window.SW || {};
       memberIds.length + (memberIds.length === 1 ? ' person' : ' people');
     document.getElementById('grp-people').hidden = isLoose;
     document.getElementById('grp-settings').hidden = isLoose;
+    document.getElementById('grp-add-people').hidden = isLoose;
+
+    // A group of one cannot split anything, so say so up front rather than
+    // only refusing when they try to save an expense.
+    const solo = !isLoose && memberIds.length < 2;
+    document.getElementById('grp-solo').hidden = !solo;
 
     // My position in this group.
     const net = summary.myNet;
@@ -263,9 +325,12 @@ window.SW = window.SW || {};
         return (a.expense_date + (a.created_at || '')) < (b.expense_date + (b.created_at || '')) ? 1 : -1;
       });
 
+    // The solo prompt already explains an empty group of one.
+    const solo = !document.getElementById('grp-solo').hidden;
+
     if (!rows.length) {
       host.innerHTML = '';
-      empty.hidden = false;
+      empty.hidden = solo;
       return;
     }
     empty.hidden = true;
@@ -391,6 +456,13 @@ window.SW = window.SW || {};
       if (b) showPane(b.getAttribute('data-pane-btn'));
     });
 
+  document.getElementById('grp-add-people').addEventListener('click', function () {
+    if (SW.currentGroupId) openAddMember(SW.currentGroupId);
+  });
+  document.getElementById('grp-solo-add').addEventListener('click', function () {
+    if (SW.currentGroupId) openAddMember(SW.currentGroupId);
+  });
+
   document.getElementById('grp-back').addEventListener('click', function () {
     SW.navigate('groups');
   });
@@ -465,6 +537,8 @@ window.SW = window.SW || {};
       },
     });
   });
+
+  SW.openAddMember = function (gid) { openAddMember(gid); };
 
   function openAddMember(gid) {
     SW.sheet({
