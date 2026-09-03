@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <title>SplittyWise admin</title>
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/admin.css">
+</head>
+<body class="admin">
+
+<!-- ---------- sign in ---------- -->
+<section id="ad-gate" class="ad-gate">
+  <div class="ad-gate-card">
+    <h1>SplittyWise admin</h1>
+    <p class="ad-muted">Sign in with your own account. Administration is a
+      flag on a real login, not a shared password — so it inherits your
+      password rules and confirmation.</p>
+    <form id="ad-login" novalidate>
+      <div class="field">
+        <label for="ad-email">Email</label>
+        <input class="input" id="ad-email" type="email" autocomplete="username"
+               autocapitalize="off" spellcheck="false" required>
+      </div>
+      <div class="field">
+        <label for="ad-password">Password</label>
+        <input class="input" id="ad-password" type="password"
+               autocomplete="current-password" required>
+      </div>
+      <div class="field-error" id="ad-login-error" role="alert"></div>
+      <button class="btn btn-primary" type="submit" id="ad-login-btn">
+        <span class="spinner"></span><span class="btn-label">Sign in</span>
+      </button>
+    </form>
+    <p class="ad-muted ad-small">Not an administrator? <a href="/">Open the app</a>.</p>
+  </div>
+</section>
+
+<!-- ---------- console ---------- -->
+<main id="ad-app" hidden>
+  <header class="ad-top">
+    <div class="ad-top-in">
+      <span class="ad-brand">SplittyWise <span>admin</span></span>
+      <span class="grow"></span>
+      <span class="ad-who" id="ad-who"></span>
+      <a class="btn-text" href="/">App</a>
+      <button class="btn-text" id="ad-signout" type="button">Sign out</button>
+    </div>
+    <nav class="ad-tabs" id="ad-tabs">
+      <button class="ad-tab is-on" data-pane="overview" type="button">Overview</button>
+      <button class="ad-tab" data-pane="people" type="button">People</button>
+      <button class="ad-tab" data-pane="access" type="button">Access</button>
+      <button class="ad-tab" data-pane="failures" type="button">Failures</button>
+      <button class="ad-tab" data-pane="trail" type="button">Audit trail</button>
+    </nav>
+  </header>
+
+  <section class="ad-pane is-on" data-pane="overview">
+    <div class="ad-stats" id="ad-stats"></div>
+    <div class="ad-card">
+      <h2>Last 30 days</h2>
+      <div id="ad-chart"></div>
+    </div>
+  </section>
+
+  <section class="ad-pane" data-pane="people">
+    <div class="ad-card">
+      <div class="ad-row-head">
+        <h2>People</h2>
+        <input class="input ad-search" id="ad-user-search" type="search"
+               placeholder="Search name or email" aria-label="Search people">
+      </div>
+      <div id="ad-users" class="ad-list"></div>
+    </div>
+  </section>
+
+  <section class="ad-pane" data-pane="access">
+    <div class="ad-card">
+      <h2>Who can create an account</h2>
+      <div class="switch-row">
+        <span class="grow">
+          <span class="set-title">New accounts</span>
+          <span class="set-sub" id="ad-signups-sub">—</span>
+        </span>
+        <button type="button" class="switch" id="ad-signups" role="switch"
+                aria-checked="false" aria-label="New accounts"></button>
+      </div>
+      <div class="switch-row">
+        <span class="grow">
+          <span class="set-title">Invite only</span>
+          <span class="set-sub" id="ad-invite-sub">—</span>
+        </span>
+        <button type="button" class="switch" id="ad-invite" role="switch"
+                aria-checked="false" aria-label="Invite only"></button>
+      </div>
+    </div>
+
+    <div class="ad-card">
+      <div class="ad-row-head">
+        <h2>Create or invite</h2>
+      </div>
+      <div class="ad-form">
+        <input class="input" id="ad-new-email" type="email" placeholder="their@email.com"
+               autocapitalize="off" spellcheck="false" aria-label="Email">
+        <input class="input" id="ad-new-name" type="text" placeholder="Name (optional)"
+               aria-label="Name">
+        <input class="input" id="ad-new-pw" type="text" placeholder="Password (8+)"
+               aria-label="Password">
+        <div class="ad-form-actions">
+          <button class="btn btn-primary" id="ad-create" type="button">
+            <span class="spinner"></span><span class="btn-label">Create account</span>
+          </button>
+          <button class="btn btn-ghost" id="ad-invite-send" type="button">
+            <span class="spinner"></span><span class="btn-label">Email an invite instead</span>
+          </button>
+        </div>
+        <span class="hint">Creating confirms the address immediately, so they can
+          sign in at once. An invite relies on Supabase mail, which the free tier
+          throttles hard.</span>
+      </div>
+    </div>
+
+    <div class="ad-card">
+      <div class="ad-row-head"><h2>Blocked addresses</h2></div>
+      <div class="ad-form">
+        <input class="input" id="ad-ban-email" type="email" placeholder="block@this.com"
+               autocapitalize="off" spellcheck="false" aria-label="Email to block">
+        <input class="input" id="ad-ban-reason" type="text" placeholder="Reason (optional)"
+               aria-label="Reason">
+        <div class="ad-form-actions">
+          <button class="btn btn-danger" id="ad-ban" type="button">
+            <span class="spinner"></span><span class="btn-label">Block this address</span>
+          </button>
+        </div>
+        <span class="hint">Blocks a new signup with it, ends every session on
+          the existing account, and stops it signing in.</span>
+      </div>
+      <div id="ad-banned" class="ad-list"></div>
+    </div>
+
+    <div class="ad-card">
+      <div class="ad-row-head"><h2>Allowed while invite only</h2></div>
+      <div class="ad-form">
+        <input class="input" id="ad-allow-email" type="email" placeholder="allow@this.com"
+               autocapitalize="off" spellcheck="false" aria-label="Email to allow">
+        <div class="ad-form-actions">
+          <button class="btn btn-ghost" id="ad-allow" type="button">
+            <span class="spinner"></span><span class="btn-label">Allow this address</span>
+          </button>
+        </div>
+      </div>
+      <div id="ad-allowed" class="ad-list"></div>
+    </div>
+  </section>
+
+  <section class="ad-pane" data-pane="failures">
+    <div class="ad-card">
+      <div class="ad-row-head">
+        <h2>Failures</h2>
+        <button class="btn-text" id="ad-clear-errors" type="button">Clear all</button>
+      </div>
+      <span class="hint">What the app actually threw on someone's phone,
+        grouped — forty copies of one bug is one bug.</span>
+      <div id="ad-errors" class="ad-list"></div>
+    </div>
+  </section>
+
+  <section class="ad-pane" data-pane="trail">
+    <div class="ad-card">
+      <div class="ad-row-head"><h2>Audit trail</h2></div>
+      <span class="hint">Every administrative action, append-only. Nobody can
+        edit or delete this, including you.</span>
+      <div id="ad-trail" class="ad-list"></div>
+    </div>
+  </section>
+</main>
+
+<div id="sheet-scrim" class="sheet-scrim">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <div class="sheet-grip"></div>
+    <h2 class="sheet-title" id="sheet-title"></h2>
+    <div id="sheet-content"></div>
+    <div class="sheet-actions" id="sheet-actions"></div>
+  </div>
+</div>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="js/config.js"></script>
+<script src="js/admin.js"></script>
+</body>
+</html>

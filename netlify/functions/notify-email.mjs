@@ -31,6 +31,9 @@
 const WORTH_AN_EMAIL = new Set([
   'expense_added',
   'settlement',
+  // A payment being un-recorded moves somebody's balance without them
+  // doing anything, which is exactly when an email is worth sending.
+  'settlement_undone',
   'nudge',
   'settle_reminder',
   'friend_added',

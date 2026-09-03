@@ -760,26 +760,12 @@ create policy notifications_delete on public.notifications
 --  5. SIGNUP HOOK — mirror auth.users into profiles
 -- ============================================================================
 
-create or replace function public.handle_new_user()
-returns trigger language plpgsql security definer set search_path = public as $$
-begin
-  insert into public.profiles (id, email, full_name)
-  values (
-    new.id,
-    lower(new.email),
-    coalesce(
-      nullif(trim(new.raw_user_meta_data->>'full_name'), ''),
-      split_part(new.email, '@', 1)
-    )
-  )
-  on conflict (id) do nothing;
-  return new;
-end $$;
-
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute function public.handle_new_user();
+-- handle_new_user() is defined in section 12, because it also enforces the
+-- ban list, the signups switch and invite-only mode — all of which live
+-- there. Defining it twice in one file would mean whichever came last won,
+-- silently, so it is defined once, later — and its trigger is created there
+-- too, since `create trigger` needs the function to exist already and would
+-- fail here on a database being set up for the first time.
 
 -- ============================================================================
 --  6. FRIENDS
@@ -1576,7 +1562,8 @@ begin
   -- expense would be noise, and notify_group_deleted has already said the
   -- group is gone, so stay quiet for those.
   if old.group_id is not null
-     and current_setting('splittywise.deleting_group', true) = old.group_id::text
+     and coalesce(current_setting('splittywise.deleting_group', true), '')
+         = old.group_id::text
   then
     return old;
   end if;
@@ -1967,7 +1954,652 @@ create policy covers_delete on storage.objects
   );
 
 -- ============================================================================
---  12. GRANTS
+--  11b. UNDOING A PAYMENT
+--
+--  Settlements are never edited and never hard-deleted, because balances are
+--  derived from (expenses - settlements) and rewriting history would move
+--  figures nobody agreed to move. Undo is therefore a soft delete, and the
+--  balance simply stops subtracting it.
+--
+--  Only the most recent payment in its own scope may be undone. Undoing an
+--  older one would leave the newer ones sitting on top of a balance that no
+--  longer explains them — "you paid the remaining 400" is nonsense once the
+--  600 beneath it has gone. Scope is the pair *and* the group, because that
+--  is what the screen showing the Undo button is listing.
+--
+--  Worth stating plainly, because it is the case the owner asked about:
+--  settling 500 and then amending the expense down to 450 leaves a net of
+--  -50, i.e. they now owe you 50. That is correct and needs no undo — the
+--  balance is derived, so it self-corrects, and the 50 carries into the next
+--  expense between you. Undo is for a payment recorded *in error*, not for a
+--  payment whose expense later changed.
+-- ============================================================================
+
+create or replace function public.undo_settlement(p_settlement uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  me       uuid := auth.uid();
+  row_s    public.settlements;
+  newest   uuid;
+  other    uuid;
+  my_name  text;
+  gname    text;
+begin
+  if me is null then raise exception 'Not signed in.'; end if;
+
+  select * into row_s from public.settlements where id = p_settlement;
+  if row_s.id is null then raise exception 'No such payment.'; end if;
+  if row_s.deleted_at is not null then
+    raise exception 'That payment has already been undone.';
+  end if;
+
+  -- Only someone the money moved between, or whoever recorded it.
+  if me not in (row_s.from_user, row_s.to_user, row_s.created_by) then
+    raise exception 'That is not your payment to undo.';
+  end if;
+
+  -- The newest live payment between these two, in this same group scope.
+  select id into newest
+    from public.settlements
+   where deleted_at is null
+     and (group_id is null) = (row_s.group_id is null)
+     and coalesce(group_id, '00000000-0000-0000-0000-000000000000'::uuid)
+       = coalesce(row_s.group_id, '00000000-0000-0000-0000-000000000000'::uuid)
+     and least(from_user, to_user) = least(row_s.from_user, row_s.to_user)
+     and greatest(from_user, to_user) = greatest(row_s.from_user, row_s.to_user)
+   order by settled_on desc, created_at desc
+   limit 1;
+
+  if newest is distinct from p_settlement then
+    raise exception 'Only the most recent payment can be undone. Undo the later one first.';
+  end if;
+
+  update public.settlements
+     set deleted_at = now()
+   where id = p_settlement;
+
+  other := case when me = row_s.from_user then row_s.to_user else row_s.from_user end;
+  select full_name into my_name from public.profiles where id = me;
+  if row_s.group_id is not null then
+    select name into gname from public.groups where id = row_s.group_id;
+  end if;
+
+  -- Both sides hear about it, including whoever did it — a payment being
+  -- un-recorded moves somebody's balance, so silence is not an option.
+  insert into public.notifications
+    (user_id, actor_id, type, title, body, group_id, is_read)
+  select uid, me, 'settlement_undone',
+         case when uid = me then 'You undid a payment of ₹'
+              else coalesce(my_name, 'Someone') || ' undid a payment of ₹' end
+           || to_char(row_s.amount, 'FM999999990.00'),
+         'The balance is back to what it was'
+           || coalesce(' · ' || gname, '')
+           || coalesce(' · ' || row_s.note, ''),
+         row_s.group_id, uid = me
+  from (select me as uid union select other) sides   --  is reserved
+  where uid is not null;
+
+  return jsonb_build_object(
+    'id', p_settlement,
+    'amount', row_s.amount,
+    'other', other);
+end $$;
+
+-- ============================================================================
+--  12. ADMINISTRATION
+--
+--  There is deliberately no separate "admin" account with a shared password.
+--  This is a static site: js/config.js is delivered to the browser, so any
+--  credential the page could check is a credential the visitor already has.
+--  Admin is instead a flag on a real account, which means it inherits that
+--  account's password rules, email confirmation and MFA.
+--
+--  Bootstrap the first one by hand, once:
+--
+--    update public.profiles set is_admin = true where email = 'you@example.com';
+--
+--  Everything below is gated on that flag inside the function body, not by
+--  RLS on the caller. These functions are security definer because their
+--  whole job is to see past RLS — so each one re-checks the caller on its
+--  first line, and refusing is an exception, never an empty result.
+-- ============================================================================
+
+alter table public.profiles add column if not exists is_admin boolean not null default false;
+
+-- Global switches. One row per setting, so a new one does not need a
+-- migration. Read only through the functions below.
+create table if not exists public.app_settings (
+  key         text primary key,
+  value       jsonb not null,
+  updated_at  timestamptz not null default now(),
+  updated_by  uuid references public.profiles(id) on delete set null
+);
+
+insert into public.app_settings (key, value) values
+  ('signups_enabled', '{"enabled": true}'::jsonb),
+  ('invite_only',     '{"enabled": false}'::jsonb)
+on conflict (key) do nothing;
+
+-- Blocking an address does two things: it stops a new account being created
+-- with it (the trigger below), and the admin API sets banned_until on any
+-- existing account, which is what stops them logging in.
+create table if not exists public.banned_emails (
+  email      text primary key check (email = lower(email)),
+  reason     text,
+  banned_at  timestamptz not null default now(),
+  banned_by  uuid references public.profiles(id) on delete set null
+);
+
+-- Who may create an account while invite_only is on. The admin's own
+-- "create user" path writes here first, so it is not blocked by its own rule.
+create table if not exists public.allowed_emails (
+  email      text primary key check (email = lower(email)),
+  note       text,
+  added_at   timestamptz not null default now(),
+  added_by   uuid references public.profiles(id) on delete set null
+);
+
+-- Every admin action, append-only. An admin panel without this is a panel
+-- where nobody can say afterwards what was done or by whom.
+create table if not exists public.admin_audit (
+  id            uuid primary key default gen_random_uuid(),
+  actor_id      uuid references public.profiles(id) on delete set null,
+  actor_email   text not null default '',
+  action        text not null,
+  target_email  text,
+  target_id     uuid,
+  detail        jsonb not null default '{}'::jsonb,
+  at            timestamptz not null default now()
+);
+
+-- Client-side failures, so "any failures i can see" is answerable. The app
+-- already surfaces an error as a toast; this keeps it after the toast is gone.
+create table if not exists public.error_reports (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid references public.profiles(id) on delete set null,
+  message    text not null,
+  source     text,
+  line       int,
+  col        int,
+  stack      text,
+  url        text,
+  ua         text,
+  at         timestamptz not null default now()
+);
+
+create index if not exists idx_admin_audit_at    on public.admin_audit (at desc);
+create index if not exists idx_error_reports_at  on public.error_reports (at desc);
+create index if not exists idx_error_reports_msg on public.error_reports (message);
+create index if not exists idx_profiles_created  on public.profiles (created_at desc);
+
+alter table public.app_settings   enable row level security;
+alter table public.banned_emails  enable row level security;
+alter table public.allowed_emails enable row level security;
+alter table public.admin_audit    enable row level security;
+alter table public.error_reports  enable row level security;
+
+-- ---------------------------------------------------------------------------
+--  Is the caller an admin? In `sw`, because policies call it and the REST
+--  API must not expose it.
+-- ---------------------------------------------------------------------------
+create or replace function sw.is_admin(uid uuid)
+returns boolean language sql stable security definer set search_path = '' as $$
+  select coalesce((select p.is_admin from public.profiles p where p.id = uid), false);
+$$;
+
+-- These four tables are admin-only, and reachable only through the security
+-- definer functions below. The policies exist so that a direct REST call with
+-- an admin's own token can read them too, and so nothing is RLS-enabled with
+-- no policy at all.
+drop policy if exists app_settings_admin on public.app_settings;
+create policy app_settings_admin on public.app_settings
+  for select using (sw.is_admin((select auth.uid())));
+
+drop policy if exists banned_emails_admin on public.banned_emails;
+create policy banned_emails_admin on public.banned_emails
+  for select using (sw.is_admin((select auth.uid())));
+
+drop policy if exists allowed_emails_admin on public.allowed_emails;
+create policy allowed_emails_admin on public.allowed_emails
+  for select using (sw.is_admin((select auth.uid())));
+
+drop policy if exists admin_audit_admin on public.admin_audit;
+create policy admin_audit_admin on public.admin_audit
+  for select using (sw.is_admin((select auth.uid())));
+
+-- Anyone may report their own failure; only an admin may read them. Writing
+-- one for somebody else is pointless and would let a client forge blame.
+drop policy if exists error_reports_own_insert on public.error_reports;
+create policy error_reports_own_insert on public.error_reports
+  for insert with check (user_id = (select auth.uid()));
+
+drop policy if exists error_reports_admin_read on public.error_reports;
+create policy error_reports_admin_read on public.error_reports
+  for select using (sw.is_admin((select auth.uid())));
+
+-- A loop that throws on every frame would otherwise write thousands of rows.
+-- Dropping the row silently is right here: the report is a courtesy, and
+-- failing the client's insert would turn one bug into two.
+create or replace function public.cap_error_reports()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if (select count(*) from public.error_reports
+      where user_id = new.user_id and at > now() - interval '1 hour') >= 50 then
+    return null;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists on_error_report on public.error_reports;
+create trigger on_error_report
+  before insert on public.error_reports
+  for each row execute function public.cap_error_reports();
+
+-- ---------------------------------------------------------------------------
+--  Signup gate
+--
+--  Authoritative, because it runs inside the transaction that creates the
+--  user: raising here means no auth.users row and no profile. The client
+--  asks netlify/functions/signup-check first only so it can say *why*.
+-- ---------------------------------------------------------------------------
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  addr text := lower(new.email);
+begin
+  if exists (select 1 from public.banned_emails where email = addr) then
+    raise exception 'This email address is blocked.' using errcode = 'check_violation';
+  end if;
+
+  if not coalesce((select (value->>'enabled')::boolean
+                   from public.app_settings where key = 'signups_enabled'), true) then
+    raise exception 'New accounts are closed.' using errcode = 'check_violation';
+  end if;
+
+  if coalesce((select (value->>'enabled')::boolean
+               from public.app_settings where key = 'invite_only'), false)
+     and not exists (select 1 from public.allowed_emails where email = addr) then
+    raise exception 'This app is invite only.' using errcode = 'check_violation';
+  end if;
+
+  insert into public.profiles (id, email, full_name)
+  values (
+    new.id,
+    addr,
+    coalesce(
+      nullif(trim(new.raw_user_meta_data->>'full_name'), ''),
+      split_part(new.email, '@', 1)
+    )
+  )
+  on conflict (id) do nothing;
+  return new;
+end $$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- ---------------------------------------------------------------------------
+--  Admin reads and writes
+-- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+--  is_admin cannot be self-granted
+--
+--  profiles_update lets you update your own row, which is right for your
+--  name and your UPI ID — and would have let anybody run
+--
+--    update profiles set is_admin = true where id = auth.uid()
+--
+--  straight from the browser console. RLS is row-level, not column-level,
+--  so the policy cannot express "every column but this one". A trigger can.
+--
+--  Only admin_set_profile() may move the flag, and it sets a transaction
+--  local marker first so this trigger knows the change came from there.
+-- ---------------------------------------------------------------------------
+create or replace function public.guard_admin_flag()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  -- coalesce is load-bearing: current_setting(name, true) is NULL when the
+  -- setting has never been set, and `NULL <> 'yes'` is NULL, not true — so
+  -- without it this `if` never fires and the guard silently permits
+  -- everything. That exact bug let a normal user grant themselves admin.
+  if new.is_admin is distinct from old.is_admin
+     and coalesce(current_setting('splittywise.granting_admin', true), 'no') <> 'yes' then
+    raise exception 'is_admin can only be changed by an administrator.'
+      using errcode = 'insufficient_privilege';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists on_profile_admin_guard on public.profiles;
+create trigger on_profile_admin_guard
+  before update on public.profiles
+  for each row execute function public.guard_admin_flag();
+
+create or replace function public.admin_log(
+  p_action text, p_target_email text default null,
+  p_target_id uuid default null, p_detail jsonb default '{}'::jsonb)
+returns void language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid();
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+  insert into public.admin_audit (actor_id, actor_email, action, target_email, target_id, detail)
+  values (me, coalesce((select email from public.profiles where id = me), ''),
+          p_action, lower(nullif(p_target_email, '')), p_target_id, coalesce(p_detail, '{}'::jsonb));
+end $$;
+
+-- The dashboard, in one round trip rather than a dozen.
+create or replace function public.admin_stats()
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); out jsonb;
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+
+  select jsonb_build_object(
+    'users',           (select count(*) from public.profiles),
+    'admins',          (select count(*) from public.profiles where is_admin),
+    'banned',          (select count(*) from public.banned_emails),
+    'groups',          (select count(*) from public.groups),
+    'expenses',        (select count(*) from public.expenses where deleted_at is null),
+    'expenses_binned', (select count(*) from public.expenses where deleted_at is not null),
+    'settlements',     (select count(*) from public.settlements where deleted_at is null),
+    -- Total value passing through the app. Not anyone's balance: the sum of
+    -- every live expense, which is the only figure that is meaningful here.
+    'volume_paise',    (select coalesce(round(sum(amount) * 100), 0)::bigint
+                        from public.expenses where deleted_at is null),
+    'errors_24h',      (select count(*) from public.error_reports
+                        where at > now() - interval '24 hours'),
+    'errors_total',    (select count(*) from public.error_reports),
+    -- "Active" means wrote something, not opened the app: we do not track
+    -- sessions, and inventing a number would be worse than not having one.
+    'active_7d',       (select count(distinct created_by) from public.expenses
+                        where created_at > now() - interval '7 days'),
+    'active_30d',      (select count(distinct created_by) from public.expenses
+                        where created_at > now() - interval '30 days'),
+    'signups_enabled', coalesce((select (value->>'enabled')::boolean
+                                 from public.app_settings where key = 'signups_enabled'), true),
+    'invite_only',     coalesce((select (value->>'enabled')::boolean
+                                 from public.app_settings where key = 'invite_only'), false),
+    'allowed_emails',  (select count(*) from public.allowed_emails),
+    -- Thirty days of counts, zero-filled, so a gap shows as a gap.
+    'series',          (select coalesce(jsonb_agg(jsonb_build_object(
+                            'day', d::date,
+                            'signups', (select count(*) from public.profiles
+                                        where created_at::date = d::date),
+                            'expenses', (select count(*) from public.expenses
+                                         where created_at::date = d::date),
+                            'errors', (select count(*) from public.error_reports
+                                       where at::date = d::date)
+                          ) order by d), '[]'::jsonb)
+                        from generate_series(current_date - 29, current_date, '1 day') d)
+  ) into out;
+
+  return out;
+end $$;
+
+-- One page of people, newest first, with enough to act on.
+create or replace function public.admin_users(
+  p_search text default null, p_limit int default 50, p_offset int default 0)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); q text; out jsonb;
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+  q := '%' || lower(trim(coalesce(p_search, ''))) || '%';
+
+  select coalesce(jsonb_agg(row_to_json(t)::jsonb order by t.created_at desc), '[]'::jsonb)
+    into out
+  from (
+    select p.id, p.email, p.full_name, p.is_admin, p.created_at, p.avatar_emoji,
+           p.email_notify,
+           exists (select 1 from public.banned_emails b where b.email = p.email) as banned,
+           (select count(*) from public.expenses e
+             where e.created_by = p.id and e.deleted_at is null) as expenses,
+           (select count(*) from public.group_members gm where gm.user_id = p.id) as groups,
+           (select max(e.created_at) from public.expenses e where e.created_by = p.id) as last_write
+    from public.profiles p
+    where p_search is null or trim(p_search) = ''
+       or lower(p.email) like q or lower(p.full_name) like q
+    order by p.created_at desc
+    limit greatest(1, least(coalesce(p_limit, 50), 200))
+    offset greatest(0, coalesce(p_offset, 0))
+  ) t;
+
+  return out;
+end $$;
+
+-- Everything about one person, which is the "see their data" half of the ask.
+create or replace function public.admin_user_detail(p_user uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); out jsonb;
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+
+  select jsonb_build_object(
+    'profile', (select row_to_json(p)::jsonb from public.profiles p where p.id = p_user),
+    'groups',  (select coalesce(jsonb_agg(jsonb_build_object(
+                  'id', g.id, 'name', g.name, 'emoji', g.emoji,
+                  'members', (select count(*) from public.group_members m where m.group_id = g.id)
+                ) order by g.created_at desc), '[]'::jsonb)
+                from public.groups g
+                join public.group_members gm on gm.group_id = g.id and gm.user_id = p_user),
+    'friends', (select coalesce(jsonb_agg(jsonb_build_object(
+                  'id', pr.id, 'email', pr.email, 'name', pr.full_name)), '[]'::jsonb)
+                from public.friendships f
+                join public.profiles pr on pr.id = case when f.user_a = p_user
+                                                        then f.user_b else f.user_a end
+                where p_user in (f.user_a, f.user_b)),
+    'expenses', (select coalesce(jsonb_agg(jsonb_build_object(
+                  'id', e.id, 'description', e.description, 'amount', e.amount,
+                  'date', e.expense_date, 'emoji', e.emoji, 'group_id', e.group_id,
+                  'deleted_at', e.deleted_at,
+                  'share', (select s.amount from public.expense_splits s
+                            where s.expense_id = e.id and s.user_id = p_user)
+                ) order by e.expense_date desc, e.created_at desc), '[]'::jsonb)
+                from public.expenses e
+                where exists (select 1 from public.expense_splits s
+                              where s.expense_id = e.id and s.user_id = p_user)
+                   or e.created_by = p_user),
+    'settlements', (select coalesce(jsonb_agg(jsonb_build_object(
+                  'id', s.id, 'from_user', s.from_user, 'to_user', s.to_user,
+                  'amount', s.amount, 'on', s.settled_on, 'note', s.note)
+                  order by s.settled_on desc), '[]'::jsonb)
+                from public.settlements s
+                where p_user in (s.from_user, s.to_user) and s.deleted_at is null),
+    'errors', (select coalesce(jsonb_agg(jsonb_build_object(
+                  'message', r.message, 'at', r.at, 'source', r.source)
+                  order by r.at desc), '[]'::jsonb)
+                from public.error_reports r where r.user_id = p_user)
+  ) into out;
+
+  if out->'profile' is null or out->>'profile' is null then
+    raise exception 'No such person.';
+  end if;
+  return out;
+end $$;
+
+-- Editing somebody's profile. Email is deliberately not editable here: it is
+-- the login identity, lives in auth.users, and changing only this copy would
+-- put the two out of step. The admin function does that through the auth API.
+create or replace function public.admin_set_profile(
+  p_user uuid, p_full_name text default null, p_upi_id text default null,
+  p_is_admin boolean default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); target_email text;
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+  select email into target_email from public.profiles where id = p_user;
+  if target_email is null then raise exception 'No such person.'; end if;
+
+  -- Taking your own admin rights away locks you out of this panel with no
+  -- way back except SQL, so it is refused rather than confirmed.
+  if p_user = me and p_is_admin = false then
+    raise exception 'You cannot remove your own admin rights.';
+  end if;
+
+  -- Transaction local, so it is gone the moment this function returns and
+  -- cannot be left switched on for anything else.
+  perform set_config('splittywise.granting_admin', 'yes', true);
+
+  update public.profiles set
+    full_name  = coalesce(nullif(trim(p_full_name), ''), full_name),
+    upi_id     = case when p_upi_id is null then upi_id
+                      else nullif(trim(p_upi_id), '') end,
+    is_admin   = coalesce(p_is_admin, is_admin),
+    updated_at = now()
+  where id = p_user;
+
+  perform set_config('splittywise.granting_admin', 'no', true);
+
+  perform public.admin_log('profile_edited', target_email, p_user,
+    jsonb_build_object('full_name', p_full_name, 'upi_id', p_upi_id, 'is_admin', p_is_admin));
+
+  return (select row_to_json(p)::jsonb from public.profiles p where p.id = p_user);
+end $$;
+
+-- Bin or restore anybody's expense, and delete a group.
+create or replace function public.admin_set_expense_deleted(p_expense uuid, p_deleted boolean)
+returns void language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); d text;
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+  select description into d from public.expenses where id = p_expense;
+  if d is null then raise exception 'No such expense.'; end if;
+
+  update public.expenses
+     set deleted_at = case when p_deleted then now() else null end, updated_at = now()
+   where id = p_expense;
+
+  perform public.admin_log(
+    case when p_deleted then 'expense_binned' else 'expense_restored' end,
+    null, p_expense, jsonb_build_object('description', d));
+end $$;
+
+create or replace function public.admin_delete_group(p_group uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); n text;
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+  select name into n from public.groups where id = p_group;
+  if n is null then raise exception 'No such group.'; end if;
+
+  perform public.admin_log('group_deleted', null, p_group, jsonb_build_object('name', n));
+  delete from public.groups where id = p_group;
+end $$;
+
+-- Global switches.
+create or replace function public.admin_set_setting(p_key text, p_enabled boolean)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid();
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+  if p_key not in ('signups_enabled', 'invite_only') then
+    raise exception 'Unknown setting %.', p_key;
+  end if;
+
+  insert into public.app_settings (key, value, updated_at, updated_by)
+  values (p_key, jsonb_build_object('enabled', p_enabled), now(), me)
+  on conflict (key) do update
+    set value = excluded.value, updated_at = now(), updated_by = me;
+
+  perform public.admin_log('setting_changed', null, null,
+    jsonb_build_object('key', p_key, 'enabled', p_enabled));
+
+  return jsonb_build_object('key', p_key, 'enabled', p_enabled);
+end $$;
+
+-- The signup allowlist, for invite-only mode.
+create or replace function public.admin_allow_email(p_email text, p_note text default null)
+returns void language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); addr text := lower(trim(p_email));
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+  if addr !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then raise exception 'That is not an email address.'; end if;
+
+  insert into public.allowed_emails (email, note, added_by)
+  values (addr, nullif(trim(p_note), ''), me)
+  on conflict (email) do update set note = excluded.note, added_by = me;
+
+  perform public.admin_log('email_allowed', addr, null, '{}'::jsonb);
+end $$;
+
+create or replace function public.admin_disallow_email(p_email text)
+returns void language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); addr text := lower(trim(p_email));
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+  delete from public.allowed_emails where email = addr;
+  perform public.admin_log('email_disallowed', addr, null, '{}'::jsonb);
+end $$;
+
+create or replace function public.admin_lists()
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid();
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+  return jsonb_build_object(
+    'banned',  (select coalesce(jsonb_agg(jsonb_build_object(
+                  'email', b.email, 'reason', b.reason, 'at', b.banned_at,
+                  'by', (select email from public.profiles p where p.id = b.banned_by),
+                  'has_account', exists (select 1 from public.profiles p where p.email = b.email))
+                  order by b.banned_at desc), '[]'::jsonb) from public.banned_emails b),
+    'allowed', (select coalesce(jsonb_agg(jsonb_build_object(
+                  'email', a.email, 'note', a.note, 'at', a.added_at,
+                  'signed_up', exists (select 1 from public.profiles p where p.email = a.email))
+                  order by a.added_at desc), '[]'::jsonb) from public.allowed_emails a)
+  );
+end $$;
+
+-- Failures, grouped, because forty copies of one bug is one bug.
+create or replace function public.admin_errors(p_limit int default 100)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid();
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+  return jsonb_build_object(
+    'grouped', (select coalesce(jsonb_agg(row_to_json(g)::jsonb order by g.n desc), '[]'::jsonb)
+                from (select r.message, count(*) as n, max(r.at) as last_at,
+                             count(distinct r.user_id) as people,
+                             (array_agg(r.source order by r.at desc))[1] as source,
+                             (array_agg(r.stack  order by r.at desc))[1] as stack
+                      from public.error_reports r
+                      group by r.message
+                      order by count(*) desc
+                      limit greatest(1, least(coalesce(p_limit, 100), 500))) g),
+    'recent',  (select coalesce(jsonb_agg(jsonb_build_object(
+                  'message', r.message, 'at', r.at, 'source', r.source, 'line', r.line,
+                  'url', r.url, 'ua', r.ua,
+                  'who', (select email from public.profiles p where p.id = r.user_id))
+                  order by r.at desc), '[]'::jsonb)
+                from (select * from public.error_reports order by at desc limit 50) r)
+  );
+end $$;
+
+create or replace function public.admin_clear_errors()
+returns int language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); n int;
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+  delete from public.error_reports;
+  get diagnostics n = row_count;
+  perform public.admin_log('errors_cleared', null, null, jsonb_build_object('rows', n));
+  return n;
+end $$;
+
+create or replace function public.admin_audit_log(p_limit int default 200)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid();
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+  return (select coalesce(jsonb_agg(row_to_json(a)::jsonb order by a.at desc), '[]'::jsonb)
+          from (select * from public.admin_audit
+                order by at desc
+                limit greatest(1, least(coalesce(p_limit, 200), 1000))) a);
+end $$;
+
+-- ============================================================================
+--  13. GRANTS
 --
 --  Postgres grants EXECUTE on a new function to PUBLIC by default, which is
 --  how every one of these became callable by the anon role. Revoked first,
@@ -2004,7 +2636,28 @@ grant execute on function public.create_expense(
 grant execute on function public.update_expense(
   uuid, numeric, text, jsonb, uuid, uuid, text, text, text, date, text, jsonb) to authenticated;
 
+-- Admin functions. Every one refuses a non-admin caller on its first line,
+-- so granting them to `authenticated` is safe: what stops a normal user is
+-- the check inside, not the grant.
+grant execute on function public.undo_settlement(uuid)                     to authenticated;
+
+grant execute on function public.admin_stats()                             to authenticated;
+grant execute on function public.admin_users(text, int, int)               to authenticated;
+grant execute on function public.admin_user_detail(uuid)                   to authenticated;
+grant execute on function public.admin_set_profile(uuid, text, text, boolean) to authenticated;
+grant execute on function public.admin_set_expense_deleted(uuid, boolean)  to authenticated;
+grant execute on function public.admin_delete_group(uuid)                  to authenticated;
+grant execute on function public.admin_set_setting(text, boolean)          to authenticated;
+grant execute on function public.admin_allow_email(text, text)             to authenticated;
+grant execute on function public.admin_disallow_email(text)                to authenticated;
+grant execute on function public.admin_lists()                             to authenticated;
+grant execute on function public.admin_errors(int)                         to authenticated;
+grant execute on function public.admin_clear_errors()                      to authenticated;
+grant execute on function public.admin_audit_log(int)                      to authenticated;
+grant execute on function public.admin_log(text, text, uuid, jsonb)        to authenticated;
+
 -- Helpers are called from policies, so authenticated needs execute on them.
+grant execute on function sw.is_admin(uuid)               to authenticated;
 grant execute on function sw.is_group_member(uuid, uuid)  to authenticated;
 grant execute on function sw.is_group_owner(uuid, uuid)   to authenticated;
 grant execute on function sw.are_friends(uuid, uuid)      to authenticated;
@@ -2014,7 +2667,7 @@ grant execute on function sw.can_see_expense(uuid, uuid)  to authenticated;
 grant execute on function sw.can_see_profile(uuid, uuid)  to authenticated;
 
 -- ============================================================================
---  13. REALTIME
+--  14. REALTIME
 --  Lets the app receive a notification the moment it is written, instead of
 --  polling. RLS still applies: a client only ever receives its own rows.
 -- ============================================================================

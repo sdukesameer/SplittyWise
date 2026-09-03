@@ -21,6 +21,20 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
+# The admin console is its own page, so it must be matched before the
+# catch-all rewrite below. Netlify serves real files ahead of a non-forced
+# rewrite anyway, but relying on that would make a one-word change to the
+# rule silently serve the app in the console's place.
+[[redirects]]
+  from = "/admin"
+  to = "/admin.html"
+  status = 200
+
+[[redirects]]
+  from = "/admin.html"
+  to = "/admin.html"
+  status = 200
+
 # Hash routing means the server only ever serves index.html, but this keeps
 # deep links working if a route is ever moved off the hash.
 [[redirects]]
@@ -60,6 +74,7 @@
       img-src 'self' data: blob: https://*.supabase.co;
       connect-src 'self' blob: https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net https://unpkg.com https://tessdata.projectnaptha.com;
       manifest-src 'self';
+      frame-src 'none';
       object-src 'none';
       base-uri 'self';
       form-action 'self';
@@ -91,6 +106,13 @@
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
     Service-Worker-Allowed = "/"
+
+# The console is not part of the app and must never be cached or indexed.
+[[headers]]
+  for = "/admin.html"
+  [headers.values]
+    Cache-Control = "no-store"
+    X-Robots-Tag = "noindex, nofollow"
 
 [[headers]]
   for = "/manifest.json"

@@ -14,7 +14,18 @@ with expected_tables(name) as (
   values ('profiles'),('friendships'),('groups'),('group_members'),('expenses'),
          ('expense_splits'),('expense_payers'),('expense_comments'),
          ('settlements'),('notifications'),('invites'),('recurring_expenses'),
-         ('user_categories'),('nicknames'),('split_presets'),('expense_history')
+         ('user_categories'),('nicknames'),('split_presets'),('expense_history'),
+         -- Administration
+         ('app_settings'),('banned_emails'),('allowed_emails'),('admin_audit'),
+         ('error_reports')
+),
+
+-- The admin tables no client may write to, whatever role it holds. Writes
+-- happen only inside the security definer admin_* functions, which check
+-- is_admin first. A stray insert/update/delete policy on any of these would
+-- hand a signed-in user the ability to unban themselves.
+admin_tables(name) as (
+  values ('app_settings'),('banned_emails'),('allowed_emails'),('admin_audit')
 ),
 
 -- 1. Row level security on every table. A single false here means any
@@ -35,7 +46,7 @@ present as (
   select
     'every expected table exists' as check,
     case when count(*) = 0 then 'PASS' else 'FAIL' end as result,
-    coalesce(string_agg(e.name, ', '), 'all 16 present') as detail
+    coalesce(string_agg(e.name, ', '), 'all 21 present') as detail
   from expected_tables e
   where not exists (
     select 1 from pg_tables t
@@ -242,6 +253,59 @@ realtime as (
   from pg_publication_tables
   where pubname = 'supabase_realtime' and schemaname = 'public'
     and tablename = 'notifications'
+),
+
+-- 13. No client may write the admin tables. Writes happen only inside the
+--     security definer admin_* functions, each of which checks is_admin on
+--     its first line. A stray insert or update policy on any of these would
+--     let a signed-in user unban themselves or grant themselves admin.
+admin_writes as (
+  select
+    'admin tables are not client-writable' as check,
+    case when count(*) = 0 then 'PASS' else 'FAIL' end as result,
+    coalesce(string_agg(p.tablename || '.' || p.policyname, ', '), 'none') as detail
+  from pg_policies p
+  join admin_tables a on a.name = p.tablename
+  where p.schemaname = 'public' and p.cmd <> 'SELECT'
+),
+
+-- 14. The admin flag itself. profiles is updatable by its owner, so the
+--     update policy must not let somebody set their own is_admin — that
+--     would make the whole panel self-service.
+-- The first version of this checked only that the trigger existed, and
+-- reported PASS while the hole was wide open: the guard compared
+-- current_setting(name, true) to a string without coalesce, and NULL <> 'yes'
+-- is NULL, so it never fired. A check that confirms a mechanism is present
+-- but not that it works is worse than no check, because it is trusted.
+-- `./scripts/db attack` proves the behaviour; this catches the regression.
+admin_flag as (
+  select
+    'is_admin cannot be self-granted' as check,
+    case when count(*) = 1 then 'PASS' else 'FAIL' end as result,
+    case when count(*) = 1 then 'trigger present and NULL-safe'
+         when count(*) = 0 then 'no guard — anyone could set their own is_admin'
+         else 'guard present but its NULL comparison is unsafe' end as detail
+  from pg_trigger t
+  join pg_class c on c.oid = t.tgrelid
+  join pg_proc pr on pr.oid = t.tgfoid
+  where c.relname = 'profiles'
+    and t.tgname = 'on_profile_admin_guard'
+    -- Without coalesce the comparison yields NULL and the guard is inert.
+    and pg_get_functiondef(pr.oid) like '%coalesce(current_setting%'
+),
+
+-- 15. Every admin function must refuse a non-admin caller. They are
+--     security definer, so a missing check is unrestricted access.
+admin_checked as (
+  select
+    'every admin_* function checks the caller' as check,
+    case when count(*) = 0 then 'PASS' else 'FAIL' end as result,
+    coalesce(string_agg(p.proname, ', '), 'none') as detail
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public'
+    and p.proname like 'admin\_%'
+    and pg_get_functiondef(p.oid) not like '%is_admin%'
 )
 
 select * from rls
@@ -259,7 +323,10 @@ union all select * from splits
 union all select * from payments
 union all select * from strays
 union all select * from overloads
-union all select * from realtime;
+union all select * from realtime
+union all select * from admin_writes
+union all select * from admin_flag
+union all select * from admin_checked;
 
 -- ---------------------------------------------------------------------------
 --  If check 8 or 9 ever fails, run this in the dashboard to see which rows.

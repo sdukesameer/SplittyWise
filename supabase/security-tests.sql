@@ -1,0 +1,183 @@
+-- ============================================================================
+--  SplittyWise — behavioural security tests
+--
+--    ./scripts/db attack
+--
+--  rls-audit.sql inspects the shape of the database: is RLS on, does a
+--  policy exist, is a trigger present. This file instead *tries things* as
+--  an ordinary signed-in user, and checks it is stopped.
+--
+--  It exists because the audit once reported PASS on an open hole. The
+--  is_admin guard was in place and the audit could see it — but it compared
+--  current_setting(name, true) to a string without coalesce, and NULL <> 'yes'
+--  is NULL, which `if` treats as false. The trigger was inert. Nothing but
+--  trying the attack would have found it.
+--
+--  `set local role authenticated` is essential and not decoration. Setting
+--  request.jwt.claims alone gives auth.uid() a value but leaves the
+--  connection as `postgres`, for whom RLS does not apply at all — so every
+--  RLS test would pass or fail for reasons unrelated to the policies. Ids
+--  are therefore collected *before* the switch, while the rows are visible.
+--
+--  Everything runs in one statement that raises at the end, so nothing is
+--  committed however it finishes. Results come out in the error message,
+--  because the Management API does not return notices.
+-- ============================================================================
+
+do $$
+declare
+  victim   uuid;
+  attacker uuid;
+  probe    uuid;
+  out      text := '';
+  n        int;
+  ok       boolean;
+begin
+  -- ---- gathered as postgres, before RLS starts applying -----------------
+  select id into victim   from public.profiles order by created_at limit 1;
+  select id into attacker from public.profiles where id <> victim
+                          order by created_at limit 1;
+  if victim is null then raise exception 'SKIP - no accounts to test with'; end if;
+  if attacker is null then attacker := victim; end if;
+
+  -- An audit row to look for later, so "cannot read the audit trail" is not
+  -- passing merely because the table happens to be empty.
+  insert into public.admin_audit (actor_id, actor_email, action)
+  values (victim, 'probe@example.com', 'probe') returning id into probe;
+
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', attacker::text, 'role', 'authenticated')::text, true);
+  set local role authenticated;
+
+  out := out || 'running as ' || current_user || ', auth.uid() = ' ||
+                coalesce(auth.uid()::text, 'null') || E'\n\n';
+
+  -- ---- 1. granting yourself admin ---------------------------------------
+  begin
+    update public.profiles set is_admin = true where id = attacker;
+    select is_admin into ok from public.profiles where id = attacker;
+    out := out || format('FAIL - self-granting admin went through (is_admin=%s)', ok) || E'\n';
+  exception when others then
+    out := out || 'PASS - self-granting admin is refused (' || SQLSTATE || ')' || E'\n';
+  end;
+
+  -- ---- 2. writing the ban list ------------------------------------------
+  begin
+    insert into public.banned_emails (email) values ('attacker-probe@example.com');
+    out := out || 'FAIL - a normal user can add to the ban list' || E'\n';
+  exception when others then
+    out := out || 'PASS - the ban list is not client-writable (' || SQLSTATE || ')' || E'\n';
+  end;
+
+  begin
+    delete from public.banned_emails;
+    get diagnostics n = row_count;
+    out := out || format('%s - the ban list cannot be emptied (%s rows deleted)',
+      case when n = 0 then 'PASS' else 'FAIL' end, n) || E'\n';
+  exception when others then
+    out := out || 'PASS - the ban list cannot be emptied (' || SQLSTATE || ')' || E'\n';
+  end;
+
+  -- ---- 3. re-opening signups --------------------------------------------
+  begin
+    update public.app_settings set value = '{"enabled": true}'::jsonb
+     where key = 'signups_enabled';
+    get diagnostics n = row_count;
+    out := out || format('%s - app_settings is not client-writable (%s rows)',
+      case when n = 0 then 'PASS' else 'FAIL' end, n) || E'\n';
+  exception when others then
+    out := out || 'PASS - app_settings is not client-writable (' || SQLSTATE || ')' || E'\n';
+  end;
+
+  -- ---- 4. calling the admin API as a normal user ------------------------
+  begin
+    perform public.admin_stats();
+    out := out || 'FAIL - admin_stats() ran for a non-admin' || E'\n';
+  exception when others then
+    out := out || 'PASS - admin_stats() refuses a non-admin' || E'\n';
+  end;
+
+  begin
+    perform public.admin_users(null, 10, 0);
+    out := out || 'FAIL - admin_users() ran for a non-admin' || E'\n';
+  exception when others then
+    out := out || 'PASS - admin_users() refuses a non-admin' || E'\n';
+  end;
+
+  begin
+    perform public.admin_set_setting('signups_enabled', true);
+    out := out || 'FAIL - admin_set_setting() ran for a non-admin' || E'\n';
+  exception when others then
+    out := out || 'PASS - admin_set_setting() refuses a non-admin' || E'\n';
+  end;
+
+  begin
+    perform public.admin_user_detail(victim);
+    out := out || 'FAIL - admin_user_detail() exposed somebody to a non-admin' || E'\n';
+  exception when others then
+    out := out || 'PASS - admin_user_detail() refuses a non-admin' || E'\n';
+  end;
+
+  begin
+    perform public.admin_set_profile(victim, 'Renamed', null, true);
+    out := out || 'FAIL - admin_set_profile() ran for a non-admin' || E'\n';
+  exception when others then
+    out := out || 'PASS - admin_set_profile() refuses a non-admin' || E'\n';
+  end;
+
+  -- ---- 5. reading the audit trail ---------------------------------------
+  select count(*) into n from public.admin_audit where id = probe;
+  out := out || format('%s - the admin audit trail is unreadable (%s of 1 planted rows seen)',
+    case when n = 0 then 'PASS' else 'FAIL' end, n) || E'\n';
+
+  -- ---- 6. forging a notification for somebody else ----------------------
+  begin
+    insert into public.notifications (user_id, actor_id, type, title, body)
+    values (victim, attacker, 'nudge', 'Pay me', 'now');
+    out := out || 'FAIL - a client can forge a notification' || E'\n';
+  exception when others then
+    out := out || 'PASS - notifications cannot be forged (' || SQLSTATE || ')' || E'\n';
+  end;
+
+  -- ---- 7. blaming somebody else for a crash -----------------------------
+  if attacker <> victim then
+    begin
+      insert into public.error_reports (user_id, message) values (victim, 'not mine');
+      out := out || 'FAIL - an error can be filed against another account' || E'\n';
+    exception when others then
+      out := out || 'PASS - an error report cannot name somebody else (' || SQLSTATE || ')' || E'\n';
+    end;
+  end if;
+
+  -- ---- 8. reading a stranger's ledger -----------------------------------
+  select count(*) into n from public.expenses
+   where not exists (select 1 from public.expense_splits s
+                     where s.expense_id = expenses.id and s.user_id = attacker)
+     and created_by <> attacker;
+  out := out || format('%s - expenses you are not part of stay hidden (%s visible)',
+    case when n = 0 then 'PASS' else 'FAIL' end, n) || E'\n';
+
+  -- ---- 9. the legitimate paths must still work --------------------------
+  begin
+    update public.profiles set full_name = 'Still Editable' where id = attacker;
+    get diagnostics n = row_count;
+    out := out || format('%s - your own name is still editable (%s rows)',
+      case when n = 1 then 'PASS' else 'FAIL' end, n) || E'\n';
+  exception when others then
+    out := out || 'FAIL - the admin guard is too broad: ' || SQLERRM || E'\n';
+  end;
+
+  reset role;
+
+  perform set_config('splittywise.granting_admin', 'yes', true);
+  begin
+    update public.profiles set is_admin = true where id = victim;
+    select is_admin into ok from public.profiles where id = victim;
+    out := out || format('%s - the admin path can still set the flag (is_admin=%s)',
+      case when ok then 'PASS' else 'FAIL' end, ok) || E'\n';
+  exception when others then
+    out := out || 'FAIL - admin_set_profile could never grant admin: ' || SQLERRM || E'\n';
+  end;
+
+  raise exception E'\n%', out;
+end $$;

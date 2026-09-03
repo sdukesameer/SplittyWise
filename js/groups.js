@@ -335,12 +335,28 @@ window.SW = window.SW || {};
     const empty = document.getElementById('grp-no-expenses');
     const me = SW.ledger.me;
 
+    // Expenses and payments in one list. The group page used to show only
+    // expenses, so squaring up left no trace on the very screen where the
+    // group's balance is read — and the settled-history fold had nothing to
+    // fold against.
     const rows = SW.ledger.expenses
       .filter(function (e) { return (e.group_id || null) === gid; })
-      .slice()
-      .sort(function (a, b) {
-        return (a.expense_date + (a.created_at || '')) < (b.expense_date + (b.created_at || '')) ? 1 : -1;
-      });
+      .map(function (e) {
+        return {
+          kind: 'expense',
+          e: e,
+          id: e.id,
+          date: e.expense_date,
+          sortKey: e.expense_date + 'T' + (e.created_at || ''),
+          delta: SW.myDeltaOn(e),
+        };
+      })
+      .concat(SW.groupSettlements(gid))
+      .sort(function (a, b) { return a.sortKey < b.sortKey ? 1 : (a.sortKey > b.sortKey ? -1 : 0); });
+
+    // Only the newest payment may be undone, and only here where it is
+    // listed. SW.undoableSettlement mirrors the rule the schema enforces.
+    const undoable = SW.undoableSettlement({ groupId: gid });
 
     // The solo prompt already explains an empty group of one.
     const solo = !document.getElementById('grp-solo').hidden;
@@ -356,29 +372,33 @@ window.SW = window.SW || {};
     empty.hidden = true;
 
     // Same idea as the friend page: anything older than the last time your
-    // own balance here hit zero is finished business.
-    const withDelta = rows.map(function (e) {
-      return { e: e, delta: SW.myDeltaOn(e) };
-    });
-    const showCount = SW.settledCutoff(withDelta);
-    const hiddenCount = withDelta.length - showCount;
-    const visible = showSettledHistory ? withDelta : withDelta.slice(0, showCount);
+    // own balance here hit zero is finished business, and folds away.
+    const showCount = SW.settledCutoff(rows);
+    const hiddenCount = rows.length - showCount;
+    const visible = showSettledHistory ? rows : rows.slice(0, showCount);
 
     if (hiddenCount > 0) {
       more.hidden = false;
       more.textContent = showSettledHistory
-        ? 'Hide ' + hiddenCount + ' settled ' + (hiddenCount === 1 ? 'expense' : 'expenses')
+        ? 'Hide ' + hiddenCount + ' settled ' + (hiddenCount === 1 ? 'entry' : 'entries')
         : 'Everything before this has been settled up.\nTap to show ' + hiddenCount +
-          ' settled ' + (hiddenCount === 1 ? 'expense' : 'expenses');
+          ' settled ' + (hiddenCount === 1 ? 'entry' : 'entries');
     } else {
       more.hidden = true;
     }
 
     let html = '';
     let month = null;
-    visible.map(function (x) { return x.e; }).forEach(function (e) {
-      const m = SW.monthLabel(e.expense_date);
+    visible.forEach(function (item) {
+      const m = SW.monthLabel(item.date);
       if (m !== month) { month = m; html += '<div class="month-head">' + esc(m) + '</div>'; }
+
+      if (item.kind === 'settlement') {
+        html += settlementRow(item, undoable && undoable.id === item.id);
+        return;
+      }
+
+      const e = item.e;
 
       const total = SW.toPaise(e.amount);
       const mine = (e.expense_splits || []).find(function (s) { return s.user_id === me; });
@@ -415,7 +435,46 @@ window.SW = window.SW || {};
     host.innerHTML = html;
   }
 
+  // A payment on the group timeline. Reads neutral, because clearing a debt
+  // creates none — the direction is in the title.
+  function settlementRow(it, canUndo) {
+    const me = SW.ledger.me;
+    const d = new Date(it.date + 'T00:00:00');
+    const from = SW.person(it.fromUser);
+    const to = SW.person(it.toUser);
+
+    const title = it.fromUser === me
+      ? 'You paid ' + to.full_name
+      : (it.toUser === me
+          ? from.full_name + ' paid you'
+          : from.full_name + ' paid ' + to.full_name);
+
+    return '<div class="ledger-row is-settlement">' +
+      '<span class="ledger-date"><span class="d">' + d.getDate() + '</span><br>' +
+        '<span class="m">' + esc(d.toLocaleDateString('en-IN', { month: 'short' })) +
+      '</span></span>' +
+      '<span class="ledger-emoji">✅</span>' +
+      '<span class="ledger-main">' +
+        '<span class="ledger-title">' + esc(title) + '</span>' +
+        '<span class="ledger-sub">' + SW.money(it.amount) +
+          (it.note ? ' · ' + esc(it.note) : ' · settled up') + '</span>' +
+      '</span>' +
+      (canUndo
+        ? '<button type="button" class="undo-chip" data-undo="' + esc(it.id) +
+          '" data-amount="' + it.amount + '">Undo</button>'
+        : '<span class="ledger-delta is-flat">' +
+            '<span class="lbl">payment</span>' +
+            '<span class="val">' + SW.money(it.amount) + '</span></span>') +
+    '</div>';
+  }
+
   document.getElementById('grp-expenses').addEventListener('click', function (e) {
+    const undo = e.target.closest('[data-undo]');
+    if (undo) {
+      e.stopPropagation();
+      return SW.undoSettlement(undo.getAttribute('data-undo'),
+                               Number(undo.getAttribute('data-amount')));
+    }
     const row = e.target.closest('[data-expense]');
     if (row) SW.navigate('expense/' + row.getAttribute('data-expense'));
   });

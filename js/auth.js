@@ -203,6 +203,25 @@ window.SW = window.SW || {};
     }
 
     SW.busy(btn, true);
+
+    // Asked only so the refusal can say why. handle_new_user() is what
+    // actually enforces this, inside the transaction that would create the
+    // account — but GoTrue reduces a trigger exception to "Database error
+    // saving new user", which explains nothing. If this check cannot be
+    // reached the signup goes ahead regardless: the trigger still holds, and
+    // a deploy with no functions must not be one where nobody can register.
+    const gate = await signupAllowed(email);
+    if (gate && gate.allowed === false) {
+      SW.busy(btn, false);
+      SW.markInvalid(emailEl, gate.reason === 'blocked');
+      return SW.setError('signup-error',
+        gate.reason === 'blocked'
+          ? 'That email address cannot be used to create an account.'
+          : gate.reason === 'invite_only'
+            ? 'SplittyWise is invite only just now. Ask whoever runs it to add you.'
+            : 'New accounts are closed just now. Try again later.');
+    }
+
     const { data, error } = await db.auth.signUp({
       email: email,
       password: password,
@@ -234,6 +253,20 @@ window.SW = window.SW || {};
     pwEl.value = '';
     SW.navigate('verify');
   });
+
+  async function signupAllowed(email) {
+    try {
+      const res = await fetch('/.netlify/functions/signup-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email }),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (e) {
+      return null;    // offline, or running without the functions
+    }
+  }
 
   /* ---- resend confirmation ---- */
 

@@ -254,6 +254,7 @@ window.SW = window.SW || {};
     expense_deleted: '🗑️',
     expense_restored: '♻️',
     settlement: '✅',
+    settlement_undone: '↩️',
     settle_reminder: '📅',
     comment: '💬',
     nudge: '🔔',
@@ -648,6 +649,7 @@ window.SW = window.SW || {};
     { key: 'expense_updated', label: 'Expenses changed' },
     { key: 'expense_deleted', label: 'Expenses deleted' },
     { key: 'settlement',      label: 'Payments recorded' },
+    { key: 'settlement_undone', label: 'Payments undone' },
     { key: 'comment',         label: 'Comments' },
     { key: 'nudge',           label: 'Reminders' },
     { key: 'friend_added',    label: 'New friends' },
@@ -820,7 +822,14 @@ window.SW = window.SW || {};
   });
 
   SW.viewHooks.activity = function () { loadActivity(); };
-  SW.viewHooks.account = function () { renderAccount(); renderPrefs(); syncLock(); };
+  SW.viewHooks.account = function () {
+    renderAccount();
+    renderPrefs();
+    syncLock();
+    // Covers the case where nothing has resolved it yet, and re-signs a URL
+    // that has expired while the app sat open.
+    if (SW.ensureAvatars) SW.ensureAvatars();
+  };
 
   SW.refreshUnread = refreshUnread;
 
@@ -836,9 +845,23 @@ window.SW = window.SW || {};
     if (sw) { sw.classList.toggle('is-on', on); sw.setAttribute('aria-checked', String(on)); }
   })();
 
+  // Called by SW.ensureAvatars the moment a signed URL arrives, so a photo
+  // resolved after its screen was drawn appears without a navigation.
+  SW.repaintAvatars = function () {
+    renderAccount();
+    const view = SW.activeView();
+    const hook = SW.viewHooks[view];
+    if (hook && view !== 'account') hook(SW.activeParam());
+  };
+
   SW.onSignedIn = async function () {
     renderAccount();
     refreshUnread();
+
+    // Your own photo needs nothing but your profile, which is already
+    // loaded — so it does not have to wait behind the cache read, the
+    // invite redemption, the outbox flush and the ledger fetch.
+    if (SW.ensureAvatars) SW.ensureAvatars();
     activityLoaded = false;
     if (activeView === 'activity') loadActivity(true);
 

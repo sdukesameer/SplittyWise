@@ -2805,3 +2805,36 @@ button.is-loading .spinner { display: block; }
   font-size: 12px;
   color: var(--muted);
 }
+
+/* ---- a payment on a timeline, and undoing it ------------------------- */
+
+/* Clearing a debt creates none, so the row reads quiet rather than red or
+   green — the direction is in the title. */
+.ledger-row.is-settlement {
+  background: rgba(31, 198, 158, 0.05);                        /* Safari < 16.2 */
+  background: color-mix(in srgb, var(--teal) 5%, transparent);
+}
+
+.undo-chip {
+  flex: none;
+  align-self: center;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 5px 11px;
+  margin-left: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.undo-chip:hover,
+.undo-chip:focus-visible { color: var(--text); border-color: var(--teal); }
+.undo-chip:active { transform: scale(0.96); }
+
+/* With the chip alongside it, the delta column gives up its fixed width so
+   neither gets squeezed on a narrow phone. */
+.ledger-delta.is-tight { min-width: 0; }

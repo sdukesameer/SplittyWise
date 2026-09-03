@@ -1,0 +1,292 @@
+/* ---------------------------------------------------------------------------
+   Admin console
+ 
+   Loaded only by admin.html, on top of the app's tokens so the two feel
+   related without the console pretending to be the app. Wider, denser, and
+   flat: this is a screen you scan and operate, not one you browse.
+   --------------------------------------------------------------------------- */
+
+body.admin {
+  background: var(--bg);
+  color: var(--text);
+  font-family: Nunito, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  min-height: 100vh;
+  padding-bottom: 60px;
+}
+
+/* ---- sign in ---- */
+
+.ad-gate {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 18px;
+}
+
+.ad-gate-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 26px 22px 20px;
+}
+
+.ad-gate-card h1 {
+  font-size: 21px;
+  font-weight: 800;
+  margin: 0 0 8px;
+  letter-spacing: -0.2px;
+}
+
+.ad-muted { color: var(--muted); font-size: 14px; line-height: 1.5; margin: 0 0 18px; }
+.ad-small { font-size: 13px; margin: 16px 0 0; }
+.ad-gate-card a { color: var(--teal); }
+
+/* ---- chrome ---- */
+
+.ad-top {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--line);
+}
+
+.ad-top-in {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 12px 18px 10px;
+}
+
+.ad-brand { font-weight: 800; font-size: 16px; letter-spacing: -0.2px; }
+.ad-brand span {
+  color: var(--teal);
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-left: 4px;
+  vertical-align: 2px;
+}
+
+.ad-who { color: var(--muted); font-size: 13px; }
+
+.ad-tabs {
+  display: flex;
+  gap: 2px;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.ad-tabs::-webkit-scrollbar { display: none; }
+
+.ad-tab {
+  flex: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+  font-size: 14px;
+  padding: 9px 12px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ad-tab.is-on { color: var(--text); border-bottom-color: var(--teal); }
+
+/* ---- panes ---- */
+
+.ad-pane { display: none; max-width: 1080px; margin: 0 auto; padding: 16px 14px 0; }
+.ad-pane.is-on { display: block; }
+
+.ad-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+.ad-card h2 {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 0 0 12px;
+}
+
+.ad-row-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.ad-row-head h2 { margin: 0; }
+.ad-row-head .grow { flex: 1; }
+
+.ad-search { max-width: 260px; margin-left: auto; }
+
+/* ---- the numbers ---- */
+
+.ad-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.ad-stat {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 13px 14px 14px;
+  min-width: 0;
+}
+
+.ad-stat .k {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 3px;
+}
+
+.ad-stat .v {
+  display: block;
+  font-size: 23px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.4px;
+  overflow-wrap: anywhere;
+}
+
+.ad-stat .n { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+.ad-stat.is-warn .v { color: var(--owe); }
+
+/* ---- the chart ---- */
+
+.ad-chart { display: block; width: 100%; height: auto; }
+.ad-legend {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.ad-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; }
+
+/* ---- lists ---- */
+
+.ad-list { display: flex; flex-direction: column; }
+
+.ad-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 2px;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.ad-item:first-child { border-top: none; }
+
+.ad-item-main { flex: 1; min-width: 0; }
+
+.ad-item-title {
+  display: block;
+  font-weight: 700;
+  font-size: 14.5px;
+  overflow-wrap: anywhere;
+}
+
+.ad-item-sub {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 1px;
+  overflow-wrap: anywhere;
+}
+
+.ad-item-actions { display: flex; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+
+.ad-mini {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 9px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 6px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ad-mini:hover { border-color: var(--line-strong); }
+.ad-mini.is-danger { color: var(--owe); }
+
+.ad-pill {
+  flex: none;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.ad-pill.is-admin { background: rgba(31, 198, 158, 0.16); color: var(--teal); }
+.ad-pill.is-banned { background: rgba(255, 122, 77, 0.16); color: var(--owe); }
+
+.ad-empty { color: var(--faint); font-size: 13.5px; padding: 14px 2px; }
+
+/* ---- forms ---- */
+
+.ad-form { display: flex; flex-direction: column; gap: 9px; }
+.ad-form .input { width: 100%; }
+.ad-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ad-form-actions .btn { flex: 0 1 auto; }
+
+.ad-code {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.ad-warn {
+  border: 1px solid rgba(255, 122, 77, 0.5);
+  background: rgba(255, 122, 77, 0.09);
+  border-radius: 12px;
+  padding: 11px 13px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+@media (min-width: 720px) {
+  .ad-form { flex-direction: row; align-items: flex-start; flex-wrap: wrap; }
+  .ad-form .input { flex: 1 1 180px; width: auto; }
+  .ad-form-actions { flex: 0 0 auto; }
+  .ad-form .hint { flex: 1 1 100%; }
+}

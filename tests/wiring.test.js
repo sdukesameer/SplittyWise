@@ -323,8 +323,24 @@ check('every script on the page is cached by the service worker',
   loaded.every(f => cached.includes(f)), loaded.filter(f => !cached.includes(f)));
 check('every cached script exists on disk',
   cached.every(f => fs.existsSync(f)), cached.filter(f => !fs.existsSync(f)));
-check('every module on disk is loaded by the page',
-  jsFiles.every(f => loaded.includes(f)), jsFiles.filter(f => !loaded.includes(f)));
+// The admin console is a second page on purpose, so its module is loaded
+// there and must NOT be in the app's bundle or its offline cache — an
+// ordinary user should never download it.
+const adminHtml = fs.readFileSync('admin.html', 'utf8');
+const adminLoaded = [...adminHtml.matchAll(/<script src="(js\/[a-z]+\.js)"><\/script>/g)]
+  .map(m => m[1]);
+
+check('every module on disk is loaded by one of the two pages',
+  jsFiles.every(f => loaded.includes(f) || adminLoaded.includes(f)),
+  jsFiles.filter(f => !loaded.includes(f) && !adminLoaded.includes(f)));
+check('the admin module is not in the app page',
+  !loaded.includes('js/admin.js'));
+check('nor in the offline cache',
+  !cached.some(f => f.indexOf('admin') > -1), cached.filter(f => f.indexOf('admin') > -1));
+check('the service worker leaves the console alone entirely',
+  /indexOf\('\/admin'\) === 0/.test(fs.readFileSync('sw.js', 'utf8')));
+check('and the console is not indexable',
+  /noindex/.test(adminHtml) && /X-Robots-Tag/.test(fs.readFileSync('netlify.toml', 'utf8')));
 
 /* ---------------- 8. no spinner shows unless its button is busy ---------------- */
 
@@ -706,6 +722,89 @@ for (const [file, src] of Object.entries({ ...js, 'index.html': html,
   }
 }
 check('no service_role key is committed anywhere', leaked.length === 0, leaked);
+
+/* ---------------- 27. administration ---------------- */
+
+console.log('\n--- administration ---');
+const adminJs = js['js/admin.js'];
+const adminFn = fs.readFileSync('netlify/functions/admin.mjs', 'utf8');
+
+check('there is no admin password anywhere',
+  !/ADMIN_PASSWORD|admin_password/i.test(adminJs + adminFn + schema + toml));
+check('the console signs in with a real Supabase account',
+  /signInWithPassword/.test(adminJs));
+check('the console page never reads a server environment',
+  !/process\.env/.test(adminJs) && /process\.env/.test(adminFn));
+check('and the key is used only in the function',
+  /SUPABASE_SERVICE_ROLE_KEY/.test(adminFn) &&
+  !/apikey:\s*SUPABASE_SERVICE_ROLE_KEY|Bearer.*SERVICE_ROLE/.test(adminJs));
+check('the function verifies the caller’s token before anything else',
+  /auth\/v1\/user/.test(adminFn) && /is_admin !== true/.test(adminFn));
+
+// Every admin_* function is security definer, so a missing caller check is
+// unrestricted access. The live audit checks this too; this catches it
+// before it is ever applied.
+const adminFns = [...schema.matchAll(
+  /create or replace function public\.(admin_\w+)\s*\(([\s\S]*?)\$\$;/g)];
+check('every admin_* function is defined', adminFns.length >= 12, adminFns.length);
+const unchecked = adminFns
+  .filter(m => !/sw\.is_admin\(/.test(m[2]))
+  .map(m => m[1]);
+check('every admin_* function checks is_admin on entry',
+  unchecked.length === 0, unchecked);
+
+const definer = adminFns.filter(m => !/security definer/.test(m[0])).map(m => m[1]);
+check('and every one is security definer', definer.length === 0, definer);
+
+check('is_admin is guarded by a NULL-safe trigger',
+  /coalesce\(current_setting\('splittywise\.granting_admin', true\), 'no'\)/.test(schema));
+check('no current_setting comparison is left NULL-unsafe',
+  [...schema.matchAll(/current_setting\([^)]*, true\)\s*(?:<>|=)/g)].length === 0,
+  [...schema.matchAll(/current_setting\([^)]*, true\)\s*(?:<>|=)/g)].map(m => m[0]));
+
+check('the signup gate is enforced in the trigger, not only the form',
+  /banned_emails where email = addr/.test(schema) &&
+  /signups_enabled/.test(schema) && /invite_only/.test(schema));
+check('and the form degrades to allowing signup if it cannot check',
+  /return null;\s*\/\/ offline, or running without the functions/.test(js['js/auth.js']));
+check('client failures are reported for the console to show',
+  /SW\.reportError/.test(js['js/ui.js']) && /error_reports/.test(js['js/ui.js']));
+check('the attack suite switches role, or its RLS tests prove nothing',
+  /set local role authenticated/.test(fs.readFileSync('supabase/security-tests.sql', 'utf8')));
+
+/* ---------------- 28. undoing a payment ---------------- */
+
+console.log('\n--- undoing a payment ---');
+check('only the most recent payment can be undone, in the schema',
+  /Only the most recent payment can be undone/.test(schema));
+const undoFn = (schema.match(
+  /create or replace function public\.undo_settlement[\s\S]*?\$\$;/) || [''])[0];
+check('undo_settlement exists', undoFn.length > 0);
+check('undo is a soft delete, never a delete',
+  /set deleted_at = now\(\)/.test(undoFn) && !/delete\s+from/.test(undoFn));
+check('it refuses anyone the money did not move between',
+  /not in \(row_s\.from_user, row_s\.to_user, row_s\.created_by\)/.test(undoFn));
+check('and refuses one that is already undone',
+  /already been undone/.test(undoFn));
+check('the client mirrors the same rule rather than inventing one',
+  /SW\.undoableSettlement\s*=/.test(js['js/balances.js']) &&
+  /undoableSettlement\(/.test(js['js/groups.js']) &&
+  /undoableSettlement\(/.test(js['js/friends.js']));
+check('both sides are notified',
+  /'settlement_undone'/.test(schema) &&
+  /settlement_undone/.test(js['js/shell.js']) &&
+  /settlement_undone/.test(adminFn.length ? fs.readFileSync('netlify/functions/notify-email.mjs', 'utf8') : ''));
+check('payments now appear on the group timeline',
+  /SW\.groupSettlements\s*=/.test(js['js/balances.js']) &&
+  /groupSettlements\(/.test(js['js/groups.js']));
+check('the settled-history fold covers payments too',
+  /SW\.settledCutoff\(rows\)/.test(js['js/groups.js']));
+check('the undo chip has a handler on both timelines',
+  /data-undo/.test(js['js/groups.js']) && /data-undo/.test(js['js/friends.js']) &&
+  (js['js/friends.js'].match(/friend-ledger'\)\.addEventListener/) || []).length === 1);
+check('and the chip is styled', /\.undo-chip\s*\{/.test(css));
+check('the ledger selects deleted_at, or the client filter is vacuous',
+  /created_at, deleted_at/.test(js['js/balances.js']));
 
 console.log('\n' + (fails ? fails + ' FAILURE(S)' : 'all checks passed'));
 process.exit(fails ? 1 : 0);

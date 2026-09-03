@@ -67,6 +67,7 @@ what to check.
 9. [Verify it works](#9-verify-it-works)
 10. [Troubleshooting](#10-troubleshooting)
 11. [How it is put together](#11-how-it-is-put-together)
+12. [The admin console](#12-the-admin-console)
 - [Appendix: upgrading an older copy](#appendix-upgrading-an-older-copy)
 
 ---
@@ -147,10 +148,10 @@ Seventeen suites, no database and no browser needed:
 | `autofill.test.js` | The one split figure that has to follow from the others — and every case where it must keep its hands off — plus ordinal days |
 | `wiring.test.js` | That the app is actually connected: every RPC exists with the arguments passed, every column selected exists, every button has a handler, every screen can render, every CSS token is defined at the base, the accessibility floor holds, the offline shell is complete, and nothing is labelled as destructive without something behind it |
 
-The whole database is one file: `supabase/schema.sql` — 16 tables, 51
-row-level-security policies, 21 write and read functions, 8 private RLS
-helpers, 6 triggers and 23 indexes, about 2,000 lines. It is written to be
-re-run: applying it twice is the same as applying it once.
+The whole database is one file: `supabase/schema.sql` — 21 tables, 57
+row-level-security policies, 9 private RLS helpers, 8 triggers and 27
+indexes, about 2,400 lines. It is written to be re-run: applying it twice is
+the same as applying it once.
 
 ---
 
@@ -261,19 +262,26 @@ select table_name from information_schema.tables
 where table_schema = 'public' order by table_name;
 ```
 
-Expect exactly these sixteen:
+Expect exactly these twenty-one:
 
 ```
-expense_comments      groups
-expense_history       invites
-expense_payers        nicknames
-expense_splits        notifications
-expenses              profiles
-friendships           recurring_expenses
-group_members         settlements
-                      split_presets
-                      user_categories
+allowed_emails        groups
+admin_audit           invites
+app_settings          nicknames
+banned_emails         notifications
+error_reports         profiles
+expense_comments      recurring_expenses
+expense_history       settlements
+expense_payers        split_presets
+expense_splits        user_categories
+expenses
+friendships
+group_members
 ```
+
+The last five of those alphabetically — `admin_audit`, `allowed_emails`,
+`app_settings`, `banned_emails` and `error_reports` — belong to the admin
+console (section 12). Nothing a normal client does can write to any of them.
 
 Anything **extra** is left over from something else and worth looking at —
 audit check 13 flags it for you.
@@ -943,6 +951,168 @@ group with. Without that, any signed-in user could dump every email address in
 the database. Adding a friend by email therefore goes through
 `add_friend_by_email()`, a `security definer` function that can look up one
 address without exposing the table.
+
+---
+
+## 12. The admin console
+
+At `/admin` on your deployed site. Not linked from the app, not indexable,
+and not in the offline cache — an ordinary user never downloads any of it.
+
+### There is no admin password
+
+The obvious design is a username of `admin` and a password in an environment
+variable. It cannot work here, and it is worth being clear why: this is a
+static site. `js/config.js` is delivered to the browser, and a Netlify
+environment variable is only readable by a Netlify Function — never by the
+page. Any password the page could check is a password the visitor already
+has. And "sign in as anyone" needs the `service_role` key, which bypasses
+every RLS policy; in a browser that is one devtools tab away from the whole
+database.
+
+So instead:
+
+- **Admin is a flag on a real account.** `profiles.is_admin`. It inherits
+  your own password rules, email confirmation and any MFA you turn on.
+- **That flag cannot be set from a browser at all.** A trigger refuses any
+  change to it that did not come from `admin_set_profile()`. `./scripts/db
+  attack` proves this by trying.
+- **Reads and writes go straight to Postgres** through the `admin_*`
+  functions, using your own token. They are `security definer` and each
+  checks `is_admin` on its first line, so the page needs nothing privileged.
+- **Only auth operations use the service_role key**, inside
+  `netlify/functions/admin.mjs`, because no SQL policy can reach Supabase's
+  own auth tables. The key stays in Netlify's environment.
+- **Every action is written to `admin_audit`**, which nobody can edit or
+  delete, including you.
+
+### 12.1 Make yourself the first admin
+
+Once, by hand — there is deliberately no other way in:
+
+```bash
+./scripts/db query "select set_config('splittywise.granting_admin','yes',false); \
+  update public.profiles set is_admin = true where email = 'you@example.com'"
+```
+
+Or in the SQL Editor:
+
+```sql
+select set_config('splittywise.granting_admin', 'yes', false);
+update public.profiles set is_admin = true where email = 'you@example.com';
+```
+
+The `set_config` line is what lifts the guard. Without it the update is
+refused — which is the point.
+
+After that, promote anyone else from the console itself.
+
+### 12.2 Environment variables
+
+The console's database half works with nothing configured. The auth half —
+blocking a login, creating an account, acting as someone — needs these in
+Netlify under **Site configuration → Environment variables**:
+
+| Variable | Value |
+|---|---|
+| `SUPABASE_URL` | `https://YOUR-REF.supabase.co` |
+| `SUPABASE_ANON_KEY` | The `anon` key, same as in `js/config.js` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Project Settings → API Keys → `service_role`. **Never commit this.** |
+
+Without them those actions return a clear "this deploy has no admin
+credentials" rather than failing obscurely. Note this shares
+`SUPABASE_SERVICE_ROLE_KEY` with the email function in 4.7 — one key, both
+uses. And see
+[the secret-scanning note](#if-the-build-fails-on-secrets-scanning-found-secrets),
+which you will hit the first time you set `SUPABASE_URL`.
+
+### 12.3 What it does
+
+**Overview** — people, active this week, expenses, total recorded, groups,
+failures today, and thirty days of signups, expenses and failures as one
+chart. "Active" means *wrote something*, not *opened the app*: sessions are
+not tracked, and a number invented from nothing is worse than no number.
+
+**People** — search, then open anyone to see their groups, friends, every
+expense with their share, their payments, and any failures their device has
+reported. From there: rename, reset password, sign out everywhere, act as
+them, grant or remove admin, block, or delete. Individual expenses can be
+binned or restored, and a group deleted.
+
+**Access** — three separate controls:
+
+| Control | Effect |
+|---|---|
+| **New accounts** off | Nobody new can register at all |
+| **Invite only** on | Only addresses on the allow list can register |
+| **Blocked addresses** | Specific addresses can neither sign in nor register |
+
+All three are enforced in `handle_new_user()`, which runs inside the
+transaction that would create the account — so a client that skips the
+signup form's check still cannot get past them. The form asks
+`/.netlify/functions/signup-check` first only so the refusal can say *why*;
+GoTrue reduces a trigger exception to "Database error saving new user",
+which explains nothing. If that function is unreachable, signup proceeds and
+the trigger still holds — a deploy without functions must not be one where
+nobody can register.
+
+**Failures** — what the app actually threw on somebody's phone, grouped by
+message, because forty copies of one bug is one bug. The app reports these
+itself; there is nothing to switch on. Capped at 50 per person per hour in
+the schema, so a render loop that throws cannot write thousands of rows.
+
+**Audit trail** — every administrative action, append-only.
+
+### 12.4 Blocking versus deleting
+
+Worth understanding before you use either.
+
+**Blocking** does two things, and both are needed: a `banned_emails` row
+stops a *new* account being created with that address, and `banned_until` on
+the auth user stops the *existing* one signing in. Their sessions are ended
+too — an access token already issued stays valid for its hour otherwise, so
+without that the block waits for expiry. Every expense of theirs stays
+exactly as it is, so **nobody else's balance moves.**
+
+**Deleting** removes the account and everything cascading from it, which
+**does change other people's balances** — their share of a shared expense
+disappears with them. There is no undo. Block unless you specifically want
+the data gone.
+
+### 12.5 Acting as someone
+
+This is the honest form of "log in as anyone": the console generates a
+single-use sign-in link for their account. Following it signs **your
+browser** in as them, replacing your own session — you are them until you
+sign out and sign back in as yourself, and anything you do will look like
+they did it.
+
+It is recorded in the audit trail whether or not you follow the link.
+
+There is no way to do this without becoming them, short of building a
+parallel read-write interface to every screen in the app. Reading and
+editing their data from the People tab covers most of what that would be
+for.
+
+### 12.6 Checking it holds
+
+```bash
+./scripts/db attack
+```
+
+Fifteen things an ordinary signed-in user must not be able to do — grant
+themselves admin, write the ban list, reopen signups, call any `admin_*`
+function, read the audit trail, forge a notification, blame someone else for
+a crash, read a stranger's expenses — each tried for real and expected to
+fail, plus two legitimate paths expected to succeed. Everything runs in one
+statement that rolls itself back.
+
+This exists because `./scripts/db audit` once reported PASS on an open hole:
+the `is_admin` guard was in place and the audit could see it, but it compared
+`current_setting(name, true)` to a string without `coalesce`, and
+`NULL <> 'yes'` is `NULL`, which `if` treats as false. The trigger was inert
+and a normal user could grant themselves admin. Checking that a mechanism
+exists is not checking that it works.
 
 ---
 

@@ -100,6 +100,18 @@ empty-receipts)
   echo "Emptied. Delete the bucket itself under Storage in the dashboard."
   ;;
 
+attack)
+  require_link
+  echo "Trying things an ordinary user must not be able to do…"
+  echo "(one statement, which rolls itself back however it ends)"
+  echo
+  # The SQL raises on purpose, so supabase exits non-zero and `pipefail`
+  # would make that the result of the whole command. Capture first, then let
+  # the parser decide: it exits non-zero only if a line actually says FAIL.
+  out=$(supabase db query --linked -f supabase/security-tests.sql 2>&1 || true)
+  printf '%s' "$out" | python3 scripts/parse-raise.py
+  ;;
+
 query)
   require_link
   shift

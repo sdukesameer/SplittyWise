@@ -159,16 +159,51 @@ window.SW = window.SW || {};
     }
   }
 
+  // ---- reporting a failure so it outlives the toast ------------------
+  //
+  // A toast tells whoever is holding the phone; this tells whoever has to
+  // fix it. Best effort throughout: a failure to report a failure must
+  // never itself become a failure, and there is a per-user cap in the
+  // schema so a throwing render loop cannot write thousands of rows.
+  const reported = {};
+
+  SW.reportError = function (message, source, extra) {
+    const msg = String(message || 'unknown').slice(0, 500);
+    if (!SW.user || !SW.db) return;
+
+    // The same message twice in a session is one bug, not two.
+    if (reported[msg]) return;
+    reported[msg] = true;
+
+    try {
+      SW.db.from('error_reports').insert({
+        user_id: SW.user.id,
+        message: msg,
+        source: source ? String(source).slice(0, 200) : null,
+        line: (extra && extra.line) || null,
+        col: (extra && extra.col) || null,
+        stack: (extra && extra.stack) ? String(extra.stack).slice(0, 4000) : null,
+        url: String(location.href).slice(0, 500),
+        ua: String(navigator.userAgent).slice(0, 300),
+      }).then(function () {}, function () {});
+    } catch (e) { /* nothing more to try */ }
+  };
+
   window.addEventListener('error', function (e) {
-    const where = e.filename
-      ? String(e.filename).split('/').pop() + ':' + e.lineno
-      : 'somewhere';
+    const file = e.filename ? String(e.filename).split('/').pop() : null;
+    const where = file ? file + ':' + e.lineno : 'somewhere';
     surface('Something broke', (e.message || 'unknown') + ' at ' + where);
+    SW.reportError(e.message || 'unknown', file, {
+      line: e.lineno, col: e.colno, stack: e.error && e.error.stack,
+    });
   });
 
   window.addEventListener('unhandledrejection', function (e) {
     const reason = e.reason && (e.reason.message || e.reason);
     surface('A request failed', String(reason || 'unknown'));
+    SW.reportError('Unhandled rejection: ' + String(reason || 'unknown'), null, {
+      stack: e.reason && e.reason.stack,
+    });
   });
 
   /* ---- global listeners ------------------------------------------------ */

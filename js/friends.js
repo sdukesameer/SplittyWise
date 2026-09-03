@@ -418,6 +418,7 @@ window.SW = window.SW || {};
     }
 
     const items = SW.pairLedger(friendId);
+    const undoable = SW.undoableSettlement({ friendId: friendId });
     const host = document.getElementById('friend-ledger');
     const empty = document.getElementById('friend-empty');
     const more = document.getElementById('friend-settled-more');
@@ -444,7 +445,7 @@ window.SW = window.SW || {};
         month = m;
         html += '<div class="month-head">' + esc(m) + '</div>';
       }
-      html += itemHtml(it, p.full_name);
+      html += itemHtml(it, p.full_name, undoable && undoable.id === it.id);
       if (it.clearsBalance) {
         html += '<div class="cleared-mark">You fully settled up here</div>';
       }
@@ -462,7 +463,14 @@ window.SW = window.SW || {};
     }
   }
 
-  function itemHtml(it, friendName) {
+  document.getElementById('friend-ledger').addEventListener('click', function (e) {
+    const undo = e.target.closest('[data-undo]');
+    if (!undo) return;
+    SW.undoSettlement(undo.getAttribute('data-undo'),
+                      Number(undo.getAttribute('data-amount')));
+  });
+
+  function itemHtml(it, friendName, canUndo) {
     const d = new Date(it.date + 'T00:00:00');
     const day = d.getDate();
     const mon = d.toLocaleDateString('en-IN', { month: 'short' });
@@ -496,7 +504,11 @@ window.SW = window.SW || {};
         '<span class="ledger-title">' + esc(title) + '</span>' +
         '<span class="ledger-sub">' + sub + '</span>' +
       '</span>' +
-      '<span class="ledger-delta ' + cls + '">' +
+      (canUndo
+        ? '<button type="button" class="undo-chip" data-undo="' + esc(it.id) +
+          '" data-amount="' + Math.abs(it.delta) + '">Undo</button>'
+        : '') +
+      '<span class="ledger-delta ' + cls + (canUndo ? ' is-tight' : '') + '">' +
         '<span class="lbl">' + lbl + '</span><span class="val">' + val + '</span>' +
       '</span></div>';
   }

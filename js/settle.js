@@ -188,6 +188,43 @@ window.SW = window.SW || {};
   // Settling the overall total as one non-group payment would leave every
   // group's balance untouched and offset by a payment sitting outside them
   // all. So this writes one settlement per group where a balance exists.
+  // Undo the most recent payment. The schema decides whether it really is
+  // the most recent; this only asks and reports, so the two cannot disagree.
+  SW.undoSettlement = function (id, amountPaise) {
+    SW.sheet({
+      title: 'Undo this payment?',
+      body:
+        '<p style="color:var(--muted);font-size:14.5px">' +
+          (amountPaise
+            ? 'The <strong style="color:var(--text)">' + SW.money(amountPaise) +
+              '</strong> goes back onto the balance, '
+            : 'The balance goes back to ') +
+          'exactly as it was before the payment was recorded. Both of you are ' +
+          'told, and the payment is kept as a struck-through record rather than ' +
+          'erased.</p>' +
+        '<p style="color:var(--muted);font-size:13.5px;margin-top:8px">Only the ' +
+          'most recent payment can be undone. If you have squared up again ' +
+          'since, undo that one first.</p>',
+      confirm: 'Undo the payment',
+      onConfirm: async function (btn) {
+        SW.busy(btn, true);
+        const { error } = await db.rpc('undo_settlement', { p_settlement: id });
+        SW.busy(btn, false);
+
+        if (error) {
+          // The "only the most recent" refusal is a real answer, not a fault.
+          SW.toast(error.message.replace(/^.*?:\s*/, ''), 'error');
+          return false;
+        }
+
+        await SW.refreshLedger();
+        if (SW.refreshUnread) SW.refreshUnread();
+        SW.toast('Payment undone', 'ok');
+        return true;
+      },
+    });
+  };
+
   SW.settleAllWith = function (friendId) {
     const me = SW.ledger.me;
     const p = SW.person(friendId);

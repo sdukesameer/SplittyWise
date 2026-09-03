@@ -4,7 +4,7 @@
 //  Bump CACHE when shipping, so the old shell is thrown away.
 // ---------------------------------------------------------------------------
 
-const CACHE = 'splittywise-v13';
+const CACHE = 'splittywise-v14';
 
 const SHELL = [
   './',
@@ -74,6 +74,14 @@ self.addEventListener('fetch', function (event) {
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
+
+  // The admin console is a different application that happens to share a
+  // domain. Caching it, or falling back to the app's shell when it is
+  // offline, would both be wrong — and an admin acting on a stale console is
+  // worse than one who cannot open it.
+  if (url.pathname.indexOf('/admin') === 0 ||
+      url.pathname.indexOf('/css/admin') === 0 ||
+      url.pathname.indexOf('/js/admin') === 0) return;
 
   // Never touch cross-origin traffic. Supabase calls carry auth and must
   // always be live; the CDNs manage their own HTTP caching.

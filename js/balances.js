@@ -812,7 +812,11 @@ window.SW = window.SW || {};
         'expense_splits(user_id, amount), expense_payers(user_id, amount)'
       ).is('deleted_at', null).order('expense_date', { ascending: false }),
       db.from('settlements').select(
-        'id, group_id, from_user, to_user, amount, note, settled_on, created_at'
+        // deleted_at is filtered server-side below, but the client checks it
+        // too — and a check on a column that was never selected is always
+        // false, which is how four profile features silently reverted once.
+        'id, group_id, from_user, to_user, amount, note, settled_on, ' +
+        'created_at, deleted_at'
       ).is('deleted_at', null).order('settled_on', { ascending: false }),
       db.from('groups').select(
         'id, name, emoji, group_type, simplify_debts, cover_path, whiteboard, ' +
@@ -896,44 +900,122 @@ window.SW = window.SW || {};
       settlements: setRes.data,
     };
     SW.bumpLedger();
-    await resolveAvatars();
+    await SW.ensureAvatars({ quiet: true });
     return SW.ledger;
   };
 
   // Avatars are private objects, so each needs a signed URL. Resolved in one
-  // batch here and cached, because SW.avatar() is called inside render loops
-  // and cannot wait on a request per row.
+  // batch and cached, because SW.avatar() is called inside render loops and
+  // cannot wait on a request per row.
+  //
+  // This used to hang off the end of loadLedger, which made a photo's
+  // appearance depend on a long chain — cache load, invite redemption,
+  // outbox flush, then the fetch — completing, and on whichever view
+  // happened to be repainted afterwards. A saved photo would then be there
+  // or not depending on timing nobody can see. It is now standalone,
+  // idempotent, callable from anywhere, and repaints when it resolves
+  // something new.
   SW.avatarUrls = {};
 
-  async function resolveAvatars() {
-    const L = SW.ledger;
-    const paths = [];
+  const SIGNED_FOR = 3600;          // seconds; Supabase's own maximum window
+  const RESIGN_WITHIN = 300;        // re-sign when this close to expiry
+  const expiry = {};                // path -> epoch ms the URL dies
+  let inFlight = null;
 
+  function needsUrl(path) {
+    if (!SW.avatarUrls[path]) return true;
+    // A URL cached from an hour ago is a broken image, not a cached one.
+    return (expiry[path] || 0) - Date.now() < RESIGN_WITHIN * 1000;
+  }
+
+  function knownPaths() {
+    const paths = [];
     const own = (SW.profile && SW.profile.avatar_path) || null;
     if (own) paths.push(own);
-    Object.keys(L.people).forEach(function (id) {
-      const p = L.people[id];
-      if (p && p.avatar_path) paths.push(p.avatar_path);
-    });
 
-    const wanted = paths.filter(function (path, i) {
-      return paths.indexOf(path) === i && !SW.avatarUrls[path];
-    });
-    if (!wanted.length) return;
-
-    try {
-      const { data } = await db.storage.from('avatars').createSignedUrls(wanted, 3600);
-      (data || []).forEach(function (row) {
-        if (row && row.path && row.signedUrl) SW.avatarUrls[row.path] = row.signedUrl;
+    const L = SW.ledger;
+    if (L && L.people) {
+      Object.keys(L.people).forEach(function (id) {
+        const p = L.people[id];
+        if (p && p.avatar_path) paths.push(p.avatar_path);
       });
-    } catch (e) {
-      // Without a URL the generated art stands in, which is fine.
     }
+    return paths.filter(function (path, i) {
+      return path && paths.indexOf(path) === i;
+    });
   }
+
+  // Resolves any avatar we know about and have no live URL for. Safe to call
+  // repeatedly: it de-duplicates concurrent calls and returns how many new
+  // URLs it obtained, so the caller knows whether a repaint is worth it.
+  async function signMissing() {
+    // Recomputed here, inside the serialised section, so a caller that
+    // arrived while another was signing does not have its paths dropped —
+    // and so nothing is ever signed twice.
+    const wanted = knownPaths().filter(needsUrl);
+    if (!wanted.length) return 0;
+
+    // createSignedUrls resolves with { data, error } rather than throwing
+    // for an API error, so `error` has to be read. Ignoring it was why a
+    // failure here left no trace anywhere at all.
+    let res;
+    try {
+      res = await db.storage.from('avatars').createSignedUrls(wanted, SIGNED_FOR);
+    } catch (err) {
+      res = { data: null, error: err };
+    }
+
+    if (res.error || !res.data) {
+      const msg = (res.error && (res.error.message || res.error)) || 'unknown';
+      console.warn('Could not sign avatar URLs:', msg);
+      if (SW.reportError) SW.reportError('Avatar signing failed: ' + msg, 'balances.js');
+      return 0;
+    }
+
+    let got = 0;
+    const dies = Date.now() + SIGNED_FOR * 1000;
+    res.data.forEach(function (row, i) {
+      // `path` is echoed by the API, but falling back to position keeps
+      // this working if that ever stops being true.
+      const path = (row && row.path) || wanted[i];
+      if (row && path && row.signedUrl) {
+        SW.avatarUrls[path] = row.signedUrl;
+        expiry[path] = dies;
+        got++;
+      } else if (row && row.error) {
+        console.warn('Could not sign', path, '—', row.error);
+      }
+    });
+    return got;
+  }
+
+  SW.ensureAvatars = function (opts) {
+    // Serialised rather than de-duplicated: calls queue, and each one works
+    // out what is still missing when its turn comes.
+    const mine = (inFlight || Promise.resolve()).then(signMissing, signMissing);
+    inFlight = mine.catch(function () { return 0; });
+
+    return mine.then(function (got) {
+      // A photo that arrives after its screen was drawn has to trigger a
+      // redraw, or it waits for the next navigation to show up.
+      if (got && !(opts && opts.quiet) && SW.repaintAvatars) SW.repaintAvatars();
+      return got;
+    });
+  };
 
   SW.person = function (id) {
     if (id === SW.ledger.me) {
-      return { id: id, full_name: 'You', email: '', avatar_emoji: (SW.profile || {}).avatar_emoji };
+      const mine = SW.profile || {};
+      // avatar_path was missing here, so your own photo never appeared in
+      // any list — only your emoji — however well it had uploaded.
+      return {
+        id: id,
+        full_name: 'You',
+        email: mine.email || '',
+        avatar_emoji: mine.avatar_emoji,
+        avatar_path: mine.avatar_path || null,
+        upi_id: mine.upi_id || null,
+      };
     }
     const found = SW.ledger.people[id];
     if (!found) return { id: id, full_name: 'Someone', email: '', avatar_emoji: '👤' };
@@ -1193,6 +1275,72 @@ window.SW = window.SW || {};
   /* ======================= one friend's ledger ======================== */
 
   // Every line item between me and one friend, newest first.
+  // The newest live payment in one scope — a pair, optionally within one
+  // group. Mirrors undo_settlement() in the schema, which is the authority:
+  // only this one may be undone, because undoing an older payment would
+  // leave newer ones explaining a balance that no longer exists.
+  SW.undoableSettlement = function (opts) {
+    const L = SW.ledger;
+    if (!L) return null;
+    const me = L.me;
+    const other = opts && opts.friendId;
+    const gid = (opts && opts.groupId) || null;
+    const scoped = opts && Object.prototype.hasOwnProperty.call(opts, 'groupId');
+
+    const live = L.settlements.filter(function (s) {
+      if (s.deleted_at) return false;
+      if (scoped && (s.group_id || null) !== gid) return false;
+      if (other) {
+        const between = (s.from_user === me && s.to_user === other) ||
+                        (s.from_user === other && s.to_user === me);
+        if (!between) return false;
+      } else if (s.from_user !== me && s.to_user !== me) {
+        return false;
+      }
+      return true;
+    });
+    if (!live.length) return null;
+
+    live.sort(function (a, b) {
+      const ka = a.settled_on + 'T' + (a.created_at || '');
+      const kb = b.settled_on + 'T' + (b.created_at || '');
+      return ka < kb ? 1 : (ka > kb ? -1 : 0);
+    });
+    return live[0];
+  };
+
+  // Every payment touching one group, for the group's own timeline. The
+  // group page used to list expenses only, so squaring up left no trace on
+  // the screen where the group's balance is read.
+  SW.groupSettlements = function (gid) {
+    const L = SW.ledger;
+    const me = L.me;
+
+    return L.settlements
+      .filter(function (s) {
+        return !s.deleted_at && (s.group_id || null) === gid;
+      })
+      .map(function (s) {
+        const paise = SW.toPaise(s.amount);
+        const mine = s.from_user === me || s.to_user === me;
+        return {
+          kind: 'settlement',
+          id: s.id,
+          date: s.settled_on,
+          sortKey: s.settled_on + 'T' + (s.created_at || ''),
+          emoji: '✅',
+          note: s.note || '',
+          fromUser: s.from_user,
+          toUser: s.to_user,
+          amount: paise,
+          // What it did to *my* balance in this group; zero when the payment
+          // was between two other members, which still belongs on the
+          // timeline but must not move my figures.
+          delta: !mine ? 0 : (s.from_user === me ? paise : -paise),
+        };
+      });
+  };
+
   SW.pairLedger = function (friendId) {
     const L = SW.ledger;
     const me = L.me;
