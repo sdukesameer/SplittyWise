@@ -518,12 +518,56 @@ Settings** accepts a free Brevo or Resend account and fixes deliverability
 properly. That is separate from the notification email in 4.7, though the
 same Brevo account can serve both.
 
-### 4.6 Where email cannot help
+### 4.6 Custom SMTP, and what it does and does not fix
 
-Supabase's built-in mail is for authentication only — confirmations and
-password resets. On the free tier it is also rate-limited to a couple of
-messages an hour. It cannot carry app notifications, so section 4.7 uses a
-separate route.
+**Custom SMTP is not required for custom HTML.** The templates in section 4.5
+work on the built-in mail exactly as they do on your own SMTP —
+**Authentication → Emails → Templates** is a separate setting and has no
+dependency on this page. If the templates are what you are after, you are
+already done.
+
+What custom SMTP actually fixes is **deliverability** — mail arriving in the
+inbox instead of spam — and the **rate limit**, which goes from a couple of
+messages an hour to 30, adjustable after that. Deliverability is about who is
+sending, not what the mail says, which is why no template can fix it.
+
+#### Filling in that page with Brevo
+
+You already have a Brevo account for section 4.7, so reuse it. In Brevo, go
+to **SMTP & API → SMTP**, and copy from that page:
+
+| Supabase field | What to put |
+|---|---|
+| **Sender email address** | The same address as your `EMAIL_FROM` — it must be a verified sender in Brevo, and yours already is if the notification mail works |
+| **Sender name** | `SplittyWise` |
+| **Host** | `smtp-relay.brevo.com` |
+| **Port number** | `587` |
+| **Username** | The **SMTP login** shown on Brevo's SMTP page. Not your account email, and definitely not the host — Brevo shows a specific value, often like `8xxxxx@smtp-brevo.com` |
+| **Password** | An **SMTP key**, generated on that same page. **Not** the API key you put in Netlify — they are different credentials and the API key will not authenticate here |
+| **Minimum interval per user** | Leave at `60`. It means somebody cannot request two password resets within a minute, which is what you want |
+
+The two mistakes worth naming, because they are the ones people make: pasting
+the **API key** into the password field, and putting the **host** into the
+username field. Neither produces a useful error — the mail just stops.
+
+Port 465 works too, with SSL; 587 is Brevo's own recommendation. Avoid 25.
+
+#### Afterwards
+
+Send yourself a password reset from the login screen to check it. Once this
+is on, both kinds of mail leave from the same verified address: auth mail
+through SMTP, and app notifications through the Brevo API (section 4.7).
+
+Sources: Brevo's own
+[SMTP relay](https://help.brevo.com/hc/en-us/articles/360001005870-SMTP-relay)
+and [transactional email](https://help.brevo.com/hc/en-us/articles/7924908994450-Send-transactional-emails-using-Brevo-SMTP)
+documentation.
+
+#### What SMTP still cannot do
+
+It carries **authentication mail only** — confirmations, resets, invites.
+Supabase will not send arbitrary application mail whatever SMTP you give it,
+which is why notifications go through section 4.7 instead.
 
 ### 4.7 Email notifications (optional, free)
 
