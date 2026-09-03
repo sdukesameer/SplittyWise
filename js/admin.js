@@ -32,8 +32,23 @@ window.SW = window.SW || {};
     return;
   }
 
+  // The storageKey MUST match js/db.js. Both pages are the same origin, so
+  // they share localStorage — but only if they agree on the key. Omitting it
+  // here meant supabase-js fell back to its own default name, the console
+  // could not see the session the app had already stored, and an admin who
+  // was plainly signed in was asked to sign in again.
+  //
+  // detectSessionInUrl is false because auth email links all point at the
+  // app, never here; flowType matches the app so a session written by one is
+  // read the same way by the other.
   const db = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: false,
+      flowType: 'implicit',
+      storageKey: 'splittywise.auth',
+    },
   });
   SW.db = db;
 
@@ -222,28 +237,47 @@ window.SW = window.SW || {};
     location.reload();
   });
 
+  // On the gate, for somebody signed in as a non-admin who wants to try
+  // another account. The only place this page signs anyone out unasked.
+  $('ad-use-other').addEventListener('click', async function () {
+    await db.auth.signOut();
+    location.reload();
+  });
+
+  // Three states, not two: checking, signed in, or a form. Showing the form
+  // while the session is still being read makes an already-signed-in admin
+  // think they have been logged out.
+  function show(which) {
+    $('ad-boot').hidden = which !== 'boot';
+    $('ad-gate').hidden = which !== 'gate';
+    $('ad-app').hidden = which !== 'app';
+  }
+
   async function afterSignIn() {
     const { data } = await db.auth.getUser();
     const user = data && data.user;
-    if (!user) return;
+    if (!user) return show('gate');
 
     // admin_stats() refuses a non-admin, which is the check — there is no
-    // separate "am I allowed" call to get out of step with it.
+    // separate "am I allowed" call that could get out of step with it.
     let stats;
     try {
       stats = await rpc('admin_stats');
     } catch (err) {
-      await db.auth.signOut();
+      // Deliberately NOT signOut(). This page shares its session storage
+      // with the app, so signing out here would sign the person out of
+      // SplittyWise itself — for the crime of opening a URL. Explain
+      // instead, and let them choose.
+      show('gate');
+      $('ad-signed-as').hidden = false;
+      $('ad-signed-as-email').textContent = user.email || 'this account';
       return setError('ad-login-error',
         /administrator/i.test(err.message)
-          ? 'That account is not an administrator. Run, once:\n' +
-            "update public.profiles set is_admin = true where email = '" +
-            (user.email || 'you@example.com') + "';"
+          ? 'That account is not an administrator.'
           : err.message);
     }
 
-    $('ad-gate').hidden = true;
-    $('ad-app').hidden = false;
+    show('app');
     $('ad-who').textContent = user.email || '';
 
     paintStats(stats);
@@ -937,7 +971,20 @@ window.SW = window.SW || {};
 
   /* ======================= start ===================================== */
 
+  // Already signed in — in the app or here, they share the session — means
+  // straight into the console. The form is only for someone who is not.
   db.auth.getSession().then(function (r) {
-    if (r.data && r.data.session) afterSignIn();
+    if (r.data && r.data.session) return afterSignIn();
+    show('gate');
+  }, function () {
+    show('gate');
+  });
+
+  // A session that expires or is signed out in the app tab should take this
+  // tab with it, rather than leaving a console that 401s on every action.
+  db.auth.onAuthStateChange(function (event, session) {
+    if (event === 'SIGNED_OUT' || !session) {
+      if (!$('ad-app').hidden) location.reload();
+    }
   });
 })();

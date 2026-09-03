@@ -14,13 +14,29 @@
 </head>
 <body class="admin">
 
+<!-- ---------- checking for an existing session ---------- -->
+<!-- Shown first, so an admin who is already signed in never sees the form. -->
+<section id="ad-boot" class="ad-gate">
+  <div class="ad-gate-card" style="text-align:center">
+    <span class="spinner" style="display:inline-block"></span>
+    <p class="ad-muted" style="margin:14px 0 0">Checking your session…</p>
+  </div>
+</section>
+
 <!-- ---------- sign in ---------- -->
-<section id="ad-gate" class="ad-gate">
+<section id="ad-gate" class="ad-gate" hidden>
   <div class="ad-gate-card">
     <h1>SplittyWise admin</h1>
     <p class="ad-muted">Sign in with your own account. Administration is a
       flag on a real login, not a shared password — so it inherits your
       password rules and confirmation.</p>
+
+    <div class="ad-warn" id="ad-signed-as" hidden>
+      You are signed in as <strong id="ad-signed-as-email"></strong>, which is
+      not an administrator. You are still signed in to the app.
+      <button class="btn-text" id="ad-use-other" type="button"
+              style="padding:8px 0 0">Use a different account</button>
+    </div>
     <form id="ad-login" novalidate>
       <div class="field">
         <label for="ad-email">Email</label>

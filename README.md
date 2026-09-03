@@ -986,7 +986,17 @@ So instead:
 - **Every action is written to `admin_audit`**, which nobody can edit or
   delete, including you.
 
-### 12.1 Make yourself the first admin
+### 12.1 Signing in
+
+If you are already signed in to the app, `/admin` opens straight into the
+console — both pages are the same origin and share one session, so there is
+nothing to sign in to twice. The form only appears for someone who is not
+signed in at all.
+
+Signed in but not an admin? It says so and leaves your app session alone.
+Opening `/admin` must never be a way to get logged out of SplittyWise.
+
+### 12.2 Make yourself the first admin
 
 Once, by hand — there is deliberately no other way in:
 
@@ -1007,7 +1017,7 @@ refused — which is the point.
 
 After that, promote anyone else from the console itself.
 
-### 12.2 Environment variables
+### 12.3 Environment variables
 
 The console's database half works with nothing configured. The auth half —
 blocking a login, creating an account, acting as someone — needs these in
@@ -1026,7 +1036,7 @@ uses. And see
 [the secret-scanning note](#if-the-build-fails-on-secrets-scanning-found-secrets),
 which you will hit the first time you set `SUPABASE_URL`.
 
-### 12.3 What it does
+### 12.4 What it does
 
 **Overview** — people, active this week, expenses, total recorded, groups,
 failures today, and thirty days of signups, expenses and failures as one
@@ -1063,7 +1073,7 @@ the schema, so a render loop that throws cannot write thousands of rows.
 
 **Audit trail** — every administrative action, append-only.
 
-### 12.4 Blocking versus deleting
+### 12.5 Blocking versus deleting
 
 Worth understanding before you use either.
 
@@ -1079,7 +1089,7 @@ exactly as it is, so **nobody else's balance moves.**
 disappears with them. There is no undo. Block unless you specifically want
 the data gone.
 
-### 12.5 Acting as someone
+### 12.6 Acting as someone
 
 This is the honest form of "log in as anyone": the console generates a
 single-use sign-in link for their account. Following it signs **your
@@ -1094,7 +1104,7 @@ parallel read-write interface to every screen in the app. Reading and
 editing their data from the People tab covers most of what that would be
 for.
 
-### 12.6 Checking it holds
+### 12.7 Checking it holds
 
 ```bash
 ./scripts/db attack

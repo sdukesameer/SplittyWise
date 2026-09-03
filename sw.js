@@ -4,7 +4,7 @@
 //  Bump CACHE when shipping, so the old shell is thrown away.
 // ---------------------------------------------------------------------------
 
-const CACHE = 'splittywise-v15';
+const CACHE = 'splittywise-v16';
 
 const SHELL = [
   './',

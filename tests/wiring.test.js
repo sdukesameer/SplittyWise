@@ -15,6 +15,19 @@ const jsFiles = glob('js', '.js');
 const js = Object.fromEntries(jsFiles.map(f => [f, fs.readFileSync(f, 'utf8')]));
 const allJs = Object.values(js).join('\n');
 
+// Strips // and /* */ comments and string-literal contents, for checks that
+// assert something is ABSENT. Three checks have already failed by matching a
+// comment: the "never commit this key" warning in config.js, an env var
+// named in an error message, and a comment reading "deliberately NOT
+// signOut()". Prose about code is not code.
+function codeOnly(src) {
+  return String(src || '')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
+}
+
 let fails = 0;
 function check(label, ok, detail) {
   if (!ok) fails++;
@@ -757,9 +770,41 @@ check('every console tab has a pane, and the reverse',
   })());
 
 check('there is no admin password anywhere',
-  !/ADMIN_PASSWORD|admin_password/i.test(adminJs + adminFn + schema + toml));
+  !/ADMIN_PASSWORD|admin_password/i.test(
+    codeOnly(adminJs) + codeOnly(adminFn) + schema + toml));
 check('the console signs in with a real Supabase account',
   /signInWithPassword/.test(adminJs));
+
+// Both pages are the same origin and share localStorage — but only if they
+// agree on the storage key. They did not, so the console could not see the
+// session the app had already written, and an admin who was plainly signed
+// in was asked to sign in again.
+const appKey = (js['js/db.js'].match(/storageKey:\s*'([^']+)'/) || [])[1];
+const conKey = (adminJs.match(/storageKey:\s*'([^']+)'/) || [])[1];
+check('both pages read the session from the same storage key',
+  !!appKey && appKey === conKey, { app: appKey, console: conKey });
+check('and agree on the auth flow',
+  (js['js/db.js'].match(/flowType:\s*'([^']+)'/) || [])[1] ===
+  (adminJs.match(/flowType:\s*'([^']+)'/) || [])[1]);
+check('an existing session goes straight into the console',
+  /getSession\(\)\.then/.test(adminJs) && /return afterSignIn\(\)/.test(adminJs));
+check('and the form is not shown while that is still being checked',
+  /id="ad-boot"/.test(adminHtml) && /show\('boot'\)/.test(adminJs) === false &&
+  /which !== 'boot'/.test(adminJs));
+
+// The session is shared, so signing out here signs the person out of the
+// app. Doing that because they opened a URL without being an admin was
+// destructive; only an explicit button may do it.
+const adminCode = codeOnly(adminJs);
+const adminCheckFail = (adminCode.match(
+  /catch \(err\) \{[\s\S]*?return setError\(/) || [''])[0];
+check('a non-admin visitor is not signed out of the app',
+  adminCheckFail.length > 0 && !/signOut/.test(adminCheckFail),
+  adminCheckFail.slice(0, 120));
+check('signing out is only ever an explicit choice',
+  (adminCode.match(/signOut\(\)/g) || []).length === 2 &&
+  /ad-signout/.test(adminJs) && /ad-use-other/.test(adminJs),
+  (adminCode.match(/signOut\(\)/g) || []).length);
 check('the console page never reads a server environment',
   !/process\.env/.test(adminJs) && /process\.env/.test(adminFn));
 check('and the key is used only in the function',
