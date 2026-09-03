@@ -10,6 +10,14 @@
 //  POSTs the new row here, and this decides whether it is worth an email.
 //  The API key lives in Netlify's environment, never in the database.
 //
+//  INSERT only, and enforced here rather than trusted from the dashboard.
+//  A notification's content never changes after it is written — the one and
+//  only UPDATE it ever sees is mark_all_notifications_read() flipping
+//  is_read, so an UPDATE-triggered call carries nothing new to say. It also
+//  arrives in bulk: opening the Activity tab with sixty unread rows would
+//  fire sixty of them. An expense being *edited* still reaches you, because
+//  that writes a brand new notification row of its own.
+//
 //  Setup is in README section 4.7. Without the environment variables set
 //  this function replies 204 and does nothing, so an unconfigured deploy is
 //  harmless rather than broken.
@@ -57,13 +65,20 @@ export default async (request) => {
     return new Response('Forbidden', { status: 403 });
   }
 
-  let row;
+  let payload;
   try {
-    const payload = await request.json();
-    row = payload.record;
+    payload = await request.json();
   } catch (e) {
     return new Response('Bad payload', { status: 400 });
   }
+
+  // Correctness must not depend on how the webhook was ticked in a dashboard.
+  // Anything but a new row is nothing to email about — see the note above.
+  if (payload.type && payload.type !== 'INSERT') {
+    return new Response(null, { status: 204 });
+  }
+
+  const row = payload.record;
   if (!row || !row.user_id) return new Response(null, { status: 204 });
 
   // A row that arrives already read is the actor's own action, recorded for

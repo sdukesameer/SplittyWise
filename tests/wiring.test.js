@@ -648,5 +648,64 @@ check('settle-all offers the payment app when it is all one way',
 check('and not when the debts run both ways',
   /!mixed && total < 0 && p\.upi_id/.test(js['js/settle.js']));
 
+/* ---------------- 25. the README cannot go stale ---------------- */
+
+// It told a fresh reader to "expect exactly these eight" tables when there
+// were sixteen, which reads as a broken setup rather than a stale document.
+console.log('\n--- the README matches the schema ---');
+const readme = fs.readFileSync('README.md', 'utf8');
+const tableNames = Object.keys(tables);
+const missingFromReadme = tableNames.filter(t => !readme.includes(t));
+check('every table is named in the README', missingFromReadme.length === 0,
+  missingFromReadme);
+const claimed = (readme.match(/(\d+) tables/) || [])[1];
+check('the README’s table count is right (' + tableNames.length + ')',
+  Number(claimed) === tableNames.length, { claimed, actual: tableNames.length });
+const policies = (schema.match(/create policy/g) || []).length;
+const claimedPolicies = (readme.match(/(\d+)\s*\n?row-level-security policies/) ||
+                         readme.match(/(\d+) row-level-security policies/) || [])[1];
+check('and its policy count is right (' + policies + ')',
+  Number(claimedPolicies) === policies, { claimed: claimedPolicies, actual: policies });
+const suites = fs.readdirSync('tests').filter(f => f.endsWith('.test.js')).length;
+const words = ['zero','one','two','three','four','five','six','seven','eight',
+  'nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen',
+  'seventeen','eighteen','nineteen','twenty'];
+check('the suite count in the README is right (' + suites + ')',
+  readme.toLowerCase().includes(words[suites] + ' suites'), words[suites] + ' suites');
+
+// Nothing in the repo should still address the original author.
+const addressed = [];
+for (const m of readme.matchAll(/^.*\b(as you said|you said you|your MyExpenseTracker)\b.*$/gim)) {
+  addressed.push(m[0].trim().slice(0, 70));
+}
+check('the README is written for a stranger, not its author',
+  addressed.length === 0, addressed);
+check('and says to replace the committed Supabase credentials',
+  /replace both values/i.test(readme));
+
+/* ---------------- 26. the secret scanner ---------------- */
+
+console.log('\n--- Netlify secret scanning ---');
+const toml = fs.readFileSync('netlify.toml', 'utf8');
+const omit = (toml.match(/SECRETS_SCAN_OMIT_KEYS\s*=\s*"([^"]*)"/) || [, ''])[1];
+check('the public Supabase keys are exempt, or the build fails',
+  omit.includes('SUPABASE_URL'));
+check('and the service_role key is NOT exempt',
+  !omit.includes('SERVICE_ROLE'));
+// The previous version of this check matched the warning comment in
+// config.js telling you never to commit that key — a false positive that
+// would have been silenced rather than fixed. Look for a real key: a JWT
+// whose base64 payload claims the service_role.
+const leaked = [];
+for (const [file, src] of Object.entries({ ...js, 'index.html': html,
+                                           'netlify.toml': toml })) {
+  for (const m of src.matchAll(/eyJ[A-Za-z0-9_-]{10,}\.([A-Za-z0-9_-]{10,})/g)) {
+    let claims = '';
+    try { claims = Buffer.from(m[1], 'base64url').toString('utf8'); } catch (e) { /* not a JWT */ }
+    if (/service_role/.test(claims)) leaked.push(file);
+  }
+}
+check('no service_role key is committed anywhere', leaked.length === 0, leaked);
+
 console.log('\n' + (fails ? fails + ' FAILURE(S)' : 'all checks passed'));
 process.exit(fails ? 1 : 0);

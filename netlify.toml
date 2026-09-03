@@ -2,6 +2,18 @@
 [build]
   publish = "."
 
+[build.environment]
+  # Netlify's secret scanner fails the build if it finds the value of ANY
+  # environment variable in the repo. SUPABASE_URL is in js/config.js on
+  # purpose — it is the address the browser talks to, so it ships with the
+  # app and cannot be secret. Same for SUPABASE_ANON_KEY, which only ever
+  # grants what the RLS policies allow.
+  #
+  # SUPABASE_SERVICE_ROLE_KEY is deliberately NOT listed here. That one
+  # bypasses every RLS policy, must never appear in the repo, and the
+  # scanner catching it would be a genuine save rather than a nuisance.
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL,SUPABASE_ANON_KEY"
+
 # Email notifications. One function, called by a Supabase Database Webhook
 # on new notification rows. Does nothing until its environment variables are
 # set — see README 4.7.

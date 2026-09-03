@@ -10,9 +10,53 @@ Amounts are in **INR (₹)** throughout.
 
 ---
 
+## Before you start
+
+This repo is the whole application. It has no build step, so there is nothing
+to compile — but it is **not** usable straight from a clone, because it needs
+a database of its own. Budget about twenty minutes.
+
+**You will need**
+
+| | Why | Cost |
+|---|---|---|
+| A [Supabase](https://supabase.com) account | Database, login, file storage | Free tier is enough |
+| A [Netlify](https://netlify.com) account | Hosting | Free tier is enough |
+| `git` | Cloning this repo | — |
+| Node 18+ | Only to run the tests. The app itself needs no Node | — |
+| The [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started) | Strongly recommended — applying a 2,000-line schema by pasting it into a browser is how a half-applied schema happens | Free |
+
+**The shortest path that actually works**
+
+```bash
+git clone https://github.com/sdukesameer/SplittyWise
+cd SplittyWise
+
+# 1. Create a Supabase project in the dashboard, then:
+supabase login
+supabase link --project-ref YOUR-PROJECT-REF
+./scripts/db apply          # creates every table, policy and function
+./scripts/db audit          # 16 checks, every one must read PASS
+
+# 2. Put YOUR project's URL and anon key in js/config.js  (section 3)
+# 3. Set the auth redirect URLs in the dashboard             (section 4.1)
+# 4. Serve it and sign up
+python3 -m http.server 8000
+```
+
+Then deploy to Netlify (section 6). Sections 2 and 4 explain each step and
+what to check.
+
+> **`js/config.js` is committed with the original author's project URL and
+> anon key.** The app will appear to work and write into somebody else's
+> database. **Replace both values before you sign up** — section 3.
+
+---
+
 ## Contents
 
-1. [What works today](#1-what-works-today)
+- [Before you start](#before-you-start)
+1. [What it does](#1-what-it-does)
 2. [Set up Supabase](#2-set-up-supabase)
 3. [Connect the app](#3-connect-the-app)
 4. [Configure authentication](#4-configure-authentication)
@@ -23,15 +67,15 @@ Amounts are in **INR (₹)** throughout.
 9. [Verify it works](#9-verify-it-works)
 10. [Troubleshooting](#10-troubleshooting)
 11. [How it is put together](#11-how-it-is-put-together)
+- [Appendix: upgrading an older copy](#appendix-upgrading-an-older-copy)
 
 ---
 
-## 1. What works today
+## 1. What it does
 
-**All 10 phases are complete.** Sign up, log in, log out, email
-confirmation and password reset all work end to end. Signing in lands on the
-app shell: four tabs (Friends, Groups, Activity, Account), a bell with an
-unread count, and the Add-expense button.
+Sign up, log in, log out, email confirmation and password reset all work end
+to end. Signing in lands on the app shell: four tabs (Friends, Groups,
+Activity, Account), a bell with an unread count, and the Add-expense button.
 
 Add friends by email, create groups, add an expense and split it equally or
 by exact amounts, see who owes whom, and settle up with partial payments.
@@ -103,15 +147,17 @@ Seventeen suites, no database and no browser needed:
 | `autofill.test.js` | The one split figure that has to follow from the others — and every case where it must keep its hands off — plus ordinal days |
 | `wiring.test.js` | That the app is actually connected: every RPC exists with the arguments passed, every column selected exists, every button has a handler, every screen can render, every CSS token is defined at the base, the accessibility floor holds, the offline shell is complete, and nothing is labelled as destructive without something behind it |
 
-The full database — 8 tables, 27 row-level-security policies, 6 write RPCs — is
-already in `supabase/schema.sql` and supports every later phase.
+The whole database is one file: `supabase/schema.sql` — 16 tables, 51
+row-level-security policies, 21 write and read functions, 8 private RLS
+helpers, 6 triggers and 23 indexes, about 2,000 lines. It is written to be
+re-run: applying it twice is the same as applying it once.
 
 ---
 
 ## 2. Set up Supabase
 
 You can do all of this in the dashboard, or from the command line with the
-Supabase CLI. **If you have the CLI, use it** — applying an 1,800-line schema
+Supabase CLI. **If you have the CLI, use it** — applying a 2,000-line schema
 by pasting it into a browser is how a half-applied schema happens.
 
 ### With the CLI
@@ -164,10 +210,18 @@ second environment to keep in step: apply the schema with
 `js/config.js` at the local URL and anon key that `supabase status` prints.
 Remember to point it back.
 
+### Creating the project
+
+If you have not made one yet: [supabase.com/dashboard](https://supabase.com/dashboard)
+→ **New project**. Pick any name, pick the region closest to you, and **write
+the database password down** — you need it to link the CLI, and it is only
+shown once. The project takes a minute or two to provision.
+
+Leave it completely empty. The next step fills it in.
+
 ### In the dashboard
 
-You said you already created an empty project named **Splittywise**. These steps
-fill it in.
+Everything the CLI does can be done by hand instead.
 
 #### 2.1 Run the schema
 
@@ -207,18 +261,22 @@ select table_name from information_schema.tables
 where table_schema = 'public' order by table_name;
 ```
 
-Expect exactly these eight:
+Expect exactly these sixteen:
 
 ```
-expense_splits
-expenses
-friendships
-group_members
-groups
-notifications
-profiles
-settlements
+expense_comments      groups
+expense_history       invites
+expense_payers        nicknames
+expense_splits        notifications
+expenses              profiles
+friendships           recurring_expenses
+group_members         settlements
+                      split_presets
+                      user_categories
 ```
+
+Anything **extra** is left over from something else and worth looking at —
+audit check 13 flags it for you.
 
 Then confirm row-level security is switched on for all of them — this is the
 single most important check in the whole setup:
@@ -228,8 +286,8 @@ select tablename, rowsecurity from pg_tables
 where schemaname = 'public' order by tablename;
 ```
 
-**Every row must read `true`.** If any says `false`, your data is readable by any
-signed-in user. Re-run the schema.
+**Every row must read `true`.** If any says `false`, that table is readable by
+any signed-in user. Re-run the schema.
 
 #### 2.3 Confirm realtime is on
 
@@ -251,7 +309,7 @@ supabase/rls-audit.sql
 ```
 
 Paste it into the SQL Editor and run it. **Every result column must say
-`PASS`.** It checks that RLS is on for all eight tables, that each has
+`PASS`.** It checks that RLS is on for every table, that each has
 policies, that security-definer functions pin `search_path`, that the
 image buckets are private, that clients cannot write notifications for
 other people, and that every expense's splits sum to its total.
@@ -304,6 +362,9 @@ roughly a 40 KB avatar that looks identical at the size it is shown.
 
 #### Deleting the old receipts bucket
 
+*Skip this on a fresh setup — there is nothing to delete.* See also
+[Appendix: upgrading an older copy](#appendix-upgrading-an-older-copy).
+
 If you ran an earlier version, a `receipts` bucket may still be there with
 files in it. **The schema cannot remove it** — Supabase refuses a direct
 `delete` from the storage tables, to stop a bucket being orphaned from its
@@ -331,6 +392,12 @@ reminder still appears afterwards, the bucket is still there.
 ---
 
 ## 3. Connect the app
+
+**This step is mandatory, not configuration polish.** `js/config.js` is
+committed with a working URL and anon key belonging to the original author's
+project. Until you replace them, the app runs and looks fine while reading and
+writing somebody else's database — and their RLS policies will let you create
+an account there.
 
 1. In Supabase, go to **Project Settings** (gear icon, bottom of sidebar) → **API**.
 2. Copy two values:
@@ -375,15 +442,18 @@ one per line:
 
 ```
 http://localhost:8000/**
-https://splittywise.netlify.app/**
+https://your-site-name.netlify.app/**
 ```
 
 The `/**` wildcard matters — the password-reset link returns to `/#/reset`, and
 without the wildcard Supabase rejects it and dumps the user on the Site URL with
 no session.
 
-> Replace `splittywise.netlify.app` with your real Netlify domain if it differs —
-> Netlify sometimes appends a suffix when a name is taken.
+> You will not know your Netlify URL until you have deployed once (section 6),
+> so add the `localhost` line now and come back for the other after deploying —
+> that is what [section 7](#7-point-supabase-at-your-live-url) is for. Netlify
+> appends a suffix when a site name is already taken, so use the URL its
+> dashboard actually shows rather than the one you asked for.
 
 ### 4.2 Email confirmation — pick one
 
@@ -416,12 +486,13 @@ Same page. Set **Minimum password length** to `8`, matching the app's own check.
 Under **Authentication → Emails → Templates** you can rebrand the **Confirm
 signup** and **Reset password** messages. The defaults work fine — just know
 that Supabase's shared sending domain means the first mail to anyone will
-probably land in spam. As you said, texting them to check spam is a fine
-workaround at this scale.
+probably land in spam. At the scale of a few friends, texting them to check
+their spam folder is a perfectly good workaround.
 
-If it ever becomes a nuisance, **Project Settings → Authentication → SMTP
-Settings** accepts a free Resend or Brevo account and fixes deliverability
-properly.
+If it becomes a nuisance, **Project Settings → Authentication → SMTP
+Settings** accepts a free Brevo or Resend account and fixes deliverability
+properly. That is separate from the notification email in 4.7, though the
+same Brevo account can serve both.
 
 ### 4.6 Where email cannot help
 
@@ -445,6 +516,9 @@ The API key lives in Netlify's environment, never in the database.
 mail to come from. Brevo emails you a confirmation link for it. Then
 **SMTP & API → API Keys → Generate a new API key**.
 
+**Do this after section 6**, since it needs a deployed site to receive the
+webhook.
+
 **2. Set the variables** in Netlify under **Site configuration →
 Environment variables**:
 
@@ -460,6 +534,11 @@ Environment variables**:
 
 Redeploy after setting them.
 
+> Setting `SUPABASE_URL` makes Netlify's secret scanner fail the build,
+> because that value is also in `js/config.js` — where it belongs.
+> `netlify.toml` already exempts it; see
+> [If the build fails on "Secrets scanning found secrets"](#if-the-build-fails-on-secrets-scanning-found-secrets).
+
 **3. Point Supabase at it.** In the dashboard, **Database → Webhooks →
 Enable webhooks**, then **Create a new hook**:
 
@@ -468,6 +547,28 @@ Enable webhooks**, then **Create a new hook**:
 - Type: **HTTP Request**, method **POST**
 - URL: `https://your-site.netlify.app/.netlify/functions/notify-email`
 - HTTP Headers: add `x-webhook-secret` with the same value as `WEBHOOK_SECRET`
+
+> **Insert only — do not tick Update or Delete.** It is a natural thing to
+> assume that Update means "also tell me when something changes", but the
+> event is about the *notification row*, not the expense. A notification's
+> text never changes once written; the only `update` one ever receives is
+> `mark_all_notifications_read()` flipping `is_read`. So ticking Update
+> means every unread row fires the webhook the moment you open the Activity
+> tab — sixty unread notifications, sixty function invocations, nothing to
+> say in any of them.
+>
+> An expense being **edited** does still reach you, because editing writes a
+> brand new notification row (type `expense_updated`) and that is an Insert.
+>
+> If it is already ticked, untick it. The function refuses non-Insert events
+> anyway — correctness there does not depend on getting this checkbox right —
+> but the wasted invocations count against your Netlify quota.
+
+**Want emails for edits and comments too?** `expense_updated`,
+`expense_deleted` and `comment` are left out of `WORTH_AN_EMAIL` in
+`netlify/functions/notify-email.mjs` on purpose — an app that emails on every
+event trains people to filter it. Add them to that set if you disagree; the
+per-type switches in the app then govern them like everything else.
 
 **4. Turn it on** in the app: **Account → Notifications → Email me the
 important ones**.
@@ -519,19 +620,39 @@ step 4.1, or add your port there too.
 
 ## 6. Deploy to Netlify
 
-You already created the **Splittywise** site. To connect it to this repo:
-
-1. Push this repo to GitHub.
-2. In Netlify, open your site → **Site configuration → Build & deploy →
-   Continuous deployment** → **Link repository**.
-3. Pick this GitHub repo and the `main` branch.
-4. Settings — `netlify.toml` in this repo already declares them, so leave them alone:
+1. Push your copy of this repo to GitHub.
+2. In Netlify: **Add new site → Import an existing project → GitHub**, and
+   pick the repo and the `main` branch.
+3. Settings — `netlify.toml` in this repo already declares them, so leave the
+   fields alone:
    - **Build command**: *(empty)*
    - **Publish directory**: `.`
-5. **Deploy site**.
+4. **Deploy site**.
 
 Deploys take a few seconds; there is nothing to compile. Every push to `main`
 redeploys automatically.
+
+### If the build fails on "Secrets scanning found secrets"
+
+Netfliy fails a build if it finds the **value** of any environment variable
+anywhere in your repo. `js/config.js` contains your Supabase URL and anon key
+by design — they are the address the browser talks to and the key it talks
+with, so they ship with the app. If you also set either as an environment
+variable (section 4.7 asks for `SUPABASE_URL`), the scanner sees the same
+string in both places and stops the build.
+
+`netlify.toml` already handles this:
+
+```toml
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL,SUPABASE_ANON_KEY"
+```
+
+**`SUPABASE_SERVICE_ROLE_KEY` is deliberately not on that list.** That key
+bypasses every RLS policy, must never appear in the repo, and the scanner
+catching it would be a genuine save rather than a nuisance. If a build ever
+fails naming *that* key, do not add it to the list — find and remove the
+value, and rotate the key in Supabase.
 
 ### Alternative: drag and drop
 
@@ -545,15 +666,21 @@ it. Fine for a quick look, but you lose auto-deploy on push.
 **Do not skip this.** Auth links generated for `localhost` will not work on your
 phone.
 
-Back in **Authentication → URL Configuration**:
+Netlify gives the site a URL as soon as it deploys — something like
+`https://your-site-name.netlify.app`, shown at the top of the site's
+dashboard. Copy it, then back in Supabase under **Authentication → URL
+Configuration**:
 
-- Change **Site URL** to `https://splittywise.netlify.app`
+- Change **Site URL** to your Netlify URL
 - Keep **both** entries in Redirect URLs, so local development still works:
 
 ```
 http://localhost:8000/**
-https://splittywise.netlify.app/**
+https://your-site-name.netlify.app/**
 ```
+
+The `/**` matters: it is what lets a confirmation link land on a specific
+route rather than only the home page.
 
 ---
 
@@ -570,8 +697,8 @@ signal (the app shell is cached; balances need a connection to refresh).
 4. Tap **Add**.
 
 iOS never shows an install prompt of its own, so the app displays a hint
-banner after a couple of seconds instead. This manual route is the only one,
-and it is the same flow as your MyExpenseTracker.
+banner after a couple of seconds instead. This manual route is the only one
+Safari offers.
 
 ### Android
 
@@ -603,11 +730,14 @@ Run through this once after deploying. Every step should pass.
 | 9 | Set a new password | *"Password updated"*, lands in the app |
 | 10 | Log in with the **old** password | Rejected |
 | 11 | Log in with the **new** password | Works |
+| 12 | Add a friend by email, create a group, add an expense | Balances appear in red (you owe) or green (you are owed) |
+| 13 | Open the bell | Your own action is listed, with no unread badge for it |
+| 14 | Turn off wifi and add an expense | Queues on the device, and syncs when the connection returns |
 
 ### Confirm your data is actually private
 
-The point of RLS is that it holds even against someone bypassing the app. After
-phase 3 you will have real data to test with; the check is:
+The point of RLS is that it holds even against someone bypassing the app
+entirely. Add one expense first so there is something to hide, then:
 
 1. Sign up a second account in a private window.
 2. From that second account, query the first account's expenses directly:
@@ -816,6 +946,41 @@ address without exposing the table.
 
 ---
 
+## Appendix: upgrading an older copy
+
+Everything here is irrelevant on a fresh setup. It matters only if you have
+been running SplittyWise for a while and are pulling a newer version.
+
+**Always re-apply the schema after pulling.**
+
+```bash
+git pull
+./scripts/db apply
+./scripts/db audit          # 16 checks, every one must read PASS
+```
+
+The schema is a single re-runnable file rather than a migration chain, so
+this is the whole upgrade. It drops and recreates any function whose
+signature changed, adds columns `if not exists`, and drops each policy
+before creating it.
+
+**Hard-reload the app afterwards.** The service worker pins the old shell
+until its cache version changes and every tab is closed. On iOS Safari, close
+every tab showing the site — a background tab is enough to keep the old
+worker alive.
+
+Two changes needed a hand:
+
+| Change | What to do |
+|---|---|
+| The `receipts` bucket is gone — receipts are read on the device and the image is discarded | `./scripts/db empty-receipts`, then delete the bucket in the dashboard. [Details](#deleting-the-old-receipts-bucket) — Supabase refuses to let SQL delete a bucket |
+| `groups.settle_up_on` (one fixed date) became `groups.settle_up_day` (a day of the month, reminded monthly) | Nothing. The schema copies the day across and drops the old column |
+
+If a `git pull` brings a new `sw.js` cache version, that is deliberate — it
+is how a stale shell is thrown away.
+
+---
+
 ## The one thing still outstanding
 
 Balances are derived from the whole ledger on the device, which is why they
@@ -835,25 +1000,28 @@ The soft-delete filter (`deleted_at is null`) and the per-user index on it
 are already in place, so the query that summarisation would replace is at
 least the right shape.
 
-## Roadmap
+## What was built, in order
 
-All fifteen phases are complete.
+Kept as a record of how the app was put together, and as a map of where each
+piece of behaviour lives.
 
-| Phase | | Status |
+| | | Where |
 |---|---|---|
-| 0 | Data model, RLS, app icon | Done |
-| 1 | Auth — signup, login, reset | Done |
-| 2 | Shell, tab bar, theming, Account tab | Done |
-| 3 | Friends and balances | Done |
-| 4 | Groups | Done |
-| 5 | Expenses, splits, edit, delete | Done |
-| 6 | Settle up, debt simplification | Done |
-| 7 | Itemised receipt scanning | Done |
-| 8 | Charts, search, CSV export | Done |
-| 9 | PWA install, offline, realtime notifications | Done |
-| 10 | Deploy hardening, CSP, security audit | Done |
-| 11 | Five split modes, per-person include toggles | Done |
-| 12 | Ad-hoc people picker, multiple payers, invite link | Done |
-| 13 | Notes, group rename/delete, cover photo, whiteboard | Done |
-| 14 | Activity detail, settled-history collapse, nudges | Done |
-| 15 | Per-group export, friend charts, chart navigator | Done |
+| Data model, RLS, app icon | | `supabase/schema.sql`, `icons/` |
+| Auth — signup, login, reset | | `js/auth.js` |
+| Shell, tab bar, theming, Account tab | | `js/shell.js`, `js/theme.js` |
+| Friends and balances | | `js/friends.js`, `js/balances.js` |
+| Groups | | `js/groups.js`, `js/groupsettings.js` |
+| Expenses, splits, edit, delete | | `js/expense.js` |
+| Settle up, debt simplification | | `js/settle.js`, `simplifyDebts()` |
+| Itemised receipt scanning | | `js/scan.js` |
+| Charts, search, CSV export | | `js/insights.js`, `js/search.js` |
+| PWA install, offline, realtime | | `js/pwa.js`, `js/outbox.js`, `js/realtime.js`, `sw.js` |
+| Deploy hardening, CSP, audit | | `netlify.toml`, `supabase/rls-audit.sql` |
+| Five split modes | | `computeSplit()` in `js/balances.js` |
+| Multiple payers, invite links | | `js/expense.js`, `js/invite.js` |
+| Notes, cover photos, whiteboard | | `js/groupsettings.js`, `js/image.js` |
+| Nudges, settled-history collapse | | `js/friends.js`, `js/shell.js` |
+| Recurring expenses, trash, categories | | `js/recurring.js`, `js/trash.js`, `js/categories.js` |
+| Voice entry, app lock | | `js/voice.js`, `js/lock.js` |
+| Monthly settle-up day, self-notifications, email | | `run_due_settle_reminders()`, `netlify/functions/` |
