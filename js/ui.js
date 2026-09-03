@@ -167,9 +167,35 @@ window.SW = window.SW || {};
   // schema so a throwing render loop cannot write thousands of rows.
   const reported = {};
 
+  // Browser extensions run in the page and throw in the page, so their
+  // failures arrive at our handlers looking like ours. One wrapping fetch
+  // filled the Failures tab with "Cannot read properties of undefined
+  // (reading 'M_ID')" from files that do not exist in this repo. A report we
+  // cannot act on is worse than no report: it buries the ones we can.
+  const OUR_FILES = /^(app|index|charthover|theme|config|db|outbox|image|ui|auth|balances|shell|emoji|invite|friends|scan|expense|groups|settle|celebrate|groupsettings|recurring|categories|trash|voice|lock|insights|search|realtime|pwa|admin)\.js$/;
+
+  function ours(source) {
+    if (!source) return null;               // no file named: cannot tell
+    return OUR_FILES.test(String(source).split('/').pop().split('?')[0]);
+  }
+
   SW.reportError = function (message, source, extra) {
     const msg = String(message || 'unknown').slice(0, 500);
     if (!SW.user || !SW.db) return;
+
+    // A named file that is not one of ours is somebody else's code.
+    if (ours(source) === false) return;
+
+    // Unattributed rejections are the hard case: an extension's promise
+    // failure has no file at all. Anything mentioning a stack frame from a
+    // file we do not ship is theirs.
+    const stack = (extra && extra.stack) || '';
+    if (stack && /\b(?:requests|200|background|content[-_]?script|inject)\.js\b/.test(stack)) {
+      return;
+    }
+    if (/chrome-extension:|moz-extension:|safari-web-extension:/.test(stack + msg)) {
+      return;
+    }
 
     // The same message twice in a session is one bug, not two.
     if (reported[msg]) return;

@@ -72,3 +72,20 @@ export async function sendMail({ to, name, subject, html, text }) {
   }
   return { ok: true };
 }
+
+// The site's real address, taken from the request rather than trusted from
+// configuration. APP_URL set to the README's example — your-site.netlify.app
+// — produced emails whose links went nowhere, and nothing could detect that.
+// A configured value still wins when it looks like a real URL, so a custom
+// domain keeps working.
+export function siteUrl(request) {
+  const configured = String(process.env.APP_URL || '').trim().replace(/\/+$/, '');
+  const looksReal = /^https?:\/\//.test(configured) &&
+    !/your-site|example\.com|YOUR-|localhost/i.test(configured);
+  if (looksReal) return configured;
+  try {
+    return new URL(request.url).origin;
+  } catch (e) {
+    return configured || '';
+  }
+}

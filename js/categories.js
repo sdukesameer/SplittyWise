@@ -156,6 +156,9 @@ window.SW = window.SW || {};
               '<label for="cat-name">Name</label>' +
               '<input class="input" id="cat-name" type="text" maxlength="40" value="' +
                 esc(entry.name) + '">' +
+              '<span class="hint">Renaming it moves your existing expenses ' +
+                'across too, so your charts stay in one piece. Expenses other ' +
+                'people entered keep the old name.</span>' +
             '</div>' +
             '<div class="field">' +
               '<label for="cat-emoji">Icon</label>' +
@@ -181,6 +184,7 @@ window.SW = window.SW || {};
       },
       onOpen: function () { document.getElementById('cat-budget').focus(); },
       onConfirm: async function (btn) {
+        let moved = 0;
         const budget = parseRupees(document.getElementById('cat-budget').value);
         const nameField = document.getElementById('cat-name');
         const name = nameField ? nameField.value.trim() : entry.name;
@@ -197,8 +201,22 @@ window.SW = window.SW || {};
           if (!budget && !entry.custom) {
             ({ error } = await db.from('user_categories').delete().eq('id', entry.id));
           } else {
+            // A rename goes through the RPC, which also moves your existing
+            // expenses onto the new name. Writing the column directly would
+            // rename the category and leave the history behind it.
+            if (name !== entry.name) {
+              const { data, error: renameErr } = await db.rpc('rename_category', {
+                p_old: entry.name, p_new: name,
+              });
+              if (renameErr) {
+                SW.busy(btn, false);
+                SW.setError('cat-error', renameErr.message.replace(/^.*?:\s*/, ''));
+                return false;
+              }
+              moved = (data && data.expenses) || 0;
+            }
             ({ error } = await db.from('user_categories')
-              .update({ name: name, emoji: emoji, budget_paise: budget })
+              .update({ emoji: emoji, budget_paise: budget })
               .eq('id', entry.id));
           }
         } else if (budget) {
@@ -221,7 +239,12 @@ window.SW = window.SW || {};
 
         await SW.refreshLedger();
         render();
-        SW.toast(budget ? 'Cap set to ' + SW.money(budget) : 'Cap removed', 'ok');
+        SW.toast(
+          name !== entry.name
+            ? 'Renamed to ' + name +
+              (moved ? ' · ' + moved + (moved === 1 ? ' expense moved' : ' expenses moved') : '')
+            : (budget ? 'Cap set to ' + SW.money(budget) : 'Cap removed'),
+          'ok');
         return true;
       },
       onClose: function () { /* nothing to restore */ },

@@ -490,13 +490,28 @@ HaveIBeenPwned. It is off by default and it is the one thing
 
 Same page. Set **Minimum password length** to `8`, matching the app's own check.
 
-### 4.5 Email templates (optional)
+### 4.5 Email templates
 
-Under **Authentication → Emails → Templates** you can rebrand the **Confirm
-signup** and **Reset password** messages. The defaults work fine — just know
-that Supabase's shared sending domain means the first mail to anyone will
-probably land in spam. At the scale of a few friends, texting them to check
-their spam folder is a perfectly good workaround.
+Four ready to paste are in **`supabase/email-templates/`**, with a README of
+their own explaining the constraints — inline styles only, light colours
+stated explicitly, and the link repeated as text because some clients strip
+the button.
+
+| File | Template in Supabase |
+|---|---|
+| `confirm-signup.html` | Confirm signup |
+| `reset-password.html` | Reset password |
+| `change-email.html` | Change email address |
+| `invite.html` | Invite user |
+
+Paste each into **Authentication → Emails → Templates**. A Supabase template
+is delivered exactly as written, so do not leave HTML comments in one — they
+go out with the mail.
+
+The defaults work too — just know that Supabase's shared sending domain means
+the first mail to anyone will probably land in spam. At the scale of a few
+friends, texting them to check their spam folder is a perfectly good
+workaround.
 
 If it becomes a nuisance, **Project Settings → Authentication → SMTP
 Settings** accepts a free Brevo or Resend account and fixes deliverability
@@ -539,7 +554,7 @@ Environment variables**:
 | `EMAIL_FROM` | The sender address you verified |
 | `EMAIL_FROM_NAME` | `SplittyWise` |
 | `WEBHOOK_SECRET` | Any long random string — `openssl rand -hex 32` |
-| `APP_URL` | `https://your-site.netlify.app`, so the email can link straight to the expense |
+| `APP_URL` | *Optional.* Only needed for a custom domain — the function otherwise takes the site's address from the request it was called on, so a wrong or missing value cannot produce a broken link. Setting it to the example above is worse than leaving it unset |
 
 Redeploy after setting them.
 

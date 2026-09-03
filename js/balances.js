@@ -960,7 +960,11 @@ window.SW = window.SW || {};
     // failure here left no trace anywhere at all.
     let res;
     try {
-      res = await db.storage.from('avatars').createSignedUrls(wanted, SIGNED_FOR);
+      // SW.db, not `db`: the local `db` belongs to loadLedger's scope. Using
+      // the bare name here threw "db is not defined" on every call, and the
+      // only reason that surfaced at all is that this function reports its
+      // own failures.
+      res = await SW.db.storage.from('avatars').createSignedUrls(wanted, SIGNED_FOR);
     } catch (err) {
       res = { data: null, error: err };
     }

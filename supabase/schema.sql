@@ -1982,6 +1982,54 @@ create policy covers_delete on storage.objects
     and (storage.foldername(name))[1] = (select auth.uid())::text
   );
 
+-- Renaming a category.
+--
+-- Expenses store their category as plain text, which is what lets a category
+-- be deleted without migrating anything — but it also means a rename would
+-- leave every existing expense pointing at a name that no longer exists.
+-- Their charts would quietly split in two: some spending under the old name,
+-- the rest under the new one.
+--
+-- So the rename carries them. Scoped to expenses the caller created, because
+-- expenses.category is one shared column: renaming your own "Groceries" to
+-- "Food" must not relabel an expense somebody else entered.
+create or replace function public.rename_category(p_old text, p_new text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  me      uuid := auth.uid();
+  old_nm  text := trim(p_old);
+  new_nm  text := trim(p_new);
+  moved   int;
+begin
+  if me is null then raise exception 'Not signed in.'; end if;
+  if new_nm = '' then raise exception 'A category needs a name.'; end if;
+  if old_nm = new_nm then return jsonb_build_object('ok', true, 'expenses', 0); end if;
+
+  if exists (select 1 from public.user_categories
+             where user_id = me and lower(name) = lower(new_nm)
+               and lower(name) <> lower(old_nm)) then
+    raise exception 'You already have a category called %.', new_nm;
+  end if;
+
+  update public.user_categories
+     set name = new_nm
+   where user_id = me and name = old_nm;
+
+  if not found then raise exception 'No category called %.', old_nm; end if;
+
+  update public.expenses
+     set category = new_nm, updated_at = now()
+   where created_by = me and category = old_nm and deleted_at is null;
+  get diagnostics moved = row_count;
+
+  -- Any budget on the old name follows it, and recurring rules too.
+  update public.recurring_expenses
+     set category = new_nm
+   where created_by = me and category = old_nm;
+
+  return jsonb_build_object('ok', true, 'expenses', moved, 'name', new_nm);
+end $$;
+
 -- ============================================================================
 --  11b. UNDOING A PAYMENT
 --
@@ -2678,6 +2726,7 @@ grant execute on function public.update_expense(
 -- Admin functions. Every one refuses a non-admin caller on its first line,
 -- so granting them to `authenticated` is safe: what stops a normal user is
 -- the check inside, not the grant.
+grant execute on function public.rename_category(text, text)               to authenticated;
 grant execute on function public.undo_settlement(uuid)                     to authenticated;
 
 grant execute on function public.admin_stats()                             to authenticated;

@@ -1152,6 +1152,77 @@ check('/admin is inside the manifest scope',
     return scope === '/' || scope === './' || '/admin'.indexOf(scope) === 0;
   })());
 
+/* ---------------- 33. this round's fixes ---------------- */
+
+console.log('\n--- scope, links and categories ---');
+
+// `db` is declared inside SW.loadLedger, so a sibling function using the
+// bare name throws ReferenceError. Every avatar signing attempt did, and it
+// only surfaced because that function reports its own failures.
+const balances = js['js/balances.js'];
+// Braces are counted on the comment- and string-stripped source. Counting
+// them on the raw text ran off the end — a `{` inside a string literal never
+// balances — so llEnd stayed at the file length, the avatar code was treated
+// as being INSIDE loadLedger, and this check silently tested nothing.
+const balancesCode = codeOnly(balances);
+const llStart = balancesCode.indexOf('SW.loadLedger =');
+let depth = 0, llEnd = -1;
+for (let i = llStart; i < balancesCode.length; i++) {
+  if (balancesCode[i] === '{') depth++;
+  else if (balancesCode[i] === '}') { depth--; if (depth === 0) { llEnd = i; break; } }
+}
+check('loadLedger’s extent could be found at all', llStart > -1 && llEnd > llStart,
+  { llStart, llEnd });
+const outside = balancesCode.slice(0, llStart) + balancesCode.slice(llEnd);
+check('no bare `db.` outside loadLedger, where it is declared',
+  !/(^|[^.\w])db\./.test(outside),
+  (outside.match(/(^|[^.\w])db\.\w+/g) || []).slice(0, 4));
+check('avatar signing goes through SW.db',
+  /SW\.db\.storage\.from\('avatars'\)/.test(balances));
+
+// APP_URL set to the README's own example shipped emails linking to
+// your-site.netlify.app, and nothing could detect that.
+const mailLib = fs.readFileSync('netlify/lib/mail.mjs', 'utf8');
+check('the site URL is taken from the request, not trusted from config',
+  /export function siteUrl/.test(mailLib) && /new URL\(request\.url\)\.origin/.test(mailLib));
+check('and a placeholder value is rejected',
+  /your-site\|example\\\.com\|YOUR-\|localhost/.test(mailLib));
+check('both mail functions use it',
+  /siteUrl\(request\)/.test(fs.readFileSync('netlify/functions/notify-email.mjs', 'utf8')) &&
+  /siteUrl\(request\)/.test(fs.readFileSync('netlify/functions/email-test.mjs', 'utf8')));
+
+// Expenses store their category as text, so a rename that only touched
+// user_categories would split somebody's charts in two.
+check('renaming a category moves the expenses with it',
+  /function public\.rename_category/.test(schema) &&
+  /update public\.expenses\s*\n\s*set category = new_nm/.test(schema));
+check('and only the ones you entered',
+  /where created_by = me and category = old_nm/.test(schema));
+check('the editor uses the RPC rather than writing the column',
+  /rpc\('rename_category'/.test(js['js/categories.js']) &&
+  !/update\(\{ name: name, emoji/.test(js['js/categories.js']));
+
+// An extension throwing in the page arrives at our handlers looking like
+// ours, and filled the Failures tab with reports from files we do not ship.
+check('foreign errors are not reported as ours',
+  /OUR_FILES/.test(js['js/ui.js']) && /chrome-extension:/.test(js['js/ui.js']));
+check('and an error from one of our files still is',
+  /ours\(source\) === false/.test(js['js/ui.js']));
+
+check('the login email can be changed',
+  /id="row-email"/.test(html) && /auth\.updateUser\(\{ email/.test(js['js/shell.js']));
+
+// A Supabase template is delivered verbatim, so a comment in one is mailed.
+const templates = fs.readdirSync('supabase/email-templates')
+  .filter(f => f.endsWith('.html'));
+check('there are auth email templates to paste', templates.length === 4, templates);
+const dirty = templates.filter(f => {
+  const t = fs.readFileSync('supabase/email-templates/' + f, 'utf8');
+  return /<!--/.test(t) || /<style/.test(t) || !/\{\{\s*\.ConfirmationURL\s*\}\}/.test(t);
+});
+check('each is clean HTML with the confirmation link', dirty.length === 0, dirty);
+
+
 // A ReferenceError partway through printed a page of PASSes and then died
 // before this line, which reads like a quiet success unless you notice the
 // exit code. So the file counts its own check() calls and refuses to report

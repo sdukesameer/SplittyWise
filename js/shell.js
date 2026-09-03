@@ -536,6 +536,62 @@ window.SW = window.SW || {};
     });
   }
 
+  /* ---- your login email ---- */
+  //
+  // This is the address you sign in with, so it lives in auth.users, not in
+  // profiles — changing it needs the auth API and a confirmation to the new
+  // address. It used to be an inert row with no explanation, which read as
+  // something broken rather than something deliberate.
+
+  document.getElementById('row-email').addEventListener('click', function () {
+    const current = (SW.user && SW.user.email) || '';
+
+    SW.sheet({
+      title: 'Your email',
+      body:
+        '<p style="color:var(--muted);font-size:14.5px">This is what you sign ' +
+          'in with, and how friends find you. Changing it sends a ' +
+          'confirmation link to the <strong style="color:var(--text)">new</strong> ' +
+          'address — the change only happens once you open it, so a typo ' +
+          'cannot lock you out.</p>' +
+        '<div class="field" style="margin-top:12px">' +
+          '<label for="em-input">Email</label>' +
+          '<input class="input" id="em-input" type="email" inputmode="email" ' +
+                 'autocapitalize="off" autocomplete="email" spellcheck="false" ' +
+                 'value="' + esc(current) + '">' +
+          '<span class="hint">People who already have you as a friend stay ' +
+            'connected — friendships are by account, not by address.</span>' +
+          '<div class="field-error" id="em-error"></div>' +
+        '</div>',
+      confirm: 'Send the confirmation',
+      onConfirm: async function (btn) {
+        const value = document.getElementById('em-input').value.trim().toLowerCase();
+        if (!SW.isEmail(value)) {
+          SW.setError('em-error', 'That does not look like an email address.');
+          return false;
+        }
+        if (value === current.toLowerCase()) {
+          SW.setError('em-error', 'That is already your address.');
+          return false;
+        }
+
+        SW.busy(btn, true);
+        const { error } = await db.auth.updateUser({ email: value });
+        SW.busy(btn, false);
+
+        if (error) {
+          SW.setError('em-error', /already/i.test(error.message)
+            ? 'Another account already uses that address.'
+            : error.message);
+          return false;
+        }
+
+        SW.toast('Confirmation sent to ' + value + ' — open it to finish', 'ok');
+        return true;
+      },
+    });
+  });
+
   /* ---- your photo ---- */
 
   const photoFile = document.getElementById('photo-file');

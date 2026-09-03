@@ -14,7 +14,7 @@
 //  in the request, so this cannot be turned into a way to mail strangers.
 // ---------------------------------------------------------------------------
 
-import { sendMail, shell, mailConfigured } from '../lib/mail.mjs';
+import { sendMail, shell, mailConfigured, siteUrl } from '../lib/mail.mjs';
 
 export default async (request) => {
   if (request.method !== 'POST') return json({ error: 'POST only' }, 405);
@@ -22,7 +22,7 @@ export default async (request) => {
   const bearer = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
   if (!bearer) return json({ error: 'Not signed in' }, 401);
 
-  const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, APP_URL } = process.env;
+  const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY } = process.env;
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     return json({ error: 'This deploy is not configured for email. See README 4.7.' }, 501);
   }
@@ -45,7 +45,7 @@ export default async (request) => {
   const me = await who.json();
   if (!me || !me.email) return json({ error: 'Could not identify you' }, 401);
 
-  const appUrl = (APP_URL || '').replace(/\/+$/, '');
+  const appUrl = siteUrl(request);
   const sent = await sendMail({
     to: me.email,
     subject: 'SplittyWise email notifications are working',

@@ -28,7 +28,7 @@
 //  most one email per person every fifteen minutes.
 // ---------------------------------------------------------------------------
 
-import { sendMail, shell } from '../lib/mail.mjs';
+import { sendMail, shell, siteUrl } from '../lib/mail.mjs';
 
 const WORTH_AN_EMAIL = new Set([
   'expense_added',
@@ -56,7 +56,6 @@ export default async (request) => {
     EMAIL_FROM,
     EMAIL_FROM_NAME,
     WEBHOOK_SECRET,
-    APP_URL,
   } = process.env;
 
   // Not configured yet: succeed quietly so the webhook does not retry.
@@ -121,7 +120,7 @@ export default async (request) => {
     }
   }
 
-  const appUrl = (APP_URL || '').replace(/\/+$/, '');
+  const appUrl = siteUrl(request);
   const deepLink = appUrl +
     (row.expense_id ? '/#/expense/' + row.expense_id
       : row.group_id ? '/#/group/' + row.group_id
