@@ -42,11 +42,29 @@ export default async (request) => {
   if (!bearer) return json({ error: 'Not signed in' }, 401);
 
   const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY } = process.env;
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
-    return json({ error: 'This deploy has no admin credentials configured. See README 12.' }, 501);
+
+  // Name what is actually missing. The first version demanded all three and
+  // reported a fixed message telling you to set SUPABASE_SERVICE_ROLE_KEY —
+  // which sent someone who had already set it looking in the wrong place.
+  const missing = [];
+  if (!SUPABASE_URL) missing.push('SUPABASE_URL');
+  if (!SUPABASE_SERVICE_ROLE_KEY) missing.push('SUPABASE_SERVICE_ROLE_KEY');
+  if (missing.length) {
+    return json({
+      error: 'Not configured: ' + missing.join(' and ') +
+        ' ' + (missing.length === 1 ? 'is' : 'are') +
+        ' not set in Netlify. See README 12.3.',
+      missing: missing,
+    }, 501);
   }
 
   const base = SUPABASE_URL.replace(/\/+$/, '');
+
+  // SUPABASE_ANON_KEY is optional. The apikey header only has to be a valid
+  // key for the project — identity comes from the caller's bearer token, and
+  // that is unchanged either way: a forged token is still rejected 403 and a
+  // missing one 401. Verified against the live API before relying on it.
+  const callerKey = SUPABASE_ANON_KEY || SUPABASE_SERVICE_ROLE_KEY;
   const svc = {
     apikey: SUPABASE_SERVICE_ROLE_KEY,
     Authorization: 'Bearer ' + SUPABASE_SERVICE_ROLE_KEY,
@@ -65,7 +83,7 @@ export default async (request) => {
 
   // ---- 1. who is asking ---------------------------------------------------
   const meRes = await fetch(base + '/auth/v1/user', {
-    headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + bearer },
+    headers: { apikey: callerKey, Authorization: 'Bearer ' + bearer },
   });
   if (!meRes.ok) return json({ error: 'Your session has expired — sign in again' }, 401);
   const me = await meRes.json();
@@ -148,6 +166,13 @@ export default async (request) => {
             banned_by: me.id,
           }),
         });
+
+        // Blocked and allowed at once is contradictory state. The signup
+        // trigger checks the ban first so the block does hold, but leaving
+        // the allow-list row would resurrect them the moment they are
+        // unblocked, without anyone deciding that.
+        await fetch(base + '/rest/v1/allowed_emails?email=eq.' +
+                    encodeURIComponent(email), { method: 'DELETE', headers: svc });
 
         let existing = false;
         if (target) {
@@ -324,6 +349,14 @@ export default async (request) => {
           const err = await gone.json().catch(() => ({}));
           return json({ error: err.msg || 'Could not delete them' }, 400);
         }
+
+        // create-user adds the address to the allow list, so that invite-only
+        // mode does not block the admin's own creation. Without removing it
+        // here, a deleted account stayed permanently entitled to register
+        // again — invite-only would wave it straight back through.
+        await fetch(base + '/rest/v1/allowed_emails?email=eq.' +
+                    encodeURIComponent(email), { method: 'DELETE', headers: svc });
+
         return json({ ok: true, message: 'Deleted, along with everything of theirs.' });
       }
 

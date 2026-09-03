@@ -2305,6 +2305,9 @@ begin
     'expenses',        (select count(*) from public.expenses where deleted_at is null),
     'expenses_binned', (select count(*) from public.expenses where deleted_at is not null),
     'settlements',     (select count(*) from public.settlements where deleted_at is null),
+    'settled_paise',   (select coalesce(round(sum(amount) * 100), 0)::bigint
+                        from public.settlements where deleted_at is null),
+    'groups_reminding',(select count(*) from public.groups where settle_up_day is not null),
     -- Total value passing through the app. Not anyone's balance: the sum of
     -- every live expense, which is the only figure that is meaningful here.
     'volume_paise',    (select coalesce(round(sum(amount) * 100), 0)::bigint

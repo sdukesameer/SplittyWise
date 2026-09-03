@@ -1019,29 +1019,41 @@ After that, promote anyone else from the console itself.
 
 ### 12.3 Environment variables
 
-The console's database half works with nothing configured. The auth half —
-blocking a login, creating an account, acting as someone — needs these in
+The console's database half — Overview, People, Failures, Audit trail —
+works with nothing configured at all, because it talks to Postgres directly
+using your own token. The auth half needs exactly **two** variables in
 Netlify under **Site configuration → Environment variables**:
 
 | Variable | Value |
 |---|---|
 | `SUPABASE_URL` | `https://YOUR-REF.supabase.co` |
-| `SUPABASE_ANON_KEY` | The `anon` key, same as in `js/config.js` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Project Settings → API Keys → `service_role`. **Never commit this.** |
 
-Without them those actions return a clear "this deploy has no admin
-credentials" rather than failing obscurely. Note this shares
-`SUPABASE_SERVICE_ROLE_KEY` with the email function in 4.7 — one key, both
-uses. And see
+That is the same pair the email function in 4.7 uses, so setting them once
+serves both.
+
+`SUPABASE_ANON_KEY` is **not** required. The function needs an `apikey`
+header when it verifies your token, and the `service_role` key is a valid one
+— identity still comes from your bearer token, and a forged token is still
+rejected. Set it if you like; it will be used in preference.
+
+If a variable is missing, the action returns a message **naming that
+variable**. An earlier version demanded all three and always reported
+`SUPABASE_SERVICE_ROLE_KEY`, which sent someone who had already set it
+looking in the wrong place.
+
+See also
 [the secret-scanning note](#if-the-build-fails-on-secrets-scanning-found-secrets),
 which you will hit the first time you set `SUPABASE_URL`.
 
 ### 12.4 What it does
 
-**Overview** — people, active this week, expenses, total recorded, groups,
-failures today, and thirty days of signups, expenses and failures as one
-chart. "Active" means *wrote something*, not *opened the app*: sessions are
-not tracked, and a number invented from nothing is worse than no number.
+**Overview** — eight figures and thirty days of signups, expenses and
+failures as one chart. "Active" means *wrote something*, not *opened the
+app*: sessions are not tracked, and a number invented from nothing is worse
+than no number. "New accounts" answers whether anybody can sign up right now
+— open, invite only, or closed — which is the question a bare count of
+blocked addresses did not answer.
 
 **People** — search, then open anyone to see their groups, friends, every
 expense with their share, their payments, and any failures their device has

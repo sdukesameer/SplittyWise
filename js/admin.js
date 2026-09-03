@@ -197,8 +197,11 @@ window.SW = window.SW || {};
 
     if (!res.ok) {
       if (res.status === 501) {
-        throw new Error('This deploy has no admin credentials set. ' +
-          'Set SUPABASE_SERVICE_ROLE_KEY in Netlify — README section 12.');
+        // The function names the variables that are actually missing. The
+        // page used to assert one specific name, which was wrong whenever a
+        // different one was the problem.
+        throw new Error(body.error ||
+          'This deploy is not configured for admin actions — README 12.3.');
       }
       if (res.status === 404) {
         throw new Error('The admin function is not deployed. It needs a ' +
@@ -304,16 +307,30 @@ window.SW = window.SW || {};
   /* ======================= overview ================================== */
 
   function paintStats(s) {
+    // Eight, so the grid fills evenly at both two and four columns rather
+    // than leaving one tile stranded on its own row.
+    const access = !s.signups_enabled ? 'Closed'
+                 : (s.invite_only ? 'Invite only' : 'Open');
+
     const tiles = [
-      { k: 'People', v: count(s.users), n: s.admins + ' admin' + (s.admins === 1 ? '' : 's') },
-      { k: 'Active this week', v: count(s.active_7d), n: count(s.active_30d) + ' this month' },
-      { k: 'Expenses', v: count(s.expenses), n: count(s.expenses_binned) + ' in bins' },
-      { k: 'Total recorded', v: money(s.volume_paise), n: 'every live expense' },
-      { k: 'Groups', v: count(s.groups), n: count(s.settlements) + ' payments' },
-      { k: 'Failures today', v: count(s.errors_24h), n: count(s.errors_total) + ' ever',
-        warn: s.errors_24h > 0 },
-      { k: 'Blocked', v: count(s.banned), n: s.signups_enabled ? 'signups open' : 'signups CLOSED',
-        warn: !s.signups_enabled },
+      { k: 'People', v: count(s.users),
+        n: count(s.admins) + (s.admins === 1 ? ' admin' : ' admins') },
+      { k: 'Active this week', v: count(s.active_7d),
+        n: count(s.active_30d) + ' this month' },
+      { k: 'Expenses', v: count(s.expenses),
+        n: count(s.expenses_binned) + ' in bins' },
+      { k: 'Total recorded', v: money(s.volume_paise),
+        n: 'across ' + count(s.expenses) + ' expenses' },
+      { k: 'Groups', v: count(s.groups),
+        n: count(s.groups_reminding) + ' with a settle-up day' },
+      { k: 'Payments', v: count(s.settlements),
+        n: money(s.settled_paise) + ' settled' },
+      { k: 'Failures today', v: count(s.errors_24h),
+        n: count(s.errors_total) + ' ever', warn: s.errors_24h > 0 },
+      // Answers "can anyone sign up right now?", which is the actual
+      // question — a bare "Blocked: 0" answered nothing.
+      { k: 'New accounts', v: access,
+        n: count(s.banned) + ' blocked', warn: access !== 'Open' },
     ];
 
     $('ad-stats').innerHTML = tiles.map(function (t) {
@@ -468,8 +485,8 @@ window.SW = window.SW || {};
             'Most recent: ' + esc(d.errors[0].message) + '</div>'
           : '') +
 
-        '<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.09em;' +
-          'color:var(--faint);margin:16px 0 6px">Groups</h3>' +
+        '<div class="ad-sub">Groups<span class="n">' +
+          count((d.groups || []).length) + '</span></div>' +
         ((d.groups || []).length
           ? d.groups.map(function (g) {
               return '<div class="ad-item"><span class="ad-item-main">' +
@@ -482,8 +499,8 @@ window.SW = window.SW || {};
             }).join('')
           : '<div class="ad-empty">None.</div>') +
 
-        '<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.09em;' +
-          'color:var(--faint);margin:16px 0 6px">Expenses</h3>' +
+        '<div class="ad-sub">Expenses<span class="n">' +
+          count((d.expenses || []).length) + '</span></div>' +
         ((d.expenses || []).length
           ? d.expenses.slice(0, 40).map(function (e) {
               return '<div class="ad-item"><span class="ad-item-main">' +
@@ -505,9 +522,10 @@ window.SW = window.SW || {};
               : '')
           : '<div class="ad-empty">None.</div>') +
 
-        '<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.09em;' +
-          'color:var(--faint);margin:16px 0 6px">Act on this account</h3>' +
-        '<div class="ad-form-actions" style="margin-bottom:10px">' +
+        '<div class="ad-sub">Act on this account</div>' +
+        // An even grid of equal chips, safe ones first and the two
+        // irreversible ones last, so Delete is never next to Rename.
+        '<div class="ad-actions-grid">' +
           '<button class="ad-mini" data-act="rename">Rename</button>' +
           '<button class="ad-mini" data-act="reset">Reset password</button>' +
           '<button class="ad-mini" data-act="signout">Sign out everywhere</button>' +

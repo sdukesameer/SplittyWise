@@ -60,7 +60,7 @@ body.admin {
   gap: 12px;
   max-width: 1080px;
   margin: 0 auto;
-  padding: 12px 18px 10px;
+  padding: 12px 14px 10px;
 }
 
 .ad-brand { font-weight: 800; font-size: 16px; letter-spacing: -0.2px; }
@@ -81,7 +81,9 @@ body.admin {
   gap: 2px;
   max-width: 1080px;
   margin: 0 auto;
-  padding: 0 12px;
+  /* 14px, matching .ad-pane's padding, so a tab's left edge sits over the
+     left edge of the cards beneath it. */
+  padding: 0 14px;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -133,25 +135,63 @@ body.admin {
 .ad-row-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
   margin-bottom: 10px;
+  min-height: 30px;
 }
 .ad-row-head h2 { margin: 0; }
 .ad-row-head .grow { flex: 1; }
 
-.ad-search { max-width: 260px; margin-left: auto; }
+.ad-search { max-width: 260px; margin-left: auto; flex: 1 1 180px; }
+
+/* Sub-headings inside a person's sheet, so the sections read as sections
+   rather than bold text floating above a list. */
+.ad-sub {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 18px 0 6px;
+}
+.ad-sub::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.ad-sub .n {
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 700;
+  color: var(--muted);
+}
 
 /* ---- the numbers ---- */
 
+/* Four across on a wide screen, two on a phone, and never a lonely tile on
+   its own row: seven tiles at auto-fit would leave one stranded. */
 .ad-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
 
+@media (min-width: 620px) { .ad-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+/* The tile is a three-row grid rather than stacked blocks, so the number and
+   the note line up across every tile even when one label wraps to two lines
+   and another does not. That was the ragged row in the first version. */
 .ad-stat {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 2px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -160,25 +200,28 @@ body.admin {
 }
 
 .ad-stat .k {
-  display: block;
   font-size: 11.5px;
   font-weight: 700;
+  line-height: 1.3;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--faint);
-  margin-bottom: 3px;
+  /* Two lines' worth, always, so "Active this week" does not make its tile
+     taller than the one beside it. */
+  min-height: 2.6em;
 }
 
 .ad-stat .v {
-  display: block;
+  align-self: end;
   font-size: 23px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.4px;
+  line-height: 1.15;
   overflow-wrap: anywhere;
 }
 
-.ad-stat .n { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+.ad-stat .n { font-size: 12px; color: var(--muted); line-height: 1.35; }
 .ad-stat.is-warn .v { color: var(--owe); }
 
 /* ---- the chart ---- */
@@ -198,17 +241,20 @@ body.admin {
 
 .ad-list { display: flex; flex-direction: column; }
 
+/* A grid, not a flex row: the action column is the same width on every row,
+   so Open / Unblock / Bin line up down the list instead of each sitting
+   wherever its own text ended. */
 .ad-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
   padding: 11px 2px;
   border-top: 1px solid var(--line);
-  min-width: 0;
 }
 .ad-item:first-child { border-top: none; }
 
-.ad-item-main { flex: 1; min-width: 0; }
+.ad-item-main { min-width: 0; }
 
 .ad-item-title {
   display: block;
@@ -225,7 +271,22 @@ body.admin {
   overflow-wrap: anywhere;
 }
 
-.ad-item-actions { display: flex; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+.ad-item-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* The per-person action buttons read as one block of equal chips rather than
+   a ragged line of different widths. */
+.ad-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 7px;
+  margin: 0 0 4px;
+}
+.ad-actions-grid .ad-mini { width: 100%; text-align: center; }
 
 .ad-mini {
   background: var(--surface-2);
@@ -260,10 +321,27 @@ body.admin {
 
 /* ---- forms ---- */
 
-.ad-form { display: flex; flex-direction: column; gap: 9px; }
-.ad-form .input { width: 100%; }
-.ad-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.ad-form-actions .btn { flex: 0 1 auto; }
+/* Inputs share one row and grow evenly; the actions sit on their own row,
+   right-aligned, so the primary button lands in the same place in every card
+   instead of wherever the inputs happened to end. */
+.ad-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 9px;
+}
+
+.ad-form .input { width: 100%; min-width: 0; }
+
+.ad-form-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.ad-form-actions .btn { flex: 0 0 auto; min-width: 148px; justify-content: center; }
+.ad-form .hint { grid-column: 1 / -1; }
 
 .ad-code {
   display: block;
@@ -291,8 +369,7 @@ body.admin {
 }
 
 @media (min-width: 720px) {
-  .ad-form { flex-direction: row; align-items: flex-start; flex-wrap: wrap; }
-  .ad-form .input { flex: 1 1 180px; width: auto; }
-  .ad-form-actions { flex: 0 0 auto; }
-  .ad-form .hint { flex: 1 1 100%; }
+  /* Inputs across, actions on the row beneath and still right-aligned. */
+  .ad-form { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+  .ad-form-actions { grid-column: 1 / -1; }
 }

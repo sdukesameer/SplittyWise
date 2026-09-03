@@ -816,9 +816,67 @@ check('the function verifies the caller’s token before anything else',
 // state, which is not an outsider's business. The cheapest check that needs
 // no configuration has to come first.
 check('an unsigned request is refused before the config is mentioned',
-  adminFn.indexOf("if (!bearer)") < adminFn.indexOf('no admin credentials'));
-check('and the config error still exists for a signed-in admin',
-  /no admin credentials configured/.test(adminFn));
+  adminFn.indexOf('if (!bearer)') > -1 &&
+  adminFn.indexOf('Not configured:') > -1 &&
+  adminFn.indexOf('if (!bearer)') < adminFn.indexOf('Not configured:'));
+// The error used to assert one variable name regardless of which was
+// actually missing, which sent someone who had already set that one looking
+// in the wrong place.
+check('a missing variable is named, not guessed',
+  /missing\.push\('SUPABASE_URL'\)/.test(adminFn) &&
+  /missing\.push\('SUPABASE_SERVICE_ROLE_KEY'\)/.test(adminFn) &&
+  /missing\.join\(/.test(adminFn));
+check('and the page repeats that message rather than inventing one',
+  /body\.error \|\|/.test(adminCode) &&
+  !/Set SUPABASE_SERVICE_ROLE_KEY in Netlify/.test(adminCode));
+check('only the two variables that are genuinely needed are required',
+  !/if \(!SUPABASE_ANON_KEY\)\s*missing/.test(adminFn) &&
+  /SUPABASE_ANON_KEY \|\| SUPABASE_SERVICE_ROLE_KEY/.test(adminFn));
+
+// create-user adds to the allow list so invite-only does not block the
+// admin's own creation. Deleting or blocking has to take it back out, or a
+// removed account stays permanently entitled to register again.
+// Scoped to each case block: a file-wide search would pass just because
+// create-user writes to the same table, which is the opposite of the point.
+const caseBlock = (name) =>
+  (adminFn.match(new RegExp("case '" + name + "': \\{[\\s\\S]*?\\n      \\}")) || [''])[0];
+
+check('blocking an address clears its allow-list entry',
+  /allowed_emails\?email=eq\./.test(caseBlock('ban')) &&
+  /DELETE/.test(caseBlock('ban')), caseBlock('ban').length);
+check('and so does deleting the account',
+  /allowed_emails\?email=eq\./.test(caseBlock('delete-user')) &&
+  /DELETE/.test(caseBlock('delete-user')), caseBlock('delete-user').length);
+check('create-user still adds it, or invite-only blocks the admin itself',
+  /allowed_emails/.test(caseBlock('create-user')) &&
+  /merge-duplicates/.test(caseBlock('create-user')));
+
+/* ---------------- 29. the console's layout ---------------- */
+
+console.log('\n--- console layout ---');
+const adminCss = fs.readFileSync('css/admin.css', 'utf8');
+check('the stat grid has a fixed column count, so no tile is stranded',
+  /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/.test(adminCss) &&
+  /repeat\(4, minmax\(0, 1fr\)\)/.test(adminCss));
+check('and there are eight tiles to fill it',
+  (adminJs.match(/\{ k: '/g) || []).length === 8,
+  (adminJs.match(/\{ k: '/g) || []).length);
+check('a tile is a grid, so its number lines up with its neighbours',
+  /\.ad-stat \{[^}]*grid-template-rows/.test(adminCss));
+check('list rows put their actions in a fixed column',
+  /\.ad-item \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto/.test(adminCss));
+check('form actions are right-aligned with equal widths',
+  /\.ad-form-actions \{[^}]*justify-content: flex-end/.test(adminCss) &&
+  /\.ad-form-actions \.btn \{[^}]*min-width/.test(adminCss));
+check('the per-person actions are an even grid, not a ragged row',
+  /\.ad-actions-grid \{/.test(adminCss) && /ad-actions-grid/.test(adminJs));
+check('the tab row lines up with the cards beneath it',
+  (adminCss.match(/\.ad-tabs \{[\s\S]*?padding: 0 (\d+)px/) || [])[1] ===
+  (adminCss.match(/\.ad-pane \{[^}]*padding: \d+px (\d+)px/) || [])[1]);
+check('no inline heading styles are left in the console',
+  !/style="font-size:12px;text-transform:uppercase/.test(adminJs));
+check('sheet sub-headings use the shared class',
+  /\.ad-sub \{/.test(adminCss) && /class="ad-sub"/.test(adminJs));
 
 // Every admin_* function is security definer, so a missing caller check is
 // unrestricted access. The live audit checks this too; this catches it
