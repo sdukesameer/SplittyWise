@@ -582,10 +582,18 @@ per-type switches in the app then govern them like everything else.
 **4. Turn it on** in the app: **Account → Notifications → Email me the
 important ones**.
 
+**5. Prove it works** with **Account → Send me a test email**, which appears
+once the switch is on. This matters more than it sounds: the function skips
+your own actions, so adding an expense yourself produces an Activity row and
+no email — which looks exactly like a misconfiguration and is not one.
+
 What it deliberately does *not* do:
 
 - **No email for your own actions.** Those rows arrive already read, and the
-  function skips them.
+  function skips them. If you add an expense and get an Activity entry but no
+  email, that is this rule, not a fault. Someone *else* adding one that
+  involves you does send one — provided they are not the only person with the
+  switch on.
 - **Only money and people events** — an expense added, a payment recorded, a
   nudge, the monthly settle-up day, a new friend, being added to a group. Not
   edits, deletions or comments.
@@ -1091,6 +1099,30 @@ itself; there is nothing to switch on. Capped at 50 per person per hour in
 the schema, so a render loop that throws cannot write thousands of rows.
 
 **Audit trail** — every administrative action, append-only.
+
+Long lists collapse. A person's Groups, Friends, Expenses and Payments are
+each a section that opens on demand and starts closed past six rows, so
+somebody with a hundred expenses does not arrive as a hundred rows.
+
+### Will the logs fill the database?
+
+No, and the Overview's **Database** tile lets you check rather than take that
+on trust. Measured on a live project: `admin_audit` 48 kB for 28 rows,
+`error_reports` 64 kB, the whole database 14 MB against the free tier's
+500 MB.
+
+Everything diagnostic is on a retention schedule, applied by `purge_trash()`
+— which already runs once a day, when whoever opens the app first opens it:
+
+| Table | Kept for | Why |
+|---|---|---|
+| `error_reports` | 30 days | The one that could actually run away, since every device writes to it. A bug report older than a month is not useful |
+| `notifications` | 90 days, **read only** | An unread one is never purged, however old — it is somebody's outstanding news |
+| `admin_audit` | 365 days | A few hundred bytes per administrative action, and those are rare. A year, because the point of an audit trail is looking back at something that surfaced later |
+
+Nothing anybody owns is touched: expenses, groups, splits and payments have
+no retention at all. Only the trash empties, after thirty days, and only
+your own.
 
 ### 12.5 Blocking versus deleting
 

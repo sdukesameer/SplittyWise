@@ -2934,3 +2934,24 @@ button.is-loading .spinner { display: block; }
    hint tells people the hover is there at all. */
 .ch-plot { position: relative; }
 .ch-hint { color: var(--faint); }
+
+/* ---- what just arrived ---------------------------------------------------
+   Opening Activity marks everything read, so the highlight is the only cue
+   that a row is new. It fades by itself after five seconds: a state you have
+   to dismiss is a chore, and one that never leaves stops meaning anything. */
+
+.list-row.is-fresh {
+  background: rgba(31, 198, 158, 0.09);                        /* Safari < 16.2 */
+  background: color-mix(in srgb, var(--teal) 9%, transparent);
+  box-shadow: inset 3px 0 0 var(--teal);
+}
+
+.list-row.is-fresh.is-fading {
+  transition: background 1.1s ease, box-shadow 1.1s ease;
+  background: transparent;
+  box-shadow: inset 3px 0 0 transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .list-row.is-fresh.is-fading { transition: none; }
+}

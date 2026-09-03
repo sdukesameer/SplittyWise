@@ -79,11 +79,22 @@ window.SW = window.SW || {};
 
           (other.upi_id
             ? '<button type="button" class="btn btn-ghost" id="pay-upi">' +
-              '💸 Pay with UPI</button>' +
-              '<span class="hint" id="pay-upi-hint">Opens your payment app. ' +
-                'Come back and record it — we cannot see whether it went through.' +
-              '</span>'
-            : '') +
+              '💸 Pay ' + esc(other.full_name.split(' ')[0]) + ' by UPI</button>' +
+              '<span class="hint" id="pay-upi-hint">Opens GPay, PhonePe, Paytm ' +
+                'or whichever app you use, with ' +
+                esc(other.full_name.split(' ')[0]) + '\u2019s UPI ID and the ' +
+                'amount already filled. Come back and record it — we cannot ' +
+                'see whether it went through.</span>'
+            // Nothing to open a payment app *with*: a upi:// link needs the
+            // payee's address, and there is no way to look one up. Saying so
+            // is better than showing nothing, which reads as the app not
+            // being able to do it at all.
+            : '<span class="hint" id="pay-upi-hint">' +
+                esc(other.full_name.split(' ')[0]) + ' has not added a UPI ID, ' +
+                'so there is nowhere to send a payment request. Ask them to ' +
+                'add one under Account → UPI ID and this turns into a ' +
+                'one-tap payment.' +
+              '</span>') +
 
           (group
             ? '<span class="hint">Recorded in ' + esc(group.name) + '.</span>'
@@ -287,14 +298,18 @@ window.SW = window.SW || {};
         // One transfer covers every group at once, so offer it before the
         // recording step. Only when it is all one way and all owed by you:
         // paying a netted figure across mixed directions would be wrong.
-        (!mixed && total < 0 && p.upi_id
+        (!mixed && total < 0
           ? '<div style="padding:12px 16px 4px">' +
-              '<button type="button" class="btn btn-ghost" id="sa-upi">' +
-                '💸 Pay ' + SW.money(-total) + ' by UPI</button>' +
-              '<span class="hint">Opens your payment app with ' +
-                esc(p.full_name.split(' ')[0]) + '\u2019s UPI ID and the amount ' +
-                'already in. Come back and record it — we cannot see whether ' +
-                'it went through.</span>' +
+              (p.upi_id
+                ? '<button type="button" class="btn btn-ghost" id="sa-upi">' +
+                    '💸 Pay ' + SW.money(-total) + ' by UPI</button>' +
+                  '<span class="hint">Opens GPay, PhonePe, Paytm or whichever ' +
+                    'app you use, with ' + esc(p.full_name.split(' ')[0]) +
+                    '\u2019s UPI ID and the amount already in. Come back and ' +
+                    'record it — we cannot see whether it went through.</span>'
+                : '<span class="hint">' + esc(p.full_name.split(' ')[0]) +
+                    ' has not added a UPI ID, so this cannot open a payment ' +
+                    'app. Ask them to add one under Account → UPI ID.</span>') +
             '</div>'
           : ''),
       confirm: 'Record them all',

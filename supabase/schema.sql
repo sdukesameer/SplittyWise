@@ -963,9 +963,16 @@ begin
     raise exception 'You are not a member of this group';
   end if;
 
-  -- 12 random bytes, base64 made URL-safe. Random rather than an encoded
-  -- user id, so a link cannot be forged to make someone your friend.
-  tok := rtrim(replace(replace(encode(gen_random_bytes(12), 'base64'), '/', '_'), '+', '-'), '=');
+  -- 128 random bits as hex. Random rather than an encoded user id, so a
+  -- link cannot be forged to make someone your friend.
+  --
+  -- gen_random_uuid() and not gen_random_bytes(): pgcrypto lives in the
+  -- `extensions` schema on Supabase, and this function pins
+  -- search_path = public, so gen_random_bytes was simply not visible —
+  -- every "Invite with a link" failed with "function gen_random_bytes(integer)
+  -- does not exist". gen_random_uuid is core Postgres, so it needs no
+  -- extension and no widened search_path. Hex is already URL-safe.
+  tok := replace(gen_random_uuid()::text, '-', '');
 
   insert into public.invites (token, created_by, group_id)
   values (tok, me, p_group_id);
@@ -1847,6 +1854,28 @@ begin
     returning 1
   ) select count(*) into gone_s from removed;
 
+  -- ---- retention, so the diagnostic tables cannot grow without limit ----
+  --
+  -- admin_audit is tiny: one row per administrative action, and those are
+  -- rare — a few hundred bytes each, a few dozen a year for one owner. A
+  -- year is kept because the point of an audit trail is being able to look
+  -- back at something that surfaced later.
+  --
+  -- error_reports is the one that can actually run away: it is written by
+  -- every device that throws. It is capped at 50 per person per hour by
+  -- cap_error_reports(), and thirty days is far longer than a bug report
+  -- stays useful.
+  --
+  -- Both run for everybody rather than per-caller, because they are not
+  -- anybody's data — and this function is already called once a day, by
+  -- whoever opens the app first.
+  delete from public.error_reports where at < now() - interval '30 days';
+  delete from public.admin_audit   where at < now() - interval '365 days';
+
+  -- A read notification nobody will ever scroll back to is also just weight.
+  delete from public.notifications
+   where is_read and created_at < now() - interval '90 days';
+
   return json_build_object('ok', true, 'expenses', gone_e, 'settlements', gone_s);
 end $$;
 
@@ -2315,6 +2344,13 @@ begin
     'errors_24h',      (select count(*) from public.error_reports
                         where at > now() - interval '24 hours'),
     'errors_total',    (select count(*) from public.error_reports),
+    -- So "will this fill up the database?" is answerable by looking, rather
+    -- than by being reassured.
+    'audit_rows',      (select count(*) from public.admin_audit),
+    'db_bytes',        pg_database_size(current_database()),
+    'kept_bytes',      pg_total_relation_size('public.admin_audit')
+                     + pg_total_relation_size('public.error_reports')
+                     + pg_total_relation_size('public.notifications'),
     -- "Active" means wrote something, not opened the app: we do not track
     -- sessions, and inventing a number would be worse than not having one.
     'active_7d',       (select count(distinct created_by) from public.expenses

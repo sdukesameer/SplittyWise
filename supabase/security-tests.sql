@@ -150,11 +150,43 @@ begin
   end if;
 
   -- ---- 8. reading a stranger's ledger -----------------------------------
-  select count(*) into n from public.expenses
+  --
+  -- Being in the group is a legitimate way to see an expense you are not
+  -- splitting — you need the group's whole ledger to make sense of its
+  -- balance. The first version of this test ignored that and reported a
+  -- leak for an expense in the attacker's own group, which is not one.
+  --
+  -- What must never be visible is an expense with no connection at all: not
+  -- on the split, not created by them, and not in a group they belong to.
+  select count(*) into n from public.expenses e
    where not exists (select 1 from public.expense_splits s
-                     where s.expense_id = expenses.id and s.user_id = attacker)
-     and created_by <> attacker;
-  out := out || format('%s - expenses you are not part of stay hidden (%s visible)',
+                     where s.expense_id = e.id and s.user_id = attacker)
+     and e.created_by <> attacker
+     and not exists (select 1 from public.group_members gm
+                     where gm.group_id = e.group_id and gm.user_id = attacker);
+  out := out || format('%s - an expense with no connection to you is invisible (%s visible)',
+    case when n = 0 then 'PASS' else 'FAIL' end, n) || E'\n';
+
+  -- And the same for the split rows, which carry who owes what.
+  select count(*) into n from public.expense_splits s
+   where s.user_id <> attacker
+     and not exists (select 1 from public.expense_splits mine
+                     where mine.expense_id = s.expense_id and mine.user_id = attacker)
+     and not exists (select 1 from public.expenses e
+                     join public.group_members gm on gm.group_id = e.group_id
+                     where e.id = s.expense_id and gm.user_id = attacker);
+  out := out || format('%s - so are its split rows (%s visible)',
+    case when n = 0 then 'PASS' else 'FAIL' end, n) || E'\n';
+
+  -- A profile you share nothing with must stay private, or the app is an
+  -- email-address directory.
+  select count(*) into n from public.profiles pr
+   where pr.id <> attacker
+     and not sw.are_friends(attacker, pr.id)
+     and not exists (select 1 from public.group_members a
+                     join public.group_members b on b.group_id = a.group_id
+                     where a.user_id = attacker and b.user_id = pr.id);
+  out := out || format('%s - a stranger''s profile is invisible (%s visible)',
     case when n = 0 then 'PASS' else 'FAIL' end, n) || E'\n';
 
   -- ---- 9. the legitimate paths must still work --------------------------

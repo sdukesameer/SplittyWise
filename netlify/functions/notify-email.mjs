@@ -28,6 +28,8 @@
 //  most one email per person every fifteen minutes.
 // ---------------------------------------------------------------------------
 
+import { sendMail, shell } from '../lib/mail.mjs';
+
 const WORTH_AN_EMAIL = new Set([
   'expense_added',
   'settlement',
@@ -125,48 +127,25 @@ export default async (request) => {
       : row.group_id ? '/#/group/' + row.group_id
       : '/#/activity');
 
-  const escape = (s) => String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-  const sent = await fetch('https://api.brevo.com/v3/smtp/email', {
-    method: 'POST',
-    headers: { 'api-key': BREVO_API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      sender: { email: EMAIL_FROM, name: EMAIL_FROM_NAME || 'SplittyWise' },
-      to: [{ email: profile.email, name: profile.full_name || undefined }],
-      subject: row.title,
-      htmlContent:
-        '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;' +
-        'max-width:520px;margin:0 auto;padding:24px;color:#141817">' +
-          '<p style="font-size:12px;letter-spacing:.09em;text-transform:uppercase;' +
-            'color:#7C8D86;margin:0 0 14px">SplittyWise</p>' +
-          '<h1 style="font-size:20px;line-height:1.35;margin:0 0 8px">' +
-            escape(row.title) + '</h1>' +
-          (row.body
-            ? '<p style="font-size:15px;color:#4B5B55;margin:0 0 20px">' +
-              escape(row.body) + '</p>'
-            : '') +
-          (appUrl
-            ? '<p style="margin:0 0 24px"><a href="' + escape(deepLink) +
-              '" style="display:inline-block;background:#1FC69E;color:#08201B;' +
-              'text-decoration:none;font-weight:700;padding:11px 18px;' +
-              'border-radius:12px">Open it in SplittyWise</a></p>'
-            : '') +
-          '<p style="font-size:12.5px;color:#7C8D86;margin:0;border-top:' +
-            '1px solid #DCE4E1;padding-top:14px">You are getting this because ' +
-            'email notifications are on in your SplittyWise account. Turn them ' +
-            'off under Account → Notifications.</p>' +
-        '</div>',
-      textContent: row.title + (row.body ? '\n\n' + row.body : '') +
-        (appUrl ? '\n\n' + deepLink : ''),
-    }),
+  const sent = await sendMail({
+    to: profile.email,
+    name: profile.full_name,
+    subject: row.title,
+    html: shell(row.title, row.body || '',
+                appUrl ? { href: deepLink, label: 'Open it in SplittyWise' } : null) +
+      '<div style="font-family:-apple-system,sans-serif;max-width:520px;' +
+        'margin:-14px auto 0;padding:0 24px 24px;font-size:12.5px;color:#7C8D86">' +
+        'You are getting this because email notifications are on in your ' +
+        'SplittyWise account. Turn them off under Account &rarr; Notifications.' +
+      '</div>',
+    text: row.title + (row.body ? '\n\n' + row.body : '') +
+          (appUrl ? '\n\n' + deepLink : ''),
   });
 
   if (!sent.ok) {
     // Surfaced in the Netlify function log rather than silently swallowed —
     // a quota that ran out should be findable.
-    return new Response('Brevo said ' + sent.status + ': ' + (await sent.text()),
-      { status: 502 });
+    return new Response(sent.reason, { status: 502 });
   }
 
   // Stamping this only on a successful send means a failed one does not eat

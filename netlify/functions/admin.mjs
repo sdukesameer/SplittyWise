@@ -21,6 +21,8 @@
 //  Every accepted call is written to admin_audit before it returns.
 // ---------------------------------------------------------------------------
 
+import { sendMail, shell, mailConfigured } from '../lib/mail.mjs';
+
 const ACTIONS = new Set([
   'ban', 'unban', 'create-user', 'invite-user', 'reset-password',
   'sign-out-everywhere', 'delete-user', 'act-as', 'whoami',
@@ -130,6 +132,28 @@ export default async (request) => {
   };
 
   const email = String(body.email || '').trim().toLowerCase();
+
+  // A single-use link is awkward to hand over from a phone, so it can be
+  // emailed to the admin's own address instead of copied off the screen.
+  // Sent to the admin, never to the account it is for: mailing somebody a
+  // link that signs you in as them would be a different feature entirely.
+  const deliver = async (how, link, subject, blurb) => {
+    if (how !== 'email') return {};
+    if (!mailConfigured()) {
+      return { emailed: false,
+               emailError: 'Email is not configured — BREVO_API_KEY and ' +
+                           'EMAIL_FROM are not set. See README 4.7.' };
+    }
+    const res = await sendMail({
+      to: prof.email,
+      subject: subject,
+      html: shell(subject, blurb, { href: link, label: 'Open the link' }),
+      text: subject + '\n\n' + blurb + '\n\n' + link,
+    });
+    return res.ok
+      ? { emailed: true, emailedTo: prof.email }
+      : { emailed: false, emailError: res.reason };
+  };
 
   try {
     switch (action) {
@@ -286,10 +310,14 @@ export default async (request) => {
         if (!link.ok) {
           return json({ error: linkBody.msg || 'Could not make a reset link' }, 400);
         }
-        await log('password_reset_link', {}, email, linkBody.id);
-        // Returned rather than emailed, so it works even with mail throttled.
-        return json({ ok: true, link: linkBody.action_link,
-                      message: 'Send them this link yourself. It is single use.' });
+        await log('password_reset_link', { emailed: body.deliver === 'email' },
+                  email, linkBody.id);
+
+        const reset = await deliver(body.deliver, linkBody.action_link,
+          'A password reset link for ' + email,
+          'Single use, and it expires. Open it to set a new password on that account.');
+        return json(Object.assign({ ok: true, link: linkBody.action_link,
+          message: 'Single use. Send it to them yourself.' }, reset));
       }
 
       case 'sign-out-everywhere': {
@@ -321,11 +349,16 @@ export default async (request) => {
         if (!link.ok) {
           return json({ error: linkBody.msg || 'Could not make a sign-in link' }, 400);
         }
-        await log('acted_as', { note: 'a sign-in link was generated' }, email, linkBody.id);
-        return json({
+        await log('acted_as', { emailed: body.deliver === 'email' }, email, linkBody.id);
+
+        const sentTo = await deliver(body.deliver, linkBody.action_link,
+          'Sign in as ' + email,
+          'Opening this signs that browser in as ' + email +
+          ', replacing whatever session it already had. Single use.');
+        return json(Object.assign({
           ok: true, link: linkBody.action_link,
-          message: 'Opening this signs this browser in as them, replacing your own session.',
-        });
+          message: 'Opening this signs the browser in as them, replacing your own session.',
+        }, sentTo));
       }
 
       // ---- deleting an account -------------------------------------------

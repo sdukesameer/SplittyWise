@@ -174,8 +174,10 @@ body.admin {
 
 /* ---- the numbers ---- */
 
-/* Four across on a wide screen, two on a phone, and never a lonely tile on
-   its own row: seven tiles at auto-fit would leave one stranded. */
+/* Nine tiles: three across on a wide screen is exactly three rows, and two
+   across on a phone leaves one over — so the odd one out stretches the full
+   width and reads as deliberate rather than stranded. auto-fit would give a
+   different ragged tail at every viewport. */
 .ad-stats {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -183,7 +185,13 @@ body.admin {
   margin-bottom: 14px;
 }
 
-@media (min-width: 620px) { .ad-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.ad-stat:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+@media (min-width: 700px) {
+  .ad-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  /* Three columns divide nine exactly, so nothing needs stretching. */
+  .ad-stat:last-child:nth-child(odd) { grid-column: auto; }
+}
 
 /* The tile is a three-row grid rather than stacked blocks, so the number and
    the note line up across every tile even when one label wraps to two lines
@@ -372,4 +380,33 @@ body.admin {
   /* Inputs across, actions on the row beneath and still right-aligned. */
   .ad-form { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
   .ad-form-actions { grid-column: 1 / -1; }
+}
+
+/* A section that opens on demand. Someone with a hundred expenses should not
+   arrive as a hundred rows, and each <details> keeps its own state so
+   opening one does not shut another. */
+
+.ad-sect { border: 0; }
+.ad-sect > summary { cursor: pointer; list-style: none; }
+.ad-sect > summary::-webkit-details-marker { display: none; }
+
+/* The disclosure triangle, drawn rather than inherited, so it sits before
+   the label and turns with the section. */
+.ad-sect > summary::before {
+  content: '';
+  flex: none;
+  width: 0; height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  margin-right: 2px;
+  transition: transform 0.15s ease;
+}
+.ad-sect[open] > summary::before { transform: rotate(90deg); }
+
+.ad-sect > summary:hover { color: var(--muted); }
+.ad-sect > summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ad-sect > summary::before { transition: none; }
 }

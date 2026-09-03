@@ -29,6 +29,13 @@ function noComments(src) {
     .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
 }
 
+// SQL comments start with -- and run to the end of the line. Same trap, a
+// different language: a check for the absence of gen_random_bytes matched
+// the comment explaining why it is not used.
+function noSqlComments(src) {
+  return String(src || '').replace(/--[^\n]*/g, ' ');
+}
+
 function codeOnly(src) {
   return noComments(src)
     .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
@@ -36,7 +43,9 @@ function codeOnly(src) {
 }
 
 let fails = 0;
+let ran = 0;
 function check(label, ok, detail) {
+  ran++;
   if (!ok) fails++;
   console.log((ok ? '  PASS  ' : '  FAIL  ') + label +
     (ok || detail === undefined ? '' : '\n         ' + JSON.stringify(detail)));
@@ -686,7 +695,11 @@ console.log('\n--- settle all ---');
 check('settle-all offers the payment app when it is all one way',
   /sa-upi/.test(js['js/settle.js']));
 check('and not when the debts run both ways',
-  /!mixed && total < 0 && p\.upi_id/.test(js['js/settle.js']));
+  /!mixed && total < 0/.test(js['js/settle.js']));
+// Showing nothing when the other person has no UPI ID read as "this app
+// cannot open a payment app", rather than "we do not know where to send it".
+check('and says why when there is no UPI id to send to',
+  (js['js/settle.js'].match(/has not added a UPI ID/g) || []).length === 2);
 
 /* ---------------- 25. the README cannot go stale ---------------- */
 
@@ -752,6 +765,11 @@ check('no service_role key is committed anywhere', leaked.length === 0, leaked);
 console.log('\n--- administration ---');
 const adminJs = js['js/admin.js'];
 const adminFn = fs.readFileSync('netlify/functions/admin.mjs', 'utf8');
+// Declared here rather than beside the layout checks: `const` is hoisted
+// but not initialised, so a later block reading it threw a ReferenceError
+// that killed the run before the summary line — which looked like the suite
+// passing quietly rather than crashing.
+const adminCss = fs.readFileSync('css/admin.css', 'utf8');
 
 // admin.html loads css/app.css as well as css/admin.css, so any attribute
 // the app's stylesheet already styles will silently apply to the console
@@ -862,16 +880,105 @@ check('create-user still adds it, or invite-only blocks the admin itself',
   /allowed_emails/.test(caseBlock('create-user')) &&
   /merge-duplicates/.test(caseBlock('create-user')));
 
+/* ---------------- 28b. offline, and what is new ---------------- */
+
+console.log('\n--- offline and fresh rows ---');
+check('Activity has an offline state of its own',
+  /id="activity-offline"/.test(html) &&
+  /navigator\.onLine/.test(js['js/shell.js']));
+check('and being offline does not raise an error toast',
+  /looksOffline/.test(js['js/shell.js']) &&
+  /if \(!looksOffline\)/.test(js['js/shell.js']));
+check('a dropped request counts as offline too',
+  /failed to fetch\|networkerror\|load failed/i.test(js['js/shell.js']));
+check('reconnecting reloads it without being asked',
+  /addEventListener\('online'/.test(js['js/shell.js']));
+check('the unread count stays quiet offline',
+  /Offline the count cannot change/.test(js['js/shell.js']));
+check('new rows are highlighted, and only once per session',
+  /is-fresh/.test(js['js/shell.js']) && /seenActivity/.test(js['js/shell.js']));
+check('and the highlight fades on its own',
+  /is-fading/.test(js['js/shell.js']) && /\}, 5000\)/.test(js['js/shell.js']) &&
+  /\.list-row\.is-fresh\.is-fading/.test(css));
+check('the fade respects reduced motion',
+  /prefers-reduced-motion[\s\S]{0,200}is-fading/.test(css));
+
+/* ---------------- 28c. retention ---------------- */
+
+console.log('\n--- retention ---');
+check('error reports are purged after 30 days',
+  /delete from public\.error_reports where at < now\(\) - interval '30 days'/.test(schema));
+check('the audit trail after a year',
+  /delete from public\.admin_audit\s+where at < now\(\) - interval '365 days'/.test(schema));
+check('read notifications after 90 days',
+  /is_read and created_at < now\(\) - interval '90 days'/.test(schema));
+check('but an unread notification is never purged',
+  /where is_read and created_at/.test(schema));
+check('and the console shows the size, so the question is answerable',
+  /db_bytes/.test(schema) && /bytes\(s\.db_bytes\)/.test(adminJs));
+
+/* ---------------- 28d. links and mail ---------------- */
+
+console.log('\n--- links and mail ---');
+check('the mail sender is shared, not copied into each function',
+  fs.existsSync('netlify/lib/mail.mjs') &&
+  /from '\.\.\/lib\/mail\.mjs'/.test(adminFn) &&
+  /from '\.\.\/lib\/mail\.mjs'/.test(
+    fs.readFileSync('netlify/functions/notify-email.mjs', 'utf8')));
+check('a single-use link can be emailed to the admin, not to its subject',
+  /to: prof\.email/.test(adminFn));
+check('and it can be copied',
+  /clipboard\.writeText/.test(adminJs));
+// Returning true from an onConfirm that opened a sheet closes the sheet it
+// just opened. That is why "Act as them" appeared to do nothing at all.
+check('the act-as sheet does not close the sheet it opens',
+  /or SW\.sheet closes the sheet showLink\(\) has just opened/.test(adminJs));
+check('there is a way to prove email works without waiting for an event',
+  fs.existsSync('netlify/functions/email-test.mjs') &&
+  /email-test/.test(js['js/shell.js']));
+check('and it only ever mails the caller’s own address',
+  /to: me\.email/.test(fs.readFileSync('netlify/functions/email-test.mjs', 'utf8')));
+check('the switch says your own actions never email',
+  /never for your own actions/.test(js['js/shell.js']));
+
+/* ---------------- 28e. invite links ---------------- */
+
+console.log('\n--- invite links ---');
+// pgcrypto lives in the `extensions` schema on Supabase, and create_invite
+// pins search_path = public — so gen_random_bytes was invisible and every
+// invite failed with "function gen_random_bytes(integer) does not exist".
+const schemaCode = noSqlComments(schema);
+check('no schema function calls an extension-schema function',
+  !/gen_random_bytes|uuid_generate_v4|pgp_sym_/.test(schemaCode));
+check('the invite token comes from core Postgres',
+  /replace\(gen_random_uuid\(\)::text, '-', ''\)/.test(schema));
+
+/* ---------------- 28f. collapsible sections ---------------- */
+
+console.log('\n--- long lists in the console ---');
+check('a person’s sections collapse when they are long',
+  /function section\(/.test(adminJs) && /<details class="ad-sect"/.test(adminJs));
+check('and each keeps its own state',
+  /\.ad-sect > summary/.test(adminCss));
+check('groups, friends, expenses and payments all use it',
+  (adminJs.match(/section\('/g) || []).length >= 4,
+  (adminJs.match(/section\('/g) || []).length);
+
 /* ---------------- 29. the console's layout ---------------- */
 
 console.log('\n--- console layout ---');
-const adminCss = fs.readFileSync('css/admin.css', 'utf8');
-check('the stat grid has a fixed column count, so no tile is stranded',
-  /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/.test(adminCss) &&
-  /repeat\(4, minmax\(0, 1fr\)\)/.test(adminCss));
-check('and there are eight tiles to fill it',
-  (adminJs.match(/\{ k: '/g) || []).length === 8,
-  (adminJs.match(/\{ k: '/g) || []).length);
+// The grid's column counts and the number of tiles have to agree, or the
+// last row goes ragged — which is what prompted the rework in the first
+// place. Checked as arithmetic rather than as fixed numbers, so adding a
+// tile fails here instead of quietly looking wrong.
+const tileCount = (adminJs.match(/\{ k: '/g) || []).length;
+const cols = [...adminCss.matchAll(/grid-template-columns: repeat\((\d+), minmax\(0, 1fr\)\)/g)]
+  .map(m => Number(m[1]));
+check('the stat grid declares fixed column counts', cols.length >= 2, cols);
+check('the wide grid divides the tiles exactly (' + tileCount + ' tiles)',
+  cols.some(c => tileCount % c === 0), { tileCount, cols });
+check('and a leftover tile on a narrow screen stretches instead of stranding',
+  /\.ad-stat:last-child:nth-child\(odd\) \{ grid-column: 1 \/ -1/.test(adminCss));
 check('a tile is a grid, so its number lines up with its neighbours',
   /\.ad-stat \{[^}]*grid-template-rows/.test(adminCss));
 check('list rows put their actions in a fixed column',
@@ -1045,5 +1152,21 @@ check('/admin is inside the manifest scope',
     return scope === '/' || scope === './' || '/admin'.indexOf(scope) === 0;
   })());
 
-console.log('\n' + (fails ? fails + ' FAILURE(S)' : 'all checks passed'));
+// A ReferenceError partway through printed a page of PASSes and then died
+// before this line, which reads like a quiet success unless you notice the
+// exit code. So the file counts its own check() calls and refuses to report
+// success unless every one of them ran — self-maintaining, rather than a
+// hardcoded number that goes stale the next time a check is added. Checks
+// inside a loop only push `ran` higher, which is why this is >= and not ==.
+const declared = fs.readFileSync(__filename, 'utf8')
+  .split('\n').filter(function (l) { return /^\s*check\(/.test(l); }).length;
+
+if (ran < declared) {
+  console.log('\nONLY ' + ran + ' of ' + declared + ' CHECKS RAN — the suite ' +
+    'did not finish. Something threw partway through.');
+  process.exit(2);
+}
+
+console.log('\n' + ran + ' checks · ' +
+  (fails ? fails + ' FAILURE(S)' : 'all checks passed'));
 process.exit(fails ? 1 : 0);

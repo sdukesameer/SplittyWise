@@ -457,6 +457,16 @@
         <p>When someone adds an expense, records a payment or puts you in a
            group, it lands here.</p>
       </div>
+      <!-- Being offline is not an error, so it does not get an error toast.
+           Activity is the one screen with nothing cached to fall back on. -->
+      <div class="empty" id="activity-offline" hidden>
+        <div class="empty-art">📡</div>
+        <h3>You are offline</h3>
+        <p>Activity needs a connection — it is the one screen that is not
+           kept on the device. Your balances and expenses are still here.</p>
+        <button type="button" class="btn btn-ghost" id="activity-retry"
+                style="max-width:15rem;margin:14px auto 0">Try again</button>
+      </div>
     </div>
 
     <!-- ---------- Account ---------- -->
@@ -585,6 +595,15 @@
           <button type="button" class="switch" id="email-switch" role="switch"
                   aria-checked="false" aria-label="Email notifications"></button>
         </div>
+        <button class="set-row" id="row-email-test" hidden>
+          <span class="grow">
+            <span class="set-title">Send me a test email</span>
+            <span class="set-sub">Proves it is set up. Your own actions never
+              send one, so adding an expense yourself is not a test.</span>
+          </span>
+          <span class="spinner"></span>
+          <svg class="chev" width="18" height="18" aria-hidden="true"><use href="#ic-chev"/></svg>
+        </button>
       </div>
 
       <div class="card">

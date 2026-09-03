@@ -275,6 +275,11 @@ window.SW = window.SW || {};
     return true;
   }
 
+  // Which notification ids this session has already shown as new. Without
+  // it, any repaint — a realtime event, coming back to the tab — would light
+  // up rows that were highlighted minutes ago.
+  const seenActivity = {};
+
   async function loadActivity(force) {
     if (SW.activityStale) { SW.activityStale = false; force = true; }
     if (activityLoaded && !force) return;
@@ -282,6 +287,19 @@ window.SW = window.SW || {};
     const skel = document.getElementById('activity-skel');
     const list = document.getElementById('activity-list');
     const empty = document.getElementById('activity-empty');
+    const offline = document.getElementById('activity-offline');
+
+    // Nothing to fetch with, and nothing cached to show: say so plainly
+    // rather than firing a toast that reads like a fault.
+    if (!navigator.onLine) {
+      skel.hidden = true;
+      empty.hidden = true;
+      offline.hidden = false;
+      list.innerHTML = '';
+      activityLoaded = false;      // so reconnecting reloads it
+      return;
+    }
+    offline.hidden = true;
 
     const { data, error } = await db
       .from('notifications')
@@ -296,9 +314,20 @@ window.SW = window.SW || {};
     if (error) {
       empty.hidden = true;
       list.innerHTML = '';
-      SW.toast('Could not load activity: ' + error.message, 'error');
+      activityLoaded = false;
+
+      // A request that failed because the connection went during it is the
+      // same situation as being offline, and gets the same screen. Only a
+      // real server error is worth shouting about.
+      const looksOffline = !navigator.onLine ||
+        /failed to fetch|networkerror|load failed/i.test(error.message || '');
+      offline.hidden = !looksOffline;
+      if (!looksOffline) {
+        SW.toast('Could not load activity: ' + error.message, 'error');
+      }
       return;
     }
+    offline.hidden = true;
 
     const shown = data.filter(visible);
 
@@ -309,10 +338,20 @@ window.SW = window.SW || {};
     }
 
     empty.hidden = true;
+
+    // Opening the tab marks everything read, so "new" has to be worked out
+    // before that happens — and remembered, or a repaint would highlight
+    // rows that were already seen.
+    const fresh = {};
+    shown.forEach(function (n) {
+      if (!n.is_read && !seenActivity[n.id]) fresh[n.id] = true;
+      seenActivity[n.id] = true;
+    });
+
     list.innerHTML = shown.map(function (n) {
       const target = activityTarget(n);
       const tag = target ? 'button' : 'div';
-      return '<' + tag + ' class="list-row"' +
+      return '<' + tag + ' class="list-row' + (fresh[n.id] ? ' is-fresh' : '') + '"' +
           (target ? ' data-goto="' + escapeHtml(target) + '"' : ' style="cursor:default"') + '>' +
         '<span class="avatar" style="background:var(--surface-2)">' +
           (TYPE_EMOJI[n.type] || '🔔') + '</span>' +
@@ -326,6 +365,16 @@ window.SW = window.SW || {};
         '</span></' + tag + '>';
     }).join('');
 
+    // The highlight is a "this is what arrived" cue, not a state, so it
+    // fades on its own rather than waiting to be dismissed.
+    if (Object.keys(fresh).length) {
+      setTimeout(function () {
+        list.querySelectorAll('.list-row.is-fresh').forEach(function (row) {
+          row.classList.add('is-fading');
+        });
+      }, 5000);
+    }
+
     // Opening the tab is the read receipt.
     const unread = shown.filter(function (n) { return !n.is_read; });
     if (unread.length) {
@@ -335,6 +384,10 @@ window.SW = window.SW || {};
   }
 
   async function refreshUnread() {
+    // Offline the count cannot change, and asking only produces a console
+    // error. The badge simply keeps its last value.
+    if (!navigator.onLine) return;
+
     // Counted by type rather than with head:true, because a muted type must
     // not contribute to the badge.
     const { data, error } = await db
@@ -719,9 +772,36 @@ window.SW = window.SW || {};
     sw.classList.toggle('is-on', on);
     sw.setAttribute('aria-checked', String(on));
     document.getElementById('email-notify-sub').textContent = on
-      ? 'At most one every 15 minutes, to ' + (SW.user ? SW.user.email : 'you')
+      ? 'At most one every 15 minutes, to ' + (SW.user ? SW.user.email : 'you') +
+        ' · never for your own actions'
       : 'Off — the bell and Activity still work';
+
+    const test = document.getElementById('row-email-test');
+    if (test) test.hidden = !on;
   }
+
+  document.getElementById('row-email-test').addEventListener('click', async function () {
+    const btn = this;
+    SW.busy(btn, true);
+    try {
+      const { data: sess } = await db.auth.getSession();
+      const token = sess && sess.session && sess.session.access_token;
+      const res = await fetch('/.netlify/functions/email-test', {
+        method: 'POST', headers: { Authorization: 'Bearer ' + token },
+      });
+      const body = await res.json().catch(function () { return {}; });
+      if (res.ok) {
+        SW.toast('Sent to ' + body.sentTo + ' — check spam too', 'ok');
+      } else if (res.status === 404) {
+        SW.toast('Email is not deployed yet on this site', 'error');
+      } else {
+        SW.toast(body.error || 'Could not send it', 'error');
+      }
+    } catch (e) {
+      SW.toast('Could not reach the mail service', 'error');
+    }
+    SW.busy(btn, false);
+  });
 
   document.getElementById('email-switch').addEventListener('click', async function () {
     const on = !this.classList.contains('is-on');
@@ -824,6 +904,17 @@ window.SW = window.SW || {};
   document.getElementById('activity-list').addEventListener('click', function (e) {
     const row = e.target.closest('[data-goto]');
     if (row) SW.navigate(row.getAttribute('data-goto'));
+  });
+
+  document.getElementById('activity-retry').addEventListener('click', function () {
+    loadActivity(true);
+  });
+
+  // Reconnecting is the moment to fill in the screen that could not load,
+  // rather than making somebody find the button.
+  window.addEventListener('online', function () {
+    if (activeView === 'activity' && !activityLoaded) loadActivity(true);
+    refreshUnread();
   });
 
   SW.viewHooks.activity = function () { loadActivity(); };

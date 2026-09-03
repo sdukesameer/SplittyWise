@@ -97,6 +97,29 @@ window.SW = window.SW || {};
 
   function count(n) { return (Number(n) || 0).toLocaleString('en-IN'); }
 
+  function bytes(n) {
+    const b = Number(n) || 0;
+    if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+    if (b >= 1048576) return Math.round(b / 1048576) + ' MB';
+    if (b >= 1024) return Math.round(b / 1024) + ' kB';
+    return b + ' B';
+  }
+
+  // A section that starts closed when it holds more than a screenful. Every
+  // <details> keeps its own state, so opening Groups does not close
+  // Expenses, and a person with a hundred expenses no longer arrives as a
+  // hundred rows.
+  function section(title, rows, opts) {
+    opts = opts || {};
+    const n = rows.length;
+    const openIt = n > 0 && n <= (opts.openUpTo === undefined ? 6 : opts.openUpTo);
+    return '<details class="ad-sect"' + (openIt ? ' open' : '') + '>' +
+      '<summary class="ad-sub">' + esc(title) +
+        '<span class="n">' + (n ? count(n) : 'none') + '</span></summary>' +
+      (n ? rows.join('') : '<div class="ad-empty">None.</div>') +
+    '</details>';
+  }
+
   function ago(iso) {
     if (!iso) return 'never';
     const secs = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -331,6 +354,11 @@ window.SW = window.SW || {};
       // question — a bare "Blocked: 0" answered nothing.
       { k: 'New accounts', v: access,
         n: count(s.banned) + ' blocked', warn: access !== 'Open' },
+      // Answers "will the audit trail fill the database?" by measurement.
+      // Everything diagnostic is on a retention schedule: error reports for
+      // 30 days, read notifications 90, the audit trail a year.
+      { k: 'Database', v: bytes(s.db_bytes),
+        n: bytes(s.kept_bytes) + ' of it logs · ' + count(s.audit_rows) + ' audit rows' },
     ];
 
     $('ad-stats').innerHTML = tiles.map(function (t) {
@@ -513,42 +541,50 @@ window.SW = window.SW || {};
             'Most recent: ' + esc(d.errors[0].message) + '</div>'
           : '') +
 
-        '<div class="ad-sub">Groups<span class="n">' +
-          count((d.groups || []).length) + '</span></div>' +
-        ((d.groups || []).length
-          ? d.groups.map(function (g) {
-              return '<div class="ad-item"><span class="ad-item-main">' +
-                '<span class="ad-item-title">' + esc(g.emoji) + ' ' + esc(g.name) + '</span>' +
-                '<span class="ad-item-sub">' + count(g.members) + ' members</span></span>' +
-                '<span class="ad-item-actions">' +
-                  '<button class="ad-mini is-danger" data-delgroup="' + esc(g.id) +
-                  '" data-name="' + esc(g.name) + '">Delete</button>' +
-                '</span></div>';
-            }).join('')
-          : '<div class="ad-empty">None.</div>') +
+        section('Groups', (d.groups || []).map(function (g) {
+          return '<div class="ad-item"><span class="ad-item-main">' +
+            '<span class="ad-item-title">' + esc(g.emoji) + ' ' + esc(g.name) + '</span>' +
+            '<span class="ad-item-sub">' + count(g.members) + ' members</span></span>' +
+            '<span class="ad-item-actions">' +
+              '<button class="ad-mini is-danger" data-delgroup="' + esc(g.id) +
+              '" data-name="' + esc(g.name) + '">Delete</button>' +
+            '</span></div>';
+        })) +
 
-        '<div class="ad-sub">Expenses<span class="n">' +
-          count((d.expenses || []).length) + '</span></div>' +
-        ((d.expenses || []).length
-          ? d.expenses.slice(0, 40).map(function (e) {
-              return '<div class="ad-item"><span class="ad-item-main">' +
-                '<span class="ad-item-title">' + esc(e.emoji || '🧾') + ' ' +
-                  esc(e.description) +
-                  (e.deleted_at ? ' <span class="ad-pill">binned</span>' : '') +
-                '</span>' +
-                '<span class="ad-item-sub">' + money(Math.round(Number(e.amount) * 100)) +
-                  ' · their share ' +
-                  money(Math.round(Number(e.share || 0) * 100)) +
-                  ' · ' + esc(e.date) + '</span></span>' +
-                '<span class="ad-item-actions"><button class="ad-mini' +
-                  (e.deleted_at ? '' : ' is-danger') + '" data-bin="' + esc(e.id) +
-                  '" data-to="' + (e.deleted_at ? 'restore' : 'bin') + '">' +
-                  (e.deleted_at ? 'Restore' : 'Bin') + '</button></span></div>';
-            }).join('') +
-            (d.expenses.length > 40
-              ? '<div class="ad-empty">…and ' + count(d.expenses.length - 40) + ' more.</div>'
-              : '')
-          : '<div class="ad-empty">None.</div>') +
+        section('Friends', (d.friends || []).map(function (fr) {
+          return '<div class="ad-item"><span class="ad-item-main">' +
+            '<span class="ad-item-title">' + esc(fr.name || fr.email) + '</span>' +
+            '<span class="ad-item-sub">' + esc(fr.email) + '</span></span></div>';
+        })) +
+
+        // Capped at 200 rather than 40: the section is closed by default now,
+        // so a long list costs nothing until it is opened.
+        section('Expenses', (d.expenses || []).slice(0, 200).map(function (e) {
+          return '<div class="ad-item"><span class="ad-item-main">' +
+            '<span class="ad-item-title">' + esc(e.emoji || '🧾') + ' ' +
+              esc(e.description) +
+              (e.deleted_at ? ' <span class="ad-pill">binned</span>' : '') +
+            '</span>' +
+            '<span class="ad-item-sub">' + money(Math.round(Number(e.amount) * 100)) +
+              ' · their share ' + money(Math.round(Number(e.share || 0) * 100)) +
+              ' · ' + esc(e.date) + '</span></span>' +
+            '<span class="ad-item-actions"><button class="ad-mini' +
+              (e.deleted_at ? '' : ' is-danger') + '" data-bin="' + esc(e.id) +
+              '" data-to="' + (e.deleted_at ? 'restore' : 'bin') + '">' +
+              (e.deleted_at ? 'Restore' : 'Bin') + '</button></span></div>';
+        }).concat((d.expenses || []).length > 200
+          ? ['<div class="ad-empty">…and ' + count(d.expenses.length - 200) +
+             ' older, not listed.</div>']
+          : [])) +
+
+        section('Payments', (d.settlements || []).map(function (s) {
+          const mine = s.from_user === (d.profile || {}).id;
+          return '<div class="ad-item"><span class="ad-item-main">' +
+            '<span class="ad-item-title">' + (mine ? 'Paid out' : 'Received') + ' ' +
+              money(Math.round(Number(s.amount) * 100)) + '</span>' +
+            '<span class="ad-item-sub">' + esc(s['on'] || '') +
+              (s.note ? ' · ' + esc(s.note) : '') + '</span></span></div>';
+        })) +
 
         '<div class="ad-sub">Act on this account</div>' +
         // An even grid of equal chips, safe ones first and the two
@@ -665,7 +701,9 @@ window.SW = window.SW || {};
 
     if (what === 'reset') {
       closeSheet();
-      return runApi('reset-password', { email: email }, 'Password reset link', true);
+      return runApi('reset-password', { email: email },
+        'Password reset link for ' + email,
+        'Single use, and it expires. Opening it sets a new password on that account.');
     }
     if (what === 'signout') {
       closeSheet();
@@ -688,17 +726,16 @@ window.SW = window.SW || {};
           busy(b, true);
           try {
             const r = await api('act-as', { email: email });
-            closeSheet();
-            SW.sheet({
-              title: 'Sign-in link for ' + email,
-              body: '<p class="ad-muted">Single use. Opening it makes this ' +
-                    'browser them.</p><code class="ad-code">' + esc(r.link) + '</code>',
-              confirm: 'Open it and become them', danger: true,
-              onConfirm: function () { window.location.href = r.link; return true; },
-              cancel: 'Never mind',
-            });
-          } catch (err) { toast(err.message, 'error'); busy(b, false); return false; }
-          return true;
+            busy(b, false);
+            r.action = 'act-as';
+            r.email = email;
+            showLink('Sign in as ' + email, r,
+              'Single use. Opening it makes this browser them.');
+          } catch (err) { toast(err.message, 'error'); busy(b, false); }
+          // false, or SW.sheet closes the sheet showLink() has just opened.
+          // Returning true here is why "Act as them" appeared to do nothing:
+          // the link flashed up and vanished in the same tick.
+          return false;
         },
       });
     }
@@ -757,17 +794,72 @@ window.SW = window.SW || {};
     }
   }
 
+  // A single-use link, with the three things anybody actually wants to do
+  // with one. Copying matters on a desktop; emailing matters on a phone,
+  // where selecting 60 characters of URL by hand is miserable.
+  function showLink(title, r, blurb) {
+    SW.sheet({
+      title: title,
+      body:
+        '<p class="ad-muted">' + esc(blurb || r.message || '') + '</p>' +
+        '<code class="ad-code" id="ad-link">' + esc(r.link) + '</code>' +
+        '<div class="ad-actions-grid" style="margin-top:12px">' +
+          '<button class="ad-mini" id="ad-link-copy">Copy the link</button>' +
+          '<button class="ad-mini" id="ad-link-mail">Email it to me</button>' +
+        '</div>' +
+        '<div class="field-error" id="ad-link-error"></div>',
+      confirm: 'Open it now',
+      danger: true,
+      onConfirm: function () { window.location.href = r.link; return true; },
+      cancel: 'Never mind',
+      onOpen: function () {
+        document.getElementById('ad-link-copy').addEventListener('click', async function () {
+          try {
+            await navigator.clipboard.writeText(r.link);
+            toast('Link copied', 'ok');
+          } catch (e) {
+            // Clipboard access needs a secure context and permission; select
+            // it instead so a manual copy still works.
+            const node = document.getElementById('ad-link');
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+            toast('Selected — press ' +
+              (/Mac/.test(navigator.platform) ? 'Cmd' : 'Ctrl') + '+C', 'ok');
+          }
+        });
+
+        document.getElementById('ad-link-mail').addEventListener('click', async function () {
+          const btn = this;
+          busy(btn, true);
+          try {
+            // Regenerated rather than resent, because the one on screen is
+            // single use and may already have been opened.
+            const again = await api(r.action, { email: r.email, deliver: 'email' });
+            if (again.emailed) {
+              toast('Sent to ' + again.emailedTo, 'ok');
+            } else {
+              setError('ad-link-error', again.emailError || 'Could not send it.');
+            }
+          } catch (err) {
+            setError('ad-link-error', err.message);
+          }
+          busy(btn, false);
+        });
+      },
+    });
+  }
+
   // For the actions whose only result is a message, or a link to pass on.
-  async function runApi(action, payload, title, showLink) {
+  async function runApi(action, payload, title, blurb) {
     try {
       const r = await api(action, payload);
-      if (showLink && r.link) {
-        return SW.sheet({
-          title: title,
-          body: '<p class="ad-muted">' + esc(r.message || '') + '</p>' +
-                '<code class="ad-code">' + esc(r.link) + '</code>',
-          confirm: null,
-        });
+      if (r.link) {
+        r.action = action;
+        r.email = payload.email;
+        return showLink(title, r, blurb);
       }
       toast(r.message || 'Done', 'ok');
     } catch (err) { toast(err.message, 'error'); }
