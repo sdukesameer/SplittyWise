@@ -542,7 +542,7 @@ button.is-loading .spinner { display: block; }
   gap: 4px;
   padding: 0 8px 0 6px;
 }
-.header-bar .grow { flex: 1; }
+.header-bar .grow { flex: 1; min-width: 0; }
 
 .icon-btn {
   width: 42px;
@@ -607,6 +607,7 @@ button.is-loading .spinner { display: block; }
   font-weight: 800;
   letter-spacing: -0.025em;
   line-height: 1.3;
+  min-width: 0;
 }
 .summary-text .amt-owed { color: var(--owed); }
 .summary-text .amt-owe { color: var(--owe); }
@@ -766,9 +767,7 @@ button.is-loading .spinner { display: block; }
   font-size: 17px;
   font-weight: 700;
   letter-spacing: -0.015em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;   /* list rows wrap rather than truncate */
 }
 .row-sub { display: block; font-size: 13.5px; color: var(--muted); }
 
@@ -864,11 +863,19 @@ button.is-loading .spinner { display: block; }
 .set-row .grow { flex: 1; min-width: 0; }
 .set-row .set-title,
 .switch-row .set-title { display: block; font-size: 15.5px; font-weight: 700; }
+/* These used to truncate with an ellipsis. Two problems: half the sentence
+   was simply unreadable, and because .switch-row .grow had no `min-width: 0`
+   the nowrap text refused to shrink and shoved the switch beside it off the
+   edge of the card — so "Round to whole rupees" had no visible toggle at
+   all. Text wraps now, and every flex text column can shrink. */
 .set-row .set-sub,
 .switch-row .set-sub {
   display: block;
-  font-size: 13px; color: var(--muted);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--muted);
+  /* An email or a UPI id has no spaces to break at. */
+  overflow-wrap: anywhere;
 }
 .set-row .chev { color: var(--faint); flex: none; }
 .set-row.is-danger .set-title { color: var(--danger); }
@@ -1059,7 +1066,7 @@ button.is-loading .spinner { display: block; }
   gap: 4px;
   padding: 0 10px;
 }
-.detail-bar .grow { flex: 1; }
+.detail-bar .grow { flex: 1; min-width: 0; }
 
 .icon-btn.round {
   background: var(--surface-3);
@@ -1089,9 +1096,7 @@ button.is-loading .spinner { display: block; }
 .detail-hero h1 {
   font-size: 25px;
   letter-spacing: -0.03em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;   /* a long group or friend name wrap rather than truncate */
 }
 .detail-balance { font-size: 14.5px; font-weight: 700; margin-top: 2px; }
 .detail-balance.is-owed { color: var(--owed); }
@@ -1185,9 +1190,7 @@ button.is-loading .spinner { display: block; }
   display: block;
   font-size: 15.5px;
   font-weight: 700;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;   /* ledger rows wrap rather than truncate */
 }
 .ledger-sub { display: block; font-size: 12.5px; color: var(--muted); }
 .ledger-delta { flex: none; text-align: right; line-height: 1.25; }
@@ -1320,9 +1323,8 @@ button.is-loading .spinner { display: block; }
   font-size: 15px;
   font-weight: 700;
   text-align: right;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;   /* picked values wrap rather than truncate */
+  min-width: 0;
 }
 .picker-row .pr-value.is-empty { color: var(--faint); font-weight: 600; }
 .picker-row .chev { color: var(--faint); flex: none; }
@@ -1362,7 +1364,7 @@ button.is-loading .spinner { display: block; }
   padding: 11px 12px;
   border-bottom: 1px solid var(--line);
 }
-.split-head .seg { flex: 1; }
+.split-head .seg { flex: 1; min-width: 0; }
 
 .split-list { display: flex; flex-direction: column; }
 
@@ -1379,9 +1381,8 @@ button.is-loading .spinner { display: block; }
   flex: 1;
   font-size: 15px;
   font-weight: 700;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;   /* names in a split wrap rather than truncate */
+  min-width: 0;
 }
 .split-person .sp-fixed {
   font-size: 15px;
@@ -1634,9 +1635,8 @@ button.is-loading .spinner { display: block; }
 .totals-line .tl-name {
   flex: 1;
   font-weight: 700;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;   /* names in the totals wrap rather than truncate */
+  min-width: 0;
 }
 .totals-line .tl-val { font-variant-numeric: tabular-nums; font-weight: 800; color: var(--muted); }
 .totals-line.is-top .tl-val { color: var(--text); }
@@ -1699,7 +1699,7 @@ button.is-loading .spinner { display: block; }
   border-top: 1px solid var(--line);
 }
 .switch-row:first-child { border-top: 0; }
-.switch-row .grow { flex: 1; }
+.switch-row .grow { flex: 1; min-width: 0; }
 .switch-row .set-title { font-size: 15.5px; font-weight: 700; }
 .switch-row .set-sub { font-size: 13px; color: var(--muted); }
 
@@ -1944,7 +1944,7 @@ button.is-loading .spinner { display: block; }
   gap: 8px;
   font-size: 13.5px;
 }
-.if-person .n { flex: 1; font-weight: 700; }
+.if-person .n { flex: 1; font-weight: 700; min-width: 0; }
 .if-person .v { font-variant-numeric: tabular-nums; font-weight: 800; }
 .if-person .pct { color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 
@@ -2038,9 +2038,8 @@ button.is-loading .spinner { display: block; }
 .legend-name {
   flex: 1;
   font-weight: 700;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;   /* chart legends wrap rather than truncate */
+  min-width: 0;
 }
 .legend-val { font-variant-numeric: tabular-nums; font-weight: 800; flex: none; }
 .legend-pct { color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; width: 34px; text-align: right; flex: none; }
@@ -2609,7 +2608,7 @@ button.is-loading .spinner { display: block; }
   gap: 8px;
   font-size: 13.5px;
 }
-.budget-line .bl-name { flex: 1; font-weight: 700; }
+.budget-line .bl-name { flex: 1; font-weight: 700; min-width: 0; }
 .budget-line .bl-num { font-variant-numeric: tabular-nums; font-weight: 800; }
 .budget-line .bl-num.is-over { color: var(--owe); }
 
@@ -2838,3 +2837,100 @@ button.is-loading .spinner { display: block; }
 /* With the chip alongside it, the delta column gives up its fixed width so
    neither gets squeezed on a narrow phone. */
 .ledger-delta.is-tight { min-width: 0; }
+
+/* ---- the way into the admin console -------------------------------------
+   Shown on the Account tab only for an admin. It has to be here because the
+   installed app has no address bar: /admin is inside the manifest scope, so
+   this link opens the console in the same standalone window and the App
+   link there comes back. */
+
+.profile-who { min-width: 0; flex: 1; }
+
+.admin-chip {
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 13px 8px 11px;
+  border-radius: var(--r-pill);
+  background: var(--teal-soft);
+  border: 1px solid var(--teal);
+  color: var(--teal);
+  font-size: 13.5px;
+  font-weight: 800;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.admin-chip svg { width: 16px; height: 16px; }
+.admin-chip:active { transform: scale(0.97); }
+
+/* On a narrow phone the name, the email and a chip do not fit on one line,
+   so the chip drops beneath rather than squeezing the name to nothing. */
+@media (max-width: 380px) {
+  .profile-head { flex-wrap: wrap; }
+  .profile-who { flex: 1 1 100%; order: 2; }
+  .admin-chip { order: 3; margin-left: 82px; }
+}
+
+/* ---- reading a value off a chart ---------------------------------------- */
+
+.ch-hit { cursor: pointer; }
+.ch-hit:focus { outline: none; }
+.ch-hit.is-hovered,
+.ch-hit:focus-visible {
+  fill: rgba(255, 255, 255, 0.05);            /* Safari < 16.2 */
+  fill: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.ch-tip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  min-width: 116px;
+  max-width: 220px;
+  padding: 8px 10px 9px;
+  border-radius: 11px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.ch-tip-title {
+  display: block;
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 3px;
+}
+
+.ch-tip-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.ch-tip-row i {
+  flex: none;
+  width: 8px; height: 8px;
+  border-radius: 2px;
+  align-self: center;
+}
+
+.ch-tip-row .n { flex: 1; min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
+.ch-tip-row .v {
+  flex: none;
+  font-weight: 800;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The chart needs a positioning context of its own for the tooltip, and the
+   hint tells people the hover is there at all. */
+.ch-plot { position: relative; }
+.ch-hint { color: var(--faint); }

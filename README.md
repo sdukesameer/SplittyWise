@@ -146,6 +146,7 @@ Seventeen suites, no database and no browser needed:
 | `voice.test.js` | Spoken amounts in words as well as digits, and never inventing one |
 | `calc.test.js` | Arithmetic in the amount field, including what it must refuse |
 | `autofill.test.js` | The one split figure that has to follow from the others — and every case where it must keep its hands off — plus ordinal days |
+| `charthover.js` (in `wiring`) | That both pages share one hover helper, that it uses pointer events so a tap works, and that the hit areas are focusable |
 | `wiring.test.js` | That the app is actually connected: every RPC exists with the arguments passed, every column selected exists, every button has a handler, every screen can render, every CSS token is defined at the base, the accessibility floor holds, the offline shell is complete, and nothing is labelled as destructive without something behind it |
 
 The whole database is one file: `supabase/schema.sql` — 21 tables, 57
@@ -986,7 +987,13 @@ So instead:
 - **Every action is written to `admin_audit`**, which nobody can edit or
   delete, including you.
 
-### 12.1 Signing in
+### 12.1 Signing in, and finding it
+
+**Account → Admin**, on the chip beside your name. It is only rendered when
+`profiles.is_admin` is true for you, and it is the only way in from an
+installed app — a home-screen app has no address bar to type `/admin` into.
+`/admin` is inside the manifest scope, so it opens in the same standalone
+window, and the **App** link in the console's header comes back.
 
 If you are already signed in to the app, `/admin` opens straight into the
 console — both pages are the same origin and share one session, so there is

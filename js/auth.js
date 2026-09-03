@@ -132,11 +132,13 @@ window.SW = window.SW || {};
   async function loadProfile(user) {
     const { data, error } = await db
       .from('profiles')
-      // Every column the app reads off SW.profile has to be here. Three of
-      // them were missing, so a saved photo, UPI ID, notification
-      // preferences and hidden form rows all silently reverted on reopen.
+      // Every column the app reads off SW.profile has to be here: one that
+      // is not selected reads as undefined, which is indistinguishable from
+      // "never set". Three were missing once, and a saved photo, UPI ID,
+      // notification preferences and hidden form rows all silently reverted
+      // on every reopen. tests/wiring.test.js now compares the two lists.
       .select('full_name, email, avatar_emoji, avatar_path, upi_id, ' +
-              'notify_prefs, ui_prefs, email_notify')
+              'notify_prefs, ui_prefs, email_notify, is_admin')
       .eq('id', user.id)
       .maybeSingle();
 

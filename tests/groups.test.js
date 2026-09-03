@@ -86,4 +86,27 @@ check('deterministic order',
   JSON.stringify(SW.simplifyDebts({ a:-100, m:200, z:-100 })), true);
 
 console.log('\n' + (fails ? fails + ' FAILURE(S)' : 'all checks passed'));
+
+// The group settings screen now states this in so many words: "If you owe
+// Ali ₹5 and Ali owes Bea ₹5, you pay Bea ₹5 and Ali is out of it. Nobody
+// ends up better or worse off." A claim printed in the UI belongs under
+// test, or the copy and the engine can drift apart.
+console.log('\n--- the example the UI promises ---');
+{
+  const nets = { me: -500, ali: 0, bea: 500 };
+  const out = SW.simplifyDebts(nets);
+  check('one payment, not two', out.length, 1);
+  check('and it goes straight to Bea',
+    out[0] && out[0].from + '->' + out[0].to + '@' + out[0].amount, 'me->bea@500');
+
+  const after = Object.assign({}, nets);
+  out.forEach(function (t) { after[t.from] += t.amount; after[t.to] -= t.amount; });
+  check('nobody ends up better or worse off', after, { me: 0, ali: 0, bea: 0 });
+
+  // Ali is owed nothing and owes nothing, so Ali must not be asked to move
+  // money at all — that is the whole point of the shortcut.
+  check('Ali is not involved in any transfer',
+    out.some(function (t) { return t.from === 'ali' || t.to === 'ali'; }), false);
+}
+
 process.exit(fails ? 1 : 0);

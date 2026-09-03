@@ -463,10 +463,18 @@
     <div data-view="account">
       <div class="profile-head">
         <button class="profile-emoji" id="profile-emoji" aria-label="Change your avatar">🙂</button>
-        <div style="min-width:0">
+        <div class="profile-who">
           <div class="profile-name" id="profile-name">&nbsp;</div>
           <div class="profile-email" id="profile-email">&nbsp;</div>
         </div>
+        <!-- Only rendered for an admin. A plain link, so it works inside the
+             installed app on iOS: /admin is within the manifest scope, so it
+             opens in the same standalone window rather than kicking out to
+             Safari. -->
+        <a class="admin-chip" id="admin-link" href="admin.html" hidden>
+          <svg aria-hidden="true"><use href="#ic-gear"/></svg>
+          <span>Admin</span>
+        </a>
       </div>
 
       <div class="card">
@@ -890,7 +898,9 @@
         <div class="switch-row">
           <span class="grow">
             <span class="set-title">Simplify group debts</span>
-            <span class="set-sub">Net three-way chains into single payments</span>
+            <span class="set-sub">Fewest payments instead of one per debt. If you
+              owe Ali ₹5 and Ali owes Bea ₹5, you pay Bea ₹5 and Ali is out of
+              it. Nobody ends up better or worse off.</span>
           </span>
           <button type="button" class="switch" id="gs-simplify" role="switch"
                   aria-checked="false" aria-label="Simplify group debts"></button>
@@ -905,7 +915,7 @@
                   aria-checked="false" aria-label="Round to whole rupees"></button>
         </div>
         <div class="card-body">
-          <div class="card-head" style="padding:0 0 6px">Your default split here</div>
+          <div class="card-head" style="padding:0 0 6px">Your default split in this group</div>
           <div class="seg" id="gs-default-split" role="group" aria-label="Default split mode"></div>
           <span class="hint">Only affects you. New expenses in this group start on this.</span>
         </div>
@@ -1116,6 +1126,7 @@
 <script src="js/trash.js"></script>
 <script src="js/voice.js"></script>
 <script src="js/lock.js"></script>
+<script src="js/charthover.js"></script>
 <script src="js/insights.js"></script>
 <script src="js/search.js"></script>
 <script src="js/realtime.js"></script>

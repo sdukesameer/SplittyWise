@@ -15,15 +15,22 @@ const jsFiles = glob('js', '.js');
 const js = Object.fromEntries(jsFiles.map(f => [f, fs.readFileSync(f, 'utf8')]));
 const allJs = Object.values(js).join('\n');
 
-// Strips // and /* */ comments and string-literal contents, for checks that
-// assert something is ABSENT. Three checks have already failed by matching a
-// comment: the "never commit this key" warning in config.js, an env var
-// named in an error message, and a comment reading "deliberately NOT
-// signOut()". Prose about code is not code.
-function codeOnly(src) {
+// Comments are not code, and neither is prose inside a string. Four checks
+// have now failed by matching one: the "never commit this key" warning in
+// config.js, an env var named in an error message, a comment reading
+// "deliberately NOT signOut()", and a length cap that a growing comment
+// pushed a select() out of range.
+//
+// noComments keeps string contents, for checks that need to read them.
+// codeOnly blanks those too, for checks asserting something is ABSENT.
+function noComments(src) {
   return String(src || '')
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+}
+
+function codeOnly(src) {
+  return noComments(src)
     .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
     .replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
 }
@@ -153,8 +160,12 @@ check('no direct delete from the storage tables',
 // undefined, which looks exactly like "the user never set it". That is how a
 // saved photo, UPI ID and both preference blobs reverted on every reopen.
 console.log('\n--- profile columns ---');
-const profileSelect = (js['js/auth.js'].match(
-  /from\('profiles'\)[\s\S]{0,400}?\.select\(((?:\s*'[^']*'\s*\+?)+)\)/) || [, ''])[1]
+// Comments are stripped first: the gap between from('profiles') and
+// .select() is explanatory prose, and a length cap on it made this check
+// fail the moment that comment grew — which looks exactly like a missing
+// column and is not one.
+const profileSelect = (noComments(js['js/auth.js']).match(
+  /from\('profiles'\)[\s\S]{0,200}?\.select\(((?:\s*'[^']*'\s*\+?)+)\)/) || [, ''])[1]
   .replace(/'\s*\+\s*'/g, '').replace(/'/g, '');
 const selected = new Set(profileSelect.split(',').map(x => x.trim()).filter(Boolean));
 
@@ -942,6 +953,97 @@ check('the undo chip has a handler on both timelines',
 check('and the chip is styled', /\.undo-chip\s*\{/.test(css));
 check('the ledger selects deleted_at, or the client filter is vacuous',
   /created_at, deleted_at/.test(js['js/balances.js']));
+
+/* ---------------- 30. text must wrap, not vanish ---------------- */
+
+// A subtitle set to `white-space: nowrap` in a flex row whose text column
+// had no `min-width: 0` refused to shrink, and shoved the switch beside it
+// clean off the card — so "Round to whole rupees" had no visible toggle.
+console.log('\n--- responsive text ---');
+
+const ruleBodies = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].map(m => ({
+  sel: m[1].trim().split('\n').pop().trim(),
+  body: m[2],
+}));
+
+// Anything still truncating has to be a control whose layout wrapping would
+// break — a chip or a segmented button — never a sentence.
+const CHIPS = ['.header-action', '.chip', '.split-modes button', '.pending-chip',
+               '.undo-chip', '.admin-chip'];
+const truncating = ruleBodies
+  .filter(r => /nowrap/.test(r.body))
+  .map(r => r.sel)
+  .filter(sel => !CHIPS.includes(sel));
+check('no sentence is truncated instead of wrapping', truncating.length === 0, truncating);
+
+// A flex child defaults to min-width:auto and will not shrink below its
+// content, which is what pushed the switch out of view.
+// Judged per selector across the whole file, not per rule: a media query
+// that re-declares `flex` does not undo a `min-width: 0` set in the base
+// rule, and flagging it would be a false positive.
+const minWidthFor = {};
+ruleBodies.forEach(r => {
+  if (/min-width/.test(r.body)) minWidthFor[r.sel] = true;
+});
+const cannotShrink = [...new Set(ruleBodies
+  .filter(r => /flex:\s*1\b/.test(r.body) && !minWidthFor[r.sel])
+  .map(r => r.sel))]
+  .filter(sel => !/\.input$|input\[|\.app-main|\.skel-lines|pb-spacer/.test(sel));
+check('every flex text column can shrink', cannotShrink.length === 0, cannotShrink);
+
+check('the switch rows in particular', /\.switch-row \.grow \{[^}]*min-width: 0/.test(css));
+check('and long unbroken strings break rather than overflow',
+  /\.set-sub \{[\s\S]{0,200}overflow-wrap: anywhere/.test(css));
+
+/* ---------------- 31. reading a value off a chart ---------------- */
+
+console.log('\n--- chart hover ---');
+const hover = js['js/charthover.js'];
+check('the helper is shared by both pages, not copied',
+  /<script src="js\/charthover\.js">/.test(html) &&
+  /<script src="js\/charthover\.js">/.test(adminHtml));
+check('it is cached for offline use',
+  cached.includes('js/charthover.js'));
+check('and loaded before the charts that use it',
+  html.indexOf('js/charthover.js') < html.indexOf('js/insights.js'));
+check('pointer events, so a tap works as well as a hover',
+  /pointermove/.test(hover) && /pointerdown/.test(hover) &&
+  !/\bonmouseover|addEventListener\('mouseover'/.test(hover));
+check('a touch does not dismiss on leave, having nowhere to go',
+  /pointerType === 'mouse'/.test(hover));
+check('the hit areas are focusable, so it works without a pointer',
+  /tabindex="0"/.test(hover));
+check('the tooltip is kept inside the chart',
+  /Math\.max\(4, Math\.min\(/.test(hover));
+
+check('the admin chart has one hit area per day',
+  /SW\.chartHit\(i, PAD_L \+ step \* i/.test(adminJs) &&
+  /attachChartHover\(host, tips\)/.test(adminJs));
+check('and names all three series in the tooltip',
+  (adminJs.match(/\['(expenses|signups|errors)'/g) || []).length >= 3);
+check('the app’s month bars are hoverable too',
+  /SW\.chartHit\(/.test(js['js/insights.js']) &&
+  /attachChartHover\(barHost/.test(js['js/insights.js']));
+check('the donut has none, because its legend already shows everything',
+  /legend beneath it already prints/.test(js['js/insights.js']));
+
+/* ---------------- 32. reaching the console from the app ---------------- */
+
+console.log('\n--- the way into the console ---');
+check('the Account tab links to it',
+  /id="admin-link"/.test(html) && /href="admin\.html"/.test(html));
+check('hidden unless you are an admin',
+  /adminLink\.hidden = !p\.is_admin/.test(js['js/shell.js']));
+check('and is_admin is selected, or the link never appears',
+  selected.has('is_admin'));
+check('it is a link, so the installed app opens it in the same window',
+  /<a class="admin-chip"/.test(html));
+check('/admin is inside the manifest scope',
+  (function () {
+    const m = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+    const scope = m.scope || '/';
+    return scope === '/' || scope === './' || '/admin'.indexOf(scope) === 0;
+  })());
 
 console.log('\n' + (fails ? fails + ' FAILURE(S)' : 'all checks passed'));
 process.exit(fails ? 1 : 0);

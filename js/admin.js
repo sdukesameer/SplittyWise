@@ -371,17 +371,43 @@ window.SW = window.SW || {};
     }
 
     const bar = Math.max(2, step * 0.26);
+    const SERIES = [
+      ['expenses', 'var(--teal)', 'Expenses'],
+      ['signups', '#7C9CF5', 'Signups'],
+      ['errors', 'var(--owe)', 'Failures'],
+    ];
+
     series.forEach(function (d, i) {
       const x = PAD_L + step * i + (step - bar * 3) / 2;
-      [['expenses', 'var(--teal)'], ['signups', '#7C9CF5'], ['errors', 'var(--owe)']]
-        .forEach(function (pair, j) {
-          const v = d[pair[0]] || 0;
-          if (!v) return;
-          const top = y(v);
-          svg += '<rect x="' + (x + bar * j) + '" y="' + top + '" width="' + bar +
-                 '" height="' + Math.max(1, H - PAD_B - top) + '" rx="1.5" fill="' +
-                 pair[1] + '"/>';
-        });
+      SERIES.forEach(function (pair, j) {
+        const v = d[pair[0]] || 0;
+        if (!v) return;
+        const top = y(v);
+        svg += '<rect x="' + (x + bar * j) + '" y="' + top + '" width="' + bar +
+               '" height="' + Math.max(1, H - PAD_B - top) + '" rx="1.5" fill="' +
+               pair[1] + '"/>';
+      });
+    });
+
+    // Thirty days by three series and no value labels: without this there is
+    // no way to read a figure off it at all. One hit area per day, the full
+    // height of the plot, so there is no aiming at a two-pixel bar.
+    const tips = series.map(function (d) {
+      const when = new Date(d.day).toLocaleDateString('en-IN',
+        { weekday: 'short', day: 'numeric', month: 'short' });
+      return {
+        title: when,
+        rows: SERIES.map(function (pair) {
+          return { color: pair[1], name: pair[2], value: count(d[pair[0]] || 0) };
+        }),
+      };
+    });
+
+    series.forEach(function (d, i) {
+      svg += SW.chartHit(i, PAD_L + step * i, PAD_T, step, H - PAD_B - PAD_T,
+        tips[i].title + ': ' + tips[i].rows.map(function (r) {
+          return r.value + ' ' + r.name.toLowerCase();
+        }).join(', '));
     });
 
     // A label every seventh day, plus the last — but only if the last is far
@@ -405,9 +431,11 @@ window.SW = window.SW || {};
         '<span><i style="background:var(--teal)"></i>Expenses</span>' +
         '<span><i style="background:#7C9CF5"></i>Signups</span>' +
         '<span><i style="background:var(--owe)"></i>Failures</span>' +
+        '<span style="color:var(--faint)">Hover or tap a day for its figures</span>' +
       '</div>';
 
     host.innerHTML = svg;
+    SW.attachChartHover(host, tips);
   }
 
   async function refreshStats() {

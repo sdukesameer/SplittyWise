@@ -377,6 +377,11 @@ window.SW = window.SW || {};
       ? 'Tap to change or remove it'
       : 'A face is easier to spot than a colour';
 
+    // The console is a separate page, so an installed app has no other way
+    // to reach it — there is no address bar to type /admin into.
+    const adminLink = document.getElementById('admin-link');
+    if (adminLink) adminLink.hidden = !p.is_admin;
+
     // Show the photo in the header of the tab too, not just the emoji.
     const big = document.getElementById('profile-emoji');
     if (url) {

@@ -56,6 +56,9 @@ window.SW = window.SW || {};
         '" text-anchor="middle">TOTAL</text>' +
       '</svg>';
 
+    // No hover on the ring: the legend beneath it already prints every
+    // slice's exact percentage and amount, so a tooltip would only repeat
+    // what is already on screen.
     const legend = '<div class="legend">' + slices.map(function (s) {
       const pct = Math.round((s.paise / total) * 100);
       return '<div class="legend-row">' +
@@ -122,9 +125,25 @@ window.SW = window.SW || {};
           '" text-anchor="middle">' + esc(b.label) + '</text>';
     }).join('');
 
+    const hits = buckets.map(function (b, i) {
+      return SW.chartHit(i, padL + slot * i, padT, slot, plotH,
+        b.label + ' ' + b.year + ': ' + SW.money(b.paise));
+    }).join('');
+
     return '<svg class="bars" viewBox="0 0 ' + W + ' ' + H + '" role="img" ' +
       'aria-label="Spending per month, peaking at ' + SW.money(peak) + '">' +
-      grid + bars + '</svg>';
+      grid + bars + hits + '</svg>';
+  }
+
+  // The value printed over a bar is abbreviated so the labels do not collide,
+  // which means the exact figure is only available on hover.
+  function barTips(buckets) {
+    return buckets.map(function (b) {
+      return {
+        title: b.label + ' ' + b.year,
+        rows: [{ name: 'Your share', value: SW.money(b.paise) }],
+      };
+    });
   }
 
   // ₹1,240 -> "1.2k", so axis and value labels never collide.
@@ -199,9 +218,15 @@ window.SW = window.SW || {};
 
       '<div class="chart-card">' +
         '<h3>Month by month</h3>' +
-        '<div class="ch-sub">Your share, last six months</div>' +
-        barsHtml(bars) +
+        '<div class="ch-sub">Your share, last six months' +
+          '<span class="ch-hint"> · tap a month for the exact figure</span></div>' +
+        '<div class="ch-plot" data-bars>' + barsHtml(bars) + '</div>' +
       '</div>';
+
+    // The figure printed over each bar is abbreviated so the labels do not
+    // collide, so the exact one lives on hover.
+    const barHost = host.querySelector('[data-bars]');
+    if (barHost && SW.attachChartHover) SW.attachChartHover(barHost, barTips(bars));
 
     host.querySelector('.period-bar').addEventListener('click', function (e) {
       const all = e.target.closest('[data-period]');
