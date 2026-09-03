@@ -729,6 +729,33 @@ console.log('\n--- administration ---');
 const adminJs = js['js/admin.js'];
 const adminFn = fs.readFileSync('netlify/functions/admin.mjs', 'utf8');
 
+// admin.html loads css/app.css as well as css/admin.css, so any attribute
+// the app's stylesheet already styles will silently apply to the console
+// too. data-pane was the first casualty: app.css hides it, so every tab
+// button vanished while the panes survived on class specificity, and the
+// console rendered with no navigation at all.
+const appAttrs = [...css.matchAll(/\[(data-[a-z-]+)\]/g)].map(m => m[1]);
+const consoleAttrs = [...(adminHtml + js['js/admin.js'])
+  .matchAll(/\b(data-[a-z-]+)\s*=/g)].map(m => m[1]);
+const collisions = [...new Set(consoleAttrs.filter(a => appAttrs.includes(a)))];
+check('no console attribute is one the app stylesheet already styles',
+  collisions.length === 0, { collisions, styledByApp: [...new Set(appAttrs)] });
+
+// Same trap for the classes that carry layout, as opposed to the ones the
+// console reuses on purpose (btn, input, field, switch, sheet…).
+check('the console names its own panes and tabs distinctly',
+  /data-adpane/.test(adminHtml) && /\.ad-pane\b/.test(
+    fs.readFileSync('css/admin.css', 'utf8')));
+check('every console tab has a pane, and the reverse',
+  (function () {
+    const tabs = [...adminHtml.matchAll(/class="ad-tab[^"]*"\s+data-adpane="([a-z]+)"/g)]
+      .map(m => m[1]);
+    const panes = [...adminHtml.matchAll(/class="ad-pane[^"]*"\s+data-adpane="([a-z]+)"/g)]
+      .map(m => m[1]);
+    return tabs.length >= 5 && tabs.every(t => panes.includes(t)) &&
+           panes.every(pn => tabs.includes(pn));
+  })());
+
 check('there is no admin password anywhere',
   !/ADMIN_PASSWORD|admin_password/i.test(adminJs + adminFn + schema + toml));
 check('the console signs in with a real Supabase account',
@@ -740,6 +767,13 @@ check('and the key is used only in the function',
   !/apikey:\s*SUPABASE_SERVICE_ROLE_KEY|Bearer.*SERVICE_ROLE/.test(adminJs));
 check('the function verifies the caller’s token before anything else',
   /auth\/v1\/user/.test(adminFn) && /is_admin !== true/.test(adminFn));
+// An anonymous POST used to be answered with the deploy's configuration
+// state, which is not an outsider's business. The cheapest check that needs
+// no configuration has to come first.
+check('an unsigned request is refused before the config is mentioned',
+  adminFn.indexOf("if (!bearer)") < adminFn.indexOf('no admin credentials'));
+check('and the config error still exists for a signed-in admin',
+  /no admin credentials configured/.test(adminFn));
 
 // Every admin_* function is security definer, so a missing caller check is
 // unrestricted access. The live audit checks this too; this catches it

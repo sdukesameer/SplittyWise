@@ -256,14 +256,14 @@ window.SW = window.SW || {};
   /* ======================= tabs ====================================== */
 
   $('ad-tabs').addEventListener('click', function (e) {
-    const tab = e.target.closest('[data-pane]');
+    const tab = e.target.closest('[data-adpane]');
     if (!tab) return;
-    const name = tab.getAttribute('data-pane');
+    const name = tab.getAttribute('data-adpane');
     document.querySelectorAll('.ad-tab').forEach(function (t) {
       t.classList.toggle('is-on', t === tab);
     });
     document.querySelectorAll('.ad-pane').forEach(function (p) {
-      p.classList.toggle('is-on', p.getAttribute('data-pane') === name);
+      p.classList.toggle('is-on', p.getAttribute('data-adpane') === name);
     });
   });
 
@@ -333,10 +333,16 @@ window.SW = window.SW || {};
         });
     });
 
-    // Only a few dates, or they collide.
-    series.forEach(function (d, i) {
-      if (i % 7 !== 0 && i !== series.length - 1) return;
-      const day = new Date(d.day);
+    // A label every seventh day, plus the last — but only if the last is far
+    // enough from the one before it. Thirty days means day 28 and day 29 land
+    // side by side, and the two labels print on top of each other.
+    const labelAt = [];
+    for (let i = 0; i < series.length; i += 7) labelAt.push(i);
+    const last = series.length - 1;
+    if (last - labelAt[labelAt.length - 1] >= 4) labelAt.push(last);
+
+    labelAt.forEach(function (i) {
+      const day = new Date(series[i].day);
       svg += '<text x="' + (PAD_L + step * i + step / 2) + '" y="' + (H - 8) +
              '" text-anchor="middle" font-size="10" fill="var(--faint)">' +
              day.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) +

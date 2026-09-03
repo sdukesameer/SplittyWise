@@ -34,6 +34,13 @@ export default async (request) => {
     return json({ error: 'POST only' }, 405);
   }
 
+  // Anyone at all can POST to this URL, so the cheapest test that needs no
+  // configuration comes first: is a token even presented? Reporting the
+  // deployment's configuration state to an anonymous caller told them
+  // something they have no business knowing.
+  const bearer = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
+  if (!bearer) return json({ error: 'Not signed in' }, 401);
+
   const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY } = process.env;
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
     return json({ error: 'This deploy has no admin credentials configured. See README 12.' }, 501);
@@ -57,9 +64,6 @@ export default async (request) => {
   if (!ACTIONS.has(action)) return json({ error: 'Unknown action' }, 400);
 
   // ---- 1. who is asking ---------------------------------------------------
-  const bearer = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
-  if (!bearer) return json({ error: 'Not signed in' }, 401);
-
   const meRes = await fetch(base + '/auth/v1/user', {
     headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + bearer },
   });

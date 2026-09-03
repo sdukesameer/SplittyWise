@@ -104,6 +104,12 @@ body.admin {
 
 /* ---- panes ---- */
 
+/* app.css styles [data-pane] for the app's own group panes, and both
+   stylesheets load on this page. The attribute here is data-adpane so the
+   two cannot collide — the first version used data-pane, and app.css's
+   `[data-pane] { display: none }` hid every tab button while the panes
+   themselves survived on class specificity. The console rendered with no
+   navigation at all. */
 .ad-pane { display: none; max-width: 1080px; margin: 0 auto; padding: 16px 14px 0; }
 .ad-pane.is-on { display: block; }
 

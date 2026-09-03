@@ -52,15 +52,15 @@
       <button class="btn-text" id="ad-signout" type="button">Sign out</button>
     </div>
     <nav class="ad-tabs" id="ad-tabs">
-      <button class="ad-tab is-on" data-pane="overview" type="button">Overview</button>
-      <button class="ad-tab" data-pane="people" type="button">People</button>
-      <button class="ad-tab" data-pane="access" type="button">Access</button>
-      <button class="ad-tab" data-pane="failures" type="button">Failures</button>
-      <button class="ad-tab" data-pane="trail" type="button">Audit trail</button>
+      <button class="ad-tab is-on" data-adpane="overview" type="button">Overview</button>
+      <button class="ad-tab" data-adpane="people" type="button">People</button>
+      <button class="ad-tab" data-adpane="access" type="button">Access</button>
+      <button class="ad-tab" data-adpane="failures" type="button">Failures</button>
+      <button class="ad-tab" data-adpane="trail" type="button">Audit trail</button>
     </nav>
   </header>
 
-  <section class="ad-pane is-on" data-pane="overview">
+  <section class="ad-pane is-on" data-adpane="overview">
     <div class="ad-stats" id="ad-stats"></div>
     <div class="ad-card">
       <h2>Last 30 days</h2>
@@ -68,7 +68,7 @@
     </div>
   </section>
 
-  <section class="ad-pane" data-pane="people">
+  <section class="ad-pane" data-adpane="people">
     <div class="ad-card">
       <div class="ad-row-head">
         <h2>People</h2>
@@ -79,7 +79,7 @@
     </div>
   </section>
 
-  <section class="ad-pane" data-pane="access">
+  <section class="ad-pane" data-adpane="access">
     <div class="ad-card">
       <h2>Who can create an account</h2>
       <div class="switch-row">
@@ -158,7 +158,7 @@
     </div>
   </section>
 
-  <section class="ad-pane" data-pane="failures">
+  <section class="ad-pane" data-adpane="failures">
     <div class="ad-card">
       <div class="ad-row-head">
         <h2>Failures</h2>
@@ -170,7 +170,7 @@
     </div>
   </section>
 
-  <section class="ad-pane" data-pane="trail">
+  <section class="ad-pane" data-adpane="trail">
     <div class="ad-card">
       <div class="ad-row-head"><h2>Audit trail</h2></div>
       <span class="hint">Every administrative action, append-only. Nobody can
