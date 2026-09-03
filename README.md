@@ -126,6 +126,17 @@ see section 4.7.
 for t in tests/*.test.js; do node "$t"; done
 ```
 
+```bash
+SITE_URL=https://your-site.netlify.app ./scripts/db e2e
+```
+
+**Run that one before letting anybody else near the app.** The seventeen
+suites below are static or arithmetic — they all passed while signup returned
+a 500, because none of them ever signed anybody up. `e2e` does, over HTTP, as
+real users with real tokens, so RLS applies and triggers fire. It creates its
+own throwaway accounts on `example.com` and removes them afterwards. 73
+checks across every module.
+
 Seventeen suites, no database and no browser needed:
 
 | Suite | Covers |
@@ -1233,6 +1244,36 @@ the `is_admin` guard was in place and the audit could see it, but it compared
 `NULL <> 'yes'` is `NULL`, which `if` treats as false. The trigger was inert
 and a normal user could grant themselves admin. Checking that a mechanism
 exists is not checking that it works.
+
+---
+
+## When signup fails with a 500
+
+Check the response body before anything else:
+
+```
+{"code":500,"error_code":"unexpected_failure","msg":"Error sending confirmation email"}
+```
+
+That is not the app and not the database. Supabase accepted the signup, could
+not **send** the confirmation, and rolled the account back. Three causes,
+commonest first:
+
+1. **Your SMTP provider is blocking Supabase's IP.** Brevo has
+   *SMTP & API → SMTP → "Unauthorized IP addresses are blocked for your SMTP
+   keys"*, and Supabase's senders are not in anybody's authorised list. Turn
+   that off, or every auth email fails. This one costs an afternoon because
+   nothing in Supabase mentions it.
+2. **Wrong SMTP credentials** — the API key pasted where the SMTP key goes,
+   or the host in the username field. See [section 4.6](#46-custom-smtp-and-what-it-does-and-does-not-fix).
+3. **The built-in mail is rate-limited.** Two an hour before you configure
+   your own SMTP. That normally returns 429, not 500.
+
+A different message, `Database error saving new user`, means the opposite —
+mail is fine and `handle_new_user()` refused: signups closed, invite-only, or
+the address is blocked. Check **Access** in the admin console.
+
+`./scripts/db e2e` signs up for real and reports which of the two it is.
 
 ---
 

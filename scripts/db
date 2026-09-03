@@ -100,6 +100,31 @@ empty-receipts)
   echo "Emptied. Delete the bucket itself under Storage in the dashboard."
   ;;
 
+e2e)
+  require_link
+  echo "Exercising every module against the live project, over HTTP, as real"
+  echo "users. Creates throwaway accounts on example.com and removes them."
+  echo
+  REF=$(cat supabase/.temp/project-ref)
+  KEYS=$(supabase projects api-keys --project-ref "$REF" 2>/dev/null)
+  export SUPABASE_URL="https://$REF.supabase.co"
+  # The CLI returns either {"keys":[...]} or a bare list depending on flags,
+  # so accept both rather than depending on which.
+  pick() {
+    printf '%s' "$KEYS" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+rows = d['keys'] if isinstance(d, dict) else d
+print(next(k['api_key'] for k in rows if k.get('id') == '$1'))
+"
+  }
+  export SUPABASE_ANON_KEY=$(pick anon)
+  export SUPABASE_SERVICE_ROLE_KEY=$(pick service_role)
+  # SITE_URL enables the checks that need the deployed Netlify functions.
+  export SITE_URL="${SITE_URL:-}"
+  node tests/e2e.mjs
+  ;;
+
 attack)
   require_link
   echo "Trying things an ordinary user must not be able to do…"

@@ -1560,6 +1560,7 @@ create or replace function public.notify_expense_deleted()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare
   me          uuid := auth.uid();
+  deleting    text := coalesce(current_setting('splittywise.deleting_user', true), '');
   actor_name  text;
   gname       text;
 begin
@@ -1574,6 +1575,10 @@ begin
   then
     return old;
   end if;
+
+  -- A whole account is going. Every recipient may be about to disappear
+  -- with it, and an announcement about it could not be delivered anyway.
+  if deleting <> '' then return old; end if;
 
   select full_name into actor_name from public.profiles where id = me;
   if old.group_id is not null then
@@ -1628,6 +1633,13 @@ begin
   -- Transaction-local, and read by notify_expense_deleted so the cascade
   -- does not emit one notification per expense in the group.
   perform set_config('splittywise.deleting_group', old.id::text, true);
+
+  -- The group is going because its owner is being deleted, so the members
+  -- list may include profiles that are disappearing too — and one of them
+  -- is certainly the person whose account this was.
+  if coalesce(current_setting('splittywise.deleting_user', true), '') <> '' then
+    return old;
+  end if;
 
   select full_name into actor_name from public.profiles where id = me;
 
@@ -2123,6 +2135,78 @@ begin
 end $$;
 
 -- ============================================================================
+--  11c. DELETING A PERSON HAS TO ACTUALLY WORK
+--
+--  Fifteen foreign keys to profiles cascade. Six did not, and every one of
+--  them is a table somebody fills up by using the app — so "Delete account"
+--  in the admin console failed for anyone who had entered an expense, paid
+--  for one, or settled up. It appeared to work only when the groups happened
+--  to be deleted first, which cascaded the rows out of the way by accident.
+--
+--  Cascade is the only coherent option: from_user, to_user, created_by and
+--  payer_id are all `not null`, so there is nothing to set them to. Deleting
+--  a person therefore removes shared history and moves other people's
+--  balances, which is why the console says so in as many words and why
+--  blocking is offered as the thing to do instead.
+-- ============================================================================
+
+-- Spelled out one by one rather than looped: a record[] literal has no field
+-- names to unpack portably, and six explicit statements are clearer than a
+-- clever loop that has to be re-read every time.
+alter table public.expenses drop constraint if exists expenses_payer_id_fkey;
+alter table public.expenses add constraint expenses_payer_id_fkey
+  foreign key (payer_id) references public.profiles(id) on delete cascade;
+
+alter table public.expenses drop constraint if exists expenses_created_by_fkey;
+alter table public.expenses add constraint expenses_created_by_fkey
+  foreign key (created_by) references public.profiles(id) on delete cascade;
+
+alter table public.settlements drop constraint if exists settlements_from_user_fkey;
+alter table public.settlements add constraint settlements_from_user_fkey
+  foreign key (from_user) references public.profiles(id) on delete cascade;
+
+alter table public.settlements drop constraint if exists settlements_to_user_fkey;
+alter table public.settlements add constraint settlements_to_user_fkey
+  foreign key (to_user) references public.profiles(id) on delete cascade;
+
+alter table public.settlements drop constraint if exists settlements_created_by_fkey;
+alter table public.settlements add constraint settlements_created_by_fkey
+  foreign key (created_by) references public.profiles(id) on delete cascade;
+
+alter table public.recurring_expenses drop constraint if exists recurring_expenses_payer_id_fkey;
+alter table public.recurring_expenses add constraint recurring_expenses_payer_id_fkey
+  foreign key (payer_id) references public.profiles(id) on delete cascade;
+
+-- ---------------------------------------------------------------------------
+--  Deleting a person must not try to notify them about it
+--
+--  Removing a profile cascades to their expenses, and the BEFORE DELETE
+--  trigger on expenses writes a notification for everyone on the split —
+--  including, since notifications started covering your own actions, the
+--  person being deleted. Their profile row is already gone by then, so the
+--  insert fails a foreign key and the whole delete aborts with 23503. The
+--  admin console's "Delete account" simply did not work.
+--
+--  This is the same shape as the group-delete 409: a cascade announcing
+--  something about a row that is disappearing in the same statement. Same
+--  remedy — a transaction-local flag, set before the cascade starts, that
+--  tells the notification triggers to stay quiet. Checking whether the
+--  profile still exists would not do: inside one statement the snapshot
+--  still shows the row the foreign key has already accounted for.
+-- ---------------------------------------------------------------------------
+create or replace function public.mark_user_deleting()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  perform set_config('splittywise.deleting_user', old.id::text, true);
+  return old;
+end $$;
+
+drop trigger if exists on_profile_deleting on public.profiles;
+create trigger on_profile_deleting
+  before delete on public.profiles
+  for each row execute function public.mark_user_deleting();
+
+-- ============================================================================
 --  12. ADMINISTRATION
 --
 --  There is deliberately no separate "admin" account with a shared password.
@@ -2342,8 +2426,13 @@ begin
   -- setting has never been set, and `NULL <> 'yes'` is NULL, not true — so
   -- without it this `if` never fires and the guard silently permits
   -- everything. That exact bug let a normal user grant themselves admin.
+  -- The service_role key is the project owner's, never in a browser, and it
+  -- already bypasses every RLS policy — so blocking it from one column is
+  -- theatre that only makes bootstrapping awkward. A normal signed-in user
+  -- is still refused, which is the whole point.
   if new.is_admin is distinct from old.is_admin
-     and coalesce(current_setting('splittywise.granting_admin', true), 'no') <> 'yes' then
+     and coalesce(current_setting('splittywise.granting_admin', true), 'no') <> 'yes'
+     and coalesce(auth.role(), '') <> 'service_role' then
     raise exception 'is_admin can only be changed by an administrator.'
       using errcode = 'insufficient_privilege';
   end if;

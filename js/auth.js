@@ -124,6 +124,22 @@ window.SW = window.SW || {};
     if (m.includes('password should be at least'))
       return 'Password must be at least ' + SW.MIN_PASSWORD + ' characters.';
 
+    // Supabase creates the account, fails to send the confirmation, and
+    // rolls the whole thing back with a 500. Nothing is wrong with what the
+    // person typed, and telling them to check their details wastes their
+    // time — this is the project's mail setup.
+    if (m.includes('error sending confirmation') ||
+        m.includes('error sending recovery') ||
+        m.includes('error sending') ||
+        m.includes('unexpected_failure'))
+      return 'Your account was not created: SplittyWise could not send the ' +
+             'confirmation email. Nothing is wrong with your details — whoever ' +
+             'runs this needs to fix the mail settings. Try again shortly.';
+
+    if (m.includes('database error saving new user'))
+      return 'Signups are closed, or this address is not allowed. Ask whoever ' +
+             'runs SplittyWise to let you in.';
+
     return raw;
   }
 
