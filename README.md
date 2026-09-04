@@ -112,6 +112,11 @@ app can be locked behind Face ID. An expense can be spoken rather than
 typed. Groups carry a cover photo, a whiteboard, a monthly settle-up day and
 your own default split. Invite links let someone join by signing up.
 
+A repeating expense whose title names a month carries the month with it:
+"Rent August" posted again in September is called "Rent September", and only
+the month word changes. The year follows when December rolls into January.
+A title with no month in it is left exactly as written.
+
 You are told about your own actions too, so Activity is a full record rather
 than only what other people did — those arrive already read, so your own work
 never sits on the bell as an unread badge. A group's settle-up day is a day
@@ -128,6 +133,7 @@ for t in tests/*.test.js; do node "$t"; done
 
 ```bash
 SITE_URL=https://your-site.netlify.app ./scripts/db e2e
+./scripts/db months     # the month-rolling rule, through both implementations
 ```
 
 **Run that one before letting anybody else near the app.** The seventeen
@@ -137,7 +143,7 @@ real users with real tokens, so RLS applies and triggers fire. It creates its
 own throwaway accounts on `example.com` and removes them afterwards. 73
 checks across every module.
 
-Seventeen suites, no database and no browser needed:
+Eighteen suites, no database and no browser needed:
 
 | Suite | Covers |
 |---|---|
@@ -156,6 +162,7 @@ Seventeen suites, no database and no browser needed:
 | `rounding.test.js` | Whole-rupee rounding still landing on the total, and inferring a group's usual people |
 | `voice.test.js` | Spoken amounts in words as well as digits, and never inventing one |
 | `calc.test.js` | Arithmetic in the amount field, including what it must refuse |
+| `months.test.js` | The month in a repeating title moving with it — casing, abbreviations, the year wrapping, and every word that merely looks like a month being left alone |
 | `autofill.test.js` | The one split figure that has to follow from the others — and every case where it must keep its hands off — plus ordinal days |
 | `charthover.js` (in `wiring`) | That both pages share one hover helper, that it uses pointer events so a tap works, and that the hit areas are focusable |
 | `wiring.test.js` | That the app is actually connected: every RPC exists with the arguments passed, every column selected exists, every button has a handler, every screen can render, every CSS token is defined at the base, the accessibility floor holds, the offline shell is complete, and nothing is labelled as destructive without something behind it |

@@ -1293,6 +1293,38 @@ check('the notification is written after the gates, not before',
     return gate > -1 && tell > gate;
   })());
 
+/* ---------------- 35. the month in a repeating title ---------------- */
+
+console.log('\n--- rolling the month ---');
+check('the schema shifts month words in one pass',
+  /function sw\.shift_month_words/.test(schema));
+check('and the posting loop uses it, by the months between occurrences',
+  /sw\.shift_month_words\(r\.description, shift_by\)/.test(schema) &&
+  /extract\(month from r\.next_run\)/.test(schema));
+check('the rule keeps its rolled title for next time',
+  /set next_run = r\.next_run,\s*\n\s*description = r\.description/.test(schema));
+check('the client mirrors it for the preview',
+  /SW\.shiftMonthWords\s*=/.test(js['js/balances.js']) &&
+  /SW\.monthsBetween\s*=/.test(js['js/balances.js']));
+check('resuming a paused rule rolls the skipped months',
+  /SW\.monthsBetween\(rule\.next_run, patch\.next_run\)/.test(js['js/recurring.js']));
+check('the list says the month moves, and detects it by shifting',
+  /shiftMonthWords\(r\.description, 1\) !== r\.description/.test(js['js/recurring.js']));
+check('there is only one list of month names on each side',
+  (schema.match(/'january'/g) || []).length === 1 &&
+  (js['js/balances.js'].match(/'january'/g) || []).length === 1);
+check('the two are cross-checked by a command, not by hope',
+  fs.existsSync('scripts/month-crosscheck.mjs') &&
+  /months\)/.test(fs.readFileSync('scripts/db', 'utf8')));
+// The first year step computed one replacement from the first match, which
+// was NULL when a title had no year — and a NULL replacement makes
+// regexp_replace return NULL for the whole string. description is not null.
+check('the year is shifted per run, not by one whole-string replace',
+  !/regexp_replace\(out,[^)]*FM0000/.test(schema) &&
+  /left\(chunk, 2\) in \('19', '20'\)/.test(schema));
+check('and digits are their own kind of run',
+  /\^\[\^A-Za-z0-9\]\+/.test(schema));
+
 // A ReferenceError partway through printed a page of PASSes and then died
 // before this line, which reads like a quiet success unless you notice the
 // exit code. So the file counts its own check() calls and refuses to report

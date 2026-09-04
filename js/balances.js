@@ -637,6 +637,78 @@ window.SW = window.SW || {};
     return { id: target.id, value: left };
   };
 
+  // Mirrors sw.shift_month_words() in the schema, so the app can show what
+  // a repeating expense will be called next time without asking the server.
+  // The server is the authority — this only previews it.
+  //
+  // One pass over the text, copying everything that is not a letter and
+  // testing each run of letters. Replacing month names one after another
+  // would cascade: August becomes September, and that September becomes
+  // October in the same pass.
+  const MONTHS_FULL = ['january', 'february', 'march', 'april', 'may', 'june',
+                       'july', 'august', 'september', 'october', 'november',
+                       'december'];
+  const MONTHS_ABBR = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
+                       'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+  SW.shiftMonthWords = function (src, shift) {
+    if (src == null || !shift) return src;
+
+    let out = '';
+    let carry = 0;
+    let carrySet = false;
+
+    // Split into letter runs and everything else, keeping both.
+    (String(src).match(/[A-Za-z]+|[^A-Za-z]+/g) || []).forEach(function (part) {
+      if (!/^[A-Za-z]+$/.test(part)) { out += part; return; }
+
+      const low = part.toLowerCase();
+      let idx = MONTHS_FULL.indexOf(low);
+      let abbr = false;
+
+      if (idx === -1) {
+        // "Sept" is the one four-letter abbreviation people actually write.
+        if (low === 'sept') { idx = 8; abbr = true; }
+        else {
+          idx = MONTHS_ABBR.indexOf(low);
+          if (idx > -1) abbr = true;
+        }
+      }
+
+      if (idx === -1) { out += part; return; }
+
+      const moved = idx + shift;
+      if (!carrySet) { carry = Math.floor(moved / 12); carrySet = true; }
+      const wrapped = ((moved % 12) + 12) % 12;
+
+      let name = abbr ? MONTHS_ABBR[wrapped] : MONTHS_FULL[wrapped];
+      if (part === part.toUpperCase() && part !== part.toLowerCase()) {
+        name = name.toUpperCase();
+      } else if (part === part[0].toUpperCase() + part.slice(1).toLowerCase()) {
+        name = name[0].toUpperCase() + name.slice(1);
+      }
+      out += name;
+    });
+
+    // "Rent December 2026" rolling into January belongs in 2027. Only 19xx
+    // and 20xx on a word boundary, so an amount or a flat number is safe.
+    if (carry) {
+      out = out.replace(/\b(19|20)\d{2}\b/g, function (year) {
+        return String(Number(year) + carry);
+      });
+    }
+
+    return out;
+  };
+
+  // How far a rule's title moves between two occurrences: 1 for monthly,
+  // 12 for yearly, and 0 for a weekly one that stays inside its month.
+  SW.monthsBetween = function (fromIso, toIso) {
+    const a = new Date(fromIso + 'T00:00:00');
+    const b = new Date(toIso + 'T00:00:00');
+    return (b.getFullYear() * 12 + b.getMonth()) - (a.getFullYear() * 12 + a.getMonth());
+  };
+
   // Mirrors sw.ordinal_day() so reminder text reads the same either side.
   SW.ordinalDay = function (d) {
     d = parseInt(d, 10) || 0;

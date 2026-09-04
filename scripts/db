@@ -100,6 +100,16 @@ empty-receipts)
   echo "Emptied. Delete the bucket itself under Storage in the dashboard."
   ;;
 
+months)
+  require_link
+  echo "Running the same month-rolling cases through both implementations."
+  echo "The schema is the authority; the client only previews it, and they"
+  echo "must not drift apart."
+  echo
+  node tests/months.test.js >/dev/null || { echo "the client suite fails first"; exit 1; }
+  node scripts/month-crosscheck.mjs
+  ;;
+
 e2e)
   require_link
   echo "Exercising every module against the live project, over HTTP, as real"

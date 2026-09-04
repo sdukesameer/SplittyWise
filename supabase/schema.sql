@@ -1463,10 +1463,12 @@ end $$;
 create or replace function public.run_due_recurring()
 returns json language plpgsql security definer set search_path = public as $$
 declare
-  me      uuid := auth.uid();
-  r       public.recurring_expenses;
-  posted  int := 0;
-  guard   int;
+  me       uuid := auth.uid();
+  r        public.recurring_expenses;
+  posted   int := 0;
+  guard    int;
+  due_on   date;
+  shift_by int;
 begin
   if me is null then raise exception 'Not authenticated'; end if;
 
@@ -1494,11 +1496,31 @@ begin
       );
       posted := posted + 1;
       guard := guard + 1;
+
+      due_on := r.next_run;
       r.next_run := public.next_occurrence(r.next_run, r.cadence, r.day_of_month);
+
+      -- "Rent August" becomes "Rent September" for the next posting. Shifted
+      -- by the months actually between the two dates rather than by the
+      -- cadence: monthly gives 1, yearly 12, and weekly usually 0 — so a
+      -- weekly rule's title is left alone except when the week crosses into
+      -- a new month, where moving it is the right answer anyway.
+      --
+      -- The rule's own description is what moves, so each posting starts
+      -- from the last one and nothing can drift. A title with no month in it
+      -- comes back untouched.
+      shift_by := (extract(year from r.next_run)::int * 12
+                   + extract(month from r.next_run)::int)
+                - (extract(year from due_on)::int * 12
+                   + extract(month from due_on)::int);
+      if shift_by <> 0 then
+        r.description := sw.shift_month_words(r.description, shift_by);
+      end if;
     end loop;
 
     update public.recurring_expenses
     set next_run = r.next_run,
+        description = r.description,
         last_run = current_date,
         runs = runs + guard
     where id = r.id;
@@ -1993,6 +2015,151 @@ create policy covers_delete on storage.objects
     bucket_id = 'covers'
     and (storage.foldername(name))[1] = (select auth.uid())::text
   );
+
+-- ---------------------------------------------------------------------------
+--  Rolling the month named in a recurring expense
+--
+--  "Rent August" posted again in September should read "Rent September".
+--  Only the month word moves; everything else is left exactly as written.
+--
+--  Done as a single pass over the text, walking letter-runs and copying
+--  everything else through. Replacing month names one after another would
+--  cascade — August becomes September, and then that September becomes
+--  October in the same pass.
+--
+--  The original casing survives: AUGUST stays shouting, august stays quiet,
+--  August stays capitalised, and an abbreviation stays abbreviated.
+-- ---------------------------------------------------------------------------
+create or replace function sw.shift_month_words(src text, shift int)
+returns text language plpgsql immutable set search_path = '' as $$
+declare
+  full_names text[] := array['january','february','march','april','may','june',
+                             'july','august','september','october','november',
+                             'december'];
+  abbrs      text[] := array['jan','feb','mar','apr','may','jun',
+                             'jul','aug','sep','oct','nov','dec'];
+  out        text := '';
+  rest       text := src;
+  chunk      text;
+  tok        text;
+  low        text;
+  idx        int;
+  is_abbr    boolean;
+  zero_based int;
+  carry      int := 0;
+  newname    text;
+begin
+  if src is null or shift = 0 then return src; end if;
+
+  -- ---- pass one: the year carry, from the first month named -------------
+  declare
+    probe text := src;
+    p_tok text;
+    p_idx int;
+  begin
+    while probe <> '' loop
+      chunk := (regexp_match(probe, '^[^A-Za-z]+'))[1];
+      if chunk is not null then
+        probe := substr(probe, length(chunk) + 1);
+        continue;
+      end if;
+      p_tok := lower((regexp_match(probe, '^[A-Za-z]+'))[1]);
+      probe := substr(probe, length(p_tok) + 1);
+
+      p_idx := array_position(full_names, p_tok);
+      if p_idx is null then
+        if p_tok = 'sept' then p_idx := 9;
+        else p_idx := array_position(abbrs, p_tok);
+        end if;
+      end if;
+
+      if p_idx is not null then
+        zero_based := (p_idx - 1) + shift;
+        carry := (zero_based - ((zero_based % 12 + 12) % 12)) / 12;
+        exit;
+      end if;
+    end loop;
+  end;
+
+  -- ---- pass two: rebuild ------------------------------------------------
+  while rest <> '' loop
+    -- The text is three kinds of run: letters, digits, and everything else.
+    -- Digits have to be their own kind. Lumping them in with "not a letter"
+    -- meant " 2026" was copied through as one chunk and the year branch
+    -- below never saw it — so a year *after* the month never moved, while a
+    -- year before it did.
+    chunk := (regexp_match(rest, '^[^A-Za-z0-9]+'))[1];
+    if chunk is not null then
+      out := out || chunk;
+      rest := substr(rest, length(chunk) + 1);
+      continue;
+    end if;
+
+    -- A run of digits exactly four long starting 19 or 20 is a year, and
+    -- follows the month across a boundary. Every other number — an amount, a
+    -- flat number, 1200 — passes through as written.
+    --
+    -- Done here rather than by one regexp_replace over the finished string:
+    -- that version computed a single replacement from the first match, which
+    -- was NULL when there was no year at all, and a NULL replacement makes
+    -- regexp_replace return NULL for the whole description. `description` is
+    -- `not null`, so "Rent December 1200" would have failed the entire
+    -- recurring run.
+    chunk := (regexp_match(rest, '^[0-9]+'))[1];
+    if chunk is not null then
+      if carry <> 0 and length(chunk) = 4 and left(chunk, 2) in ('19', '20') then
+        out := out || to_char(chunk::int + carry, 'FM0000');
+      else
+        out := out || chunk;
+      end if;
+      rest := substr(rest, length(chunk) + 1);
+      continue;
+    end if;
+
+    tok := (regexp_match(rest, '^[A-Za-z]+'))[1];
+    rest := substr(rest, length(tok) + 1);
+    low := lower(tok);
+
+    idx := array_position(full_names, low);
+    is_abbr := false;
+    if idx is null then
+      -- "Sept" is the one four-letter abbreviation people actually write.
+      if low = 'sept' then
+        idx := 9; is_abbr := true;
+      else
+        idx := array_position(abbrs, low);
+        if idx is not null then is_abbr := true; end if;
+      end if;
+    end if;
+
+    if idx is null then
+      out := out || tok;
+      continue;
+    end if;
+
+    zero_based := (idx - 1) + shift;
+    -- How many whole years this crossed, so an adjacent year can follow.
+    -- Taken from the first month found; a title with two months a year
+    -- apart is not a thing worth guessing about.
+    if carry = 0 then
+      carry := (zero_based - ((zero_based % 12 + 12) % 12)) / 12;
+    end if;
+    zero_based := (zero_based % 12 + 12) % 12;
+
+    newname := case when is_abbr then abbrs[zero_based + 1]
+                    else full_names[zero_based + 1] end;
+
+    if tok = upper(tok) and tok <> lower(tok) then
+      newname := upper(newname);
+    elsif tok = initcap(low) then
+      newname := initcap(newname);
+    end if;
+
+    out := out || newname;
+  end loop;
+
+  return out;
+end $$;
 
 -- Renaming a category.
 --
@@ -2840,6 +3007,7 @@ grant execute on function public.update_expense(
 -- Admin functions. Every one refuses a non-admin caller on its first line,
 -- so granting them to `authenticated` is safe: what stops a normal user is
 -- the check inside, not the grant.
+grant execute on function sw.shift_month_words(text, int)                  to authenticated;
 grant execute on function public.rename_category(text, text)               to authenticated;
 grant execute on function public.undo_settlement(uuid)                     to authenticated;
 

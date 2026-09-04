@@ -50,12 +50,19 @@ window.SW = window.SW || {};
         ? 'Next on ' + SW.formatDate(r.next_run)
         : 'Paused';
 
+      // If the title names a month, it moves with each posting — worth
+      // saying, because otherwise next month's title looks like a mistake.
+      // Detected by asking whether shifting it would change anything, so
+      // there is no separate list of month names to drift out of step.
+      const rolls = SW.shiftMonthWords(r.description, 1) !== r.description;
+
       return '<div class="rec-row' + (r.active ? '' : ' is-paused') + '">' +
         '<span class="ledger-emoji">' + esc(r.emoji || '🔁') + '</span>' +
         '<span class="rec-main">' +
           '<span class="rec-title">' + esc(r.description) + '</span>' +
           '<span class="rec-sub">' + esc(SW.cadenceLabel(r.cadence)) + ' · ' + esc(when) +
             ' · ' + esc(payer) +
+            (rolls ? ' · the month moves each time' : '') +
             (group ? ' · ' + esc(group.name) : '') +
             ' · ' + people + (people === 1 ? ' person' : ' people') +
           '</span>' +
@@ -104,6 +111,16 @@ window.SW = window.SW || {};
       // from today rather than from where it stopped.
       if (next && rule.next_run < todayIso()) {
         patch.next_run = SW.nextOccurrence(todayIso(), rule.cadence, rule.day_of_month);
+
+        // Skipping months has to take the title's month with it, or a rule
+        // paused in August and resumed in December would come back still
+        // calling itself "Rent August". run_due_recurring only rolls the
+        // months it actually posts, and these were never posted.
+        const skipped = SW.monthsBetween(rule.next_run, patch.next_run);
+        if (skipped) {
+          const rolled = SW.shiftMonthWords(rule.description, skipped);
+          if (rolled !== rule.description) patch.description = rolled;
+        }
       }
 
       const { error } = await db.from('recurring_expenses').update(patch).eq('id', id);
