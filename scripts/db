@@ -100,6 +100,15 @@ empty-receipts)
   echo "Emptied. Delete the bucket itself under Storage in the dashboard."
   ;;
 
+nets)
+  require_link
+  echo "Comparing the SQL balance against the app's, member by member, on the"
+  echo "real ledger. A reminder email that disagrees with the app is worse"
+  echo "than no email."
+  echo
+  node scripts/net-crosscheck.mjs
+  ;;
+
 months)
   require_link
   echo "Running the same month-rolling cases through both implementations."

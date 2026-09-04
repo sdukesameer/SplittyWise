@@ -129,12 +129,20 @@ export default async (request) => {
       : row.group_id ? '/#/group/' + row.group_id
       : '/#/activity');
 
+  // A settle-up reminder's body is several facts joined by "·" — what you
+  // owe, who else is not square, what has piled up since. One paragraph
+  // makes them run together; a list is read at a glance, which is the whole
+  // point of a reminder.
+  const lines = String(row.body || '').split(' · ').filter(Boolean);
+  const asList = row.type === 'settle_reminder' && lines.length > 1;
+
   const sent = await sendMail({
     to: profile.email,
     name: profile.full_name,
     subject: row.title,
-    html: shell(row.title, row.body || '',
-                appUrl ? { href: deepLink, label: 'Open it in SplittyWise' } : null) +
+    html: shell(row.title, asList ? '' : (row.body || ''),
+                appUrl ? { href: deepLink, label: 'Open it in SplittyWise' } : null,
+                asList ? lines : null) +
       '<div style="font-family:-apple-system,sans-serif;max-width:520px;' +
         'margin:-14px auto 0;padding:0 24px 24px;font-size:12.5px;color:#7C8D86">' +
         'You are getting this because email notifications are on in your ' +

@@ -189,6 +189,32 @@ begin
   out := out || format('%s - a stranger''s profile is invisible (%s visible)',
     case when n = 0 then 'PASS' else 'FAIL' end, n) || E'\n';
 
+  -- ---- 8b. a user cannot raise reminders for everybody -----------------
+  --
+  -- run_due_settle_reminders() is granted and scoped to the caller. The
+  -- everybody version is what pg_cron calls, and reaching it from a session
+  -- would let anyone write into every other member's feed.
+  begin
+    perform public.cron_settle_reminders();
+    out := out || 'FAIL - a signed-in user could run the cron reminder job' || E'\n';
+  exception when others then
+    out := out || 'PASS - the cron reminder job is out of a user''s reach' || E'\n';
+  end;
+
+  begin
+    perform sw.raise_settle_reminders(null);
+    out := out || 'FAIL - a user could raise reminders for everybody' || E'\n';
+  exception when others then
+    out := out || 'PASS - raising reminders for everybody is out of reach' || E'\n';
+  end;
+
+  begin
+    perform public.admin_set_timezone('UTC');
+    out := out || 'FAIL - a non-admin changed the reminder timezone' || E'\n';
+  exception when others then
+    out := out || 'PASS - only an admin can change the reminder timezone' || E'\n';
+  end;
+
   -- ---- 9. the legitimate paths must still work --------------------------
   begin
     update public.profiles set full_name = 'Still Editable' where id = attacker;

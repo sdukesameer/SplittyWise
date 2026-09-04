@@ -867,6 +867,50 @@ window.SW = window.SW || {};
 
   /* ======================= access ==================================== */
 
+  function loadReminders(stats) {
+    const host = $('ad-reminders');
+    if (!host) return;
+
+    host.innerHTML =
+      '<div class="ad-item"><span class="ad-item-main">' +
+        '<span class="ad-item-title">' + esc(stats.timezone || '—') + '</span>' +
+        '<span class="ad-item-sub">It is ' + esc(stats.local_now || '?') +
+          ' there now. A settle-up day means midnight in this zone.' +
+        '</span></span></div>' +
+      '<div class="ad-item"><span class="ad-item-main">' +
+        '<span class="ad-item-title">' +
+          (stats.reminders_scheduled ? 'Scheduled hourly' : 'Not scheduled') +
+          (stats.reminders_scheduled
+            ? ' <span class="ad-pill is-admin">on</span>'
+            : ' <span class="ad-pill is-banned">off</span>') +
+        '</span>' +
+        '<span class="ad-item-sub">' +
+          (stats.reminders_scheduled
+            ? 'Each run acts only in the midnight hour, so reminders arrive on ' +
+              'the day without anybody opening the app.'
+            : 'pg_cron is not scheduling them. Reminders will still be raised ' +
+              'when somebody opens the app — just later in the day. Re-apply ' +
+              'schema.sql, and see README 4.8.') +
+        '</span></span></div>';
+
+    const box = $('ad-tz');
+    if (box && !box.value) box.value = stats.timezone || '';
+  }
+
+  $('ad-tz-save').addEventListener('click', async function () {
+    const btn = this;
+    setError('ad-tz-error', '');
+    busy(btn, true);
+    try {
+      const r = await rpc('admin_set_timezone', { p_tz: $('ad-tz').value.trim() });
+      toast('Midnight now means ' + r.tz + ' · it is ' + r.local_now + ' there', 'ok');
+      refreshStats();
+    } catch (err) {
+      setError('ad-tz-error', err.message.replace(/^.*?:\s*/, ''));
+    }
+    busy(btn, false);
+  });
+
   function loadAccess(stats) {
     setSwitch('ad-signups', stats.signups_enabled);
     $('ad-signups-sub').textContent = stats.signups_enabled
@@ -879,6 +923,7 @@ window.SW = window.SW || {};
       : 'Off — any address may register';
 
     loadLists();
+    loadReminders(stats);
   }
 
   function setSwitch(id, on) {

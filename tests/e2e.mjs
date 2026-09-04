@@ -466,6 +466,44 @@ try {
     (nudgeAgain.body && nudgeAgain.body.ok === false), nudgeAgain.body);
 
   /* =================================================================== */
+  section('settle-up reminders');
+
+  // A group whose settle-up day is today, so a reminder is due right now.
+  const today = new Date();
+  const gset = await A.api.patch('groups?id=eq.' + gid,
+    { settle_up_day: today.getDate() });
+  ok('a group can be given a settle-up day', gset.ok, gset.body);
+
+  // Everything between A and B has been settled and undone above, so the
+  // position here is whatever the expenses left — which is the point: a
+  // reminder is only sent when there is something to settle.
+  const raised = await A.api.rpc('run_due_settle_reminders');
+  ok('run_due_settle_reminders reports how many it raised',
+    raised.ok && typeof raised.body === 'number', raised.body);
+
+  const reminder = await A.api.select('notifications?type=eq.settle_reminder' +
+    '&group_id=eq.' + gid + '&select=title,body&limit=1');
+  if (Array.isArray(reminder.body) && reminder.body.length) {
+    const r0 = reminder.body[0];
+    ok('the reminder names the group', /^Settle up in /.test(r0.title), r0.title);
+    ok('and says what there is to settle, not just the date',
+      /(You owe|You are owed) ₹/.test(r0.body || ''), r0.body);
+    ok('naming the other people who are not square',
+      /(owes|is owed) ₹/.test((r0.body || '').replace(/^(You owe|You are owed) ₹\S+/, '')),
+      r0.body);
+  } else {
+    // Square in this group, which is the other correct outcome.
+    ok('no reminder is sent when there is nothing to settle',
+      raised.body === 0, { raised: raised.body, found: reminder.body });
+  }
+
+  const again = await A.api.rpc('run_due_settle_reminders');
+  ok('calling it twice in a month raises nothing the second time',
+    again.ok && again.body === 0, again.body);
+
+  await A.api.patch('groups?id=eq.' + gid, { settle_up_day: null });
+
+  /* =================================================================== */
   section('error reporting');
 
   const rep = await A.api.insert('error_reports',
@@ -519,6 +557,22 @@ try {
 
   const trail = await A.api.rpc('admin_audit_log', { p_limit: 5 });
   ok('and the audit trail', trail.ok && Array.isArray(trail.body), trail.body);
+
+  ok('the console can see which timezone midnight means',
+    typeof stats.body.timezone === 'string' &&
+    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(stats.body.local_now || ''),
+    { tz: stats.body.timezone, local: stats.body.local_now });
+  ok('and whether the reminders are actually scheduled',
+    stats.body.reminders_scheduled === true,
+    { scheduled: stats.body.reminders_scheduled,
+      note: 'pg_cron job splittywise-settle-reminders must exist and be active' });
+
+  const badTz = await A.api.rpc('admin_set_timezone', { p_tz: 'Mars/Olympus' });
+  ok('a timezone Postgres does not know is refused', !badTz.ok, badTz.body);
+
+  const goodTz = await A.api.rpc('admin_set_timezone', { p_tz: stats.body.timezone });
+  ok('and a real one is accepted', goodTz.ok && goodTz.body &&
+    goodTz.body.tz === stats.body.timezone, goodTz.body);
 
   /* =================================================================== */
   section('the deployed functions');

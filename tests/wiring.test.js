@@ -156,6 +156,22 @@ for (const m of schema.matchAll(
 }
 check('every grant signature matches its function',
   grantProblems.length === 0, grantProblems);
+
+// The revoke loop strips `authenticated` too, so the grant list is now the
+// whole story: an RPC the client calls and the list omits fails at runtime.
+// run_due_settle_reminders was in exactly that state — it worked only
+// because Supabase's default ACL had granted it, and closing that hole
+// revealed the gap.
+const clientRpcs = new Set();
+for (const src of Object.values(js)) {
+  for (const m of src.matchAll(/rpc\('(\w+)'/g)) clientRpcs.add(m[1]);
+}
+const grantedTo = new Set(
+  [...schema.matchAll(/grant execute on function public\.(\w+)\s*\(/g)].map((m) => m[1]));
+const ungranted = [...clientRpcs].filter((r) => !grantedTo.has(r));
+check('every RPC the client calls is granted to authenticated',
+  ungranted.length === 0, ungranted);
+console.log('  ' + clientRpcs.size + ' RPCs called by the client');
 console.log('  ' + Object.keys(sigOf).length + ' functions defined');
 
 // Supabase refuses a direct delete from the storage tables, and it aborts
@@ -589,8 +605,41 @@ check('the reminder function exists', !!functions.run_due_settle_reminders ||
   /function public\.run_due_settle_reminders\(\)/.test(schema));
 check('and the client calls it at launch',
   /rpc\('run_due_settle_reminders'\)/.test(allJs));
-check('it only ever writes to the caller’s own feed',
-  /insert into public\.notifications[\s\S]{0,120}select me, null, 'settle_reminder'/.test(schema));
+// It used to only ever write to the caller. Now pg_cron calls it for
+// everybody at local midnight, so what matters instead is that a signed-in
+// user cannot reach the everybody version.
+check('the launch path asks only for the caller',
+  /return sw\.raise_settle_reminders\(me\)/.test(schema));
+check('and the everybody version is not granted to signed-in users',
+  !/grant execute on function sw\.raise_settle_reminders/.test(schema) &&
+  !/grant execute on function public\.cron_settle_reminders/.test(schema));
+check('a reminder is skipped when there is nothing to settle',
+  /if body is null then continue; end if;/.test(schema) &&
+  /if round\(mine, 2\) = 0 then return null; end if;/.test(schema));
+check('the body says what to settle, not just the date',
+  /'You owe ' \|\| sw\.money/.test(schema) &&
+  /'You are owed ' \|\| sw\.money/.test(schema) &&
+  /since you last settled here/.test(schema));
+check('midnight is decided in a configurable timezone',
+  /extract\(hour from local\)::int <> 0/.test(schema) &&
+  /admin_set_timezone/.test(schema));
+check('and the timezone is validated against Postgres’s own list',
+  /from pg_timezone_names where name = wanted/.test(schema));
+check('pg_cron is enabled and scheduled in separate blocks',
+  (function () {
+    // The first version put `create extension` and an unschedule in one
+    // block; unschedule raises on a name it does not know, which rolled the
+    // extension back with it, so pg_cron silently never installed.
+    const ext = schema.indexOf('create extension if not exists pg_cron');
+    const unsched = schema.indexOf("cron.unschedule('splittywise-settle-reminders')");
+    const between = schema.slice(ext, unsched);
+    return ext > -1 && unsched > ext && /end \$\$;/.test(between);
+  })());
+check('the SQL balance is cross-checked against the app’s',
+  fs.existsSync('scripts/net-crosscheck.mjs') &&
+  /nets\)/.test(fs.readFileSync('scripts/db', 'utf8')));
+check('and it mirrors the payer_id fallback, or the two disagree',
+  /else case when e\.payer_id = uid then e\.amount else 0 end/.test(schema));
 check('it dedupes per calendar month',
   /date_trunc\('month', current_date\)/.test(schema));
 check('a day past the end of a short month still fires',

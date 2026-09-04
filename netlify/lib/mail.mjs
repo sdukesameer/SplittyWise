@@ -14,7 +14,7 @@ export function mailConfigured() {
   return !!(process.env.BREVO_API_KEY && process.env.EMAIL_FROM);
 }
 
-export function shell(title, body, action) {
+export function shell(title, body, action, lines) {
   const esc = (s) => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -26,6 +26,17 @@ export function shell(title, body, action) {
         esc(title) + '</h1>' +
       (body ? '<p style="font-size:15px;color:#4B5B55;margin:0 0 20px">' +
         esc(body) + '</p>' : '') +
+      // A list where the caller has several separate facts rather than one
+      // sentence. Table-free and inline-styled, because a <ul> with margins
+      // renders inconsistently across mail clients.
+      (lines && lines.length
+        ? '<div style="margin:0 0 20px">' + lines.map(function (line, i) {
+            return '<p style="font-size:15px;line-height:1.5;color:' +
+              (i === 0 ? '#141817;font-weight:700' : '#4B5B55') +
+              ';margin:0 0 6px;padding:0 0 0 14px;border-left:3px solid ' +
+              (i === 0 ? '#1FC69E' : '#DCE4E1') + '">' + esc(line) + '</p>';
+          }).join('') + '</div>'
+        : '') +
       (action
         ? '<p style="margin:0 0 24px"><a href="' + esc(action.href) +
           '" style="display:inline-block;background:#1FC69E;color:#08201B;' +

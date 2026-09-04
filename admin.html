@@ -117,6 +117,23 @@
     </div>
 
     <div class="ad-card">
+      <div class="ad-row-head"><h2>Settle-up reminders</h2></div>
+      <div class="ad-list" id="ad-reminders"></div>
+      <div class="ad-form">
+        <input class="input" id="ad-tz" type="text" placeholder="Asia/Kolkata"
+               autocapitalize="off" spellcheck="false" aria-label="Timezone">
+        <div class="ad-form-actions">
+          <button class="btn btn-ghost" id="ad-tz-save" type="button">
+            <span class="spinner"></span><span class="btn-label">Set the timezone</span>
+          </button>
+        </div>
+        <span class="hint">A group's settle-up day means midnight here. Any
+          name Postgres knows works — Asia/Kolkata, Europe/London, UTC.</span>
+        <div class="field-error" id="ad-tz-error"></div>
+      </div>
+    </div>
+
+    <div class="ad-card">
       <div class="ad-row-head">
         <h2>Create or invite</h2>
       </div>

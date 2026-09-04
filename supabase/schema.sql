@@ -1815,6 +1815,149 @@ begin
   ) touched;
 end $$;
 
+-- ---------------------------------------------------------------------------
+--  One member's position in one group, in SQL
+--
+--  Balances are otherwise derived on the device, which is deliberate — but a
+--  reminder sent at midnight has nobody's device to ask. This mirrors
+--  SW.groupMemberNets() exactly, including its fallback: when an expense has
+--  no expense_payers rows, the whole amount is attributed to payer_id.
+--  Getting that wrong would make the email disagree with the app, which is
+--  worse than sending no email. `./scripts/db nets` compares the two on real
+--  data.
+--
+--  Positive means they are owed; negative means they owe. A settlement
+--  behaves like having paid that much more, which is why from_user adds to
+--  the paid side and to_user to the owed side.
+-- ---------------------------------------------------------------------------
+create or replace function sw.group_member_net(gid uuid, uid uuid)
+returns numeric language sql stable security definer set search_path = '' as $$
+  select
+      -- what they paid towards the group's expenses
+      coalesce((
+        select sum(
+          case
+            when exists (select 1 from public.expense_payers ep
+                         where ep.expense_id = e.id)
+            then coalesce((select sum(ep.amount) from public.expense_payers ep
+                           where ep.expense_id = e.id and ep.user_id = uid), 0)
+            else case when e.payer_id = uid then e.amount else 0 end
+          end)
+        from public.expenses e
+        where e.group_id = gid and e.deleted_at is null
+      ), 0)
+      -- plus what they have since handed over
+    + coalesce((select sum(s.amount) from public.settlements s
+                where s.group_id = gid and s.deleted_at is null
+                  and s.from_user = uid), 0)
+      -- minus their own share of those expenses
+    - coalesce((select sum(es.amount) from public.expense_splits es
+                join public.expenses e on e.id = es.expense_id
+                where e.group_id = gid and e.deleted_at is null
+                  and es.user_id = uid), 0)
+      -- minus what they have been paid
+    - coalesce((select sum(s.amount) from public.settlements s
+                where s.group_id = gid and s.deleted_at is null
+                  and s.to_user = uid), 0);
+$$;
+
+-- ₹1,240 rather than ₹1240.00, and ₹450 rather than ₹450.00 — paise only
+-- when there are paise.
+create or replace function sw.money(v numeric)
+returns text language sql immutable set search_path = '' as $$
+  select '₹' || trim(to_char(v, case when v = round(v) then 'FM999,999,990'
+                                     else 'FM999,999,990.00' end));
+$$;
+
+-- What a reminder should actually say: the person's own position, and every
+-- other member who is not square, so the mail answers "settle what, with
+-- whom" rather than only "it is the 2nd".
+create or replace function sw.settle_summary(gid uuid, uid uuid)
+returns jsonb language plpgsql stable security definer set search_path = '' as $$
+declare
+  mine    numeric := sw.group_member_net(gid, uid);
+  others  jsonb := '[]'::jsonb;
+  r       record;
+  n       numeric;
+  spend   numeric;
+  cnt     int;
+begin
+  for r in
+    select gm.user_id, p.full_name
+    from public.group_members gm
+    join public.profiles p on p.id = gm.user_id
+    where gm.group_id = gid and gm.user_id <> uid
+    order by p.full_name
+  loop
+    n := sw.group_member_net(gid, r.user_id);
+    if round(n, 2) <> 0 then
+      others := others || jsonb_build_object(
+        'name', r.full_name, 'net', round(n, 2));
+    end if;
+  end loop;
+
+  -- Since the last time this person squared up here, which is the period
+  -- the reminder is really about.
+  select coalesce(sum(es.amount), 0), count(*)
+    into spend, cnt
+  from public.expense_splits es
+  join public.expenses e on e.id = es.expense_id
+  where e.group_id = gid and e.deleted_at is null and es.user_id = uid
+    and e.expense_date > coalesce((
+      select max(s.settled_on) from public.settlements s
+      where s.group_id = gid and s.deleted_at is null
+        and uid in (s.from_user, s.to_user)), '-infinity'::date);
+
+  return jsonb_build_object(
+    'net', round(mine, 2),
+    'others', others,
+    'since_amount', round(spend, 2),
+    'since_count', cnt);
+end $$;
+
+-- The body of a reminder: what this person owes or is owed here, who else
+-- is not square, and what has piled up since they last settled. Returns
+-- null when there is nothing to settle, which is how both callers below
+-- decide to stay quiet.
+create or replace function sw.settle_reminder_body(gid uuid, uid uuid)
+returns text language plpgsql stable security definer set search_path = '' as $$
+declare
+  s       jsonb := sw.settle_summary(gid, uid);
+  mine    numeric := (s->>'net')::numeric;
+  parts   text[] := '{}';
+  others  text[] := '{}';
+  o       jsonb;
+  n       numeric;
+begin
+  -- Nothing outstanding for this person: no reminder. "It is the 2nd" on its
+  -- own is an alert people learn to ignore.
+  if round(mine, 2) = 0 then return null; end if;
+
+  parts := parts || (case when mine < 0
+    then 'You owe ' || sw.money(-mine)
+    else 'You are owed ' || sw.money(mine) end);
+
+  for o in select * from jsonb_array_elements(s->'others') loop
+    n := (o->>'net')::numeric;
+    others := others || ((o->>'name') || ' ' ||
+      case when n < 0 then 'owes ' || sw.money(-n)
+           else 'is owed ' || sw.money(n) end);
+  end loop;
+
+  if array_length(others, 1) > 0 then
+    parts := parts || array_to_string(others, ', ');
+  end if;
+
+  if (s->>'since_count')::int > 0 then
+    parts := parts || ((s->>'since_count') ||
+      case when (s->>'since_count')::int = 1 then ' expense' else ' expenses' end ||
+      ' since you last settled here, your share ' ||
+      sw.money((s->>'since_amount')::numeric));
+  end if;
+
+  return array_to_string(parts, ' · ');
+end $$;
+
 -- Monthly settle-up reminders.
 --
 -- A group's settle_up_day is a day of the month, not a fixed date, so the
@@ -1830,36 +1973,138 @@ create or replace function public.run_due_settle_reminders()
 returns int language plpgsql security definer set search_path = public as $$
 declare
   me    uuid := auth.uid();
-  made  int;
+  made  int := 0;
 begin
   if me is null then return 0; end if;
+  return sw.raise_settle_reminders(me);
+end $$;
 
-  insert into public.notifications (user_id, actor_id, type, title, body, group_id)
-  select me, null, 'settle_reminder',
-         'Settle up in ' || g.name,
-         'The ' || sw.ordinal_day(g.settle_up_day) ||
-         ' has come round — square up with everyone.',
-         g.id
-  from public.groups g
-  join public.group_members gm on gm.group_id = g.id and gm.user_id = me
-  where g.settle_up_day is not null
-    -- Today has reached the day. A 31 in a 30-day month lands on the 30th,
-    -- so a short month still gets its reminder instead of skipping.
-    and extract(day from current_date)::int >= least(
-          g.settle_up_day,
-          extract(day from (date_trunc('month', current_date)
-                            + interval '1 month' - interval '1 day'))::int)
-    and not exists (
-      select 1 from public.notifications n
-      where n.user_id = me
-        and n.group_id = g.id
-        and n.type = 'settle_reminder'
-        and n.created_at >= date_trunc('month', current_date)
-    );
+-- The work, for one person or for everybody.
+--
+-- Called two ways. pg_cron calls it for everyone at local midnight, which is
+-- what makes a reminder arrive on the day rather than whenever the app next
+-- happens to be opened. The launch path calls it for the caller alone, so a
+-- project with no cron enabled still works — and so somebody who opens the
+-- app before the cron has run does not have to wait for it.
+--
+-- Dedupe is per calendar month per group, so being called both ways, or
+-- hourly, produces one reminder.
+create or replace function sw.raise_settle_reminders(only_user uuid default null)
+returns int language plpgsql security definer set search_path = public as $$
+declare
+  r     record;
+  body  text;
+  made  int := 0;
+begin
+  for r in
+    select g.id as gid, g.name, g.settle_up_day, gm.user_id
+    from public.groups g
+    join public.group_members gm on gm.group_id = g.id
+    where g.settle_up_day is not null
+      and (only_user is null or gm.user_id = only_user)
+      -- Today has reached the day. A 31 in a shorter month lands on its last
+      -- day, so a short month still gets its reminder instead of skipping.
+      and extract(day from (current_date))::int >= least(
+            g.settle_up_day,
+            extract(day from (date_trunc('month', current_date)
+                              + interval '1 month' - interval '1 day'))::int)
+      and not exists (
+        select 1 from public.notifications n
+        where n.user_id = gm.user_id
+          and n.group_id = g.id
+          and n.type = 'settle_reminder'
+          and n.created_at >= date_trunc('month', current_date)
+      )
+  loop
+    -- Null means this person has nothing outstanding here, so there is
+    -- nothing to remind them about. Checked per person: one member being
+    -- square while others are not is the normal case.
+    body := sw.settle_reminder_body(r.gid, r.user_id);
+    if body is null then continue; end if;
 
-  get diagnostics made = row_count;
+    insert into public.notifications (user_id, actor_id, type, title, body, group_id)
+    values (r.user_id, null, 'settle_reminder',
+            'Settle up in ' || r.name, body, r.gid);
+    made := made + 1;
+  end loop;
+
   return made;
 end $$;
+
+-- ---------------------------------------------------------------------------
+--  Midnight, in the right timezone
+--
+--  Called hourly by pg_cron and acts only when it is midnight where the
+--  people are. Deciding it here rather than in the cron expression means the
+--  schedule does not have to be recomputed for a timezone or for daylight
+--  saving — the database is UTC, and this is the only place that has to know
+--  it is not.
+-- ---------------------------------------------------------------------------
+insert into public.app_settings (key, value) values
+  ('timezone', '{"tz": "Asia/Kolkata"}'::jsonb)
+on conflict (key) do nothing;
+
+create or replace function public.cron_settle_reminders()
+returns int language plpgsql security definer set search_path = public as $$
+declare
+  tz    text := coalesce((select value->>'tz' from public.app_settings
+                          where key = 'timezone'), 'Asia/Kolkata');
+  local timestamp;
+begin
+  local := (now() at time zone tz);
+
+  -- Only the midnight hour. Called hourly, so this fires once a day.
+  if extract(hour from local)::int <> 0 then return 0; end if;
+
+  -- current_date inside raise_settle_reminders is the database's UTC date,
+  -- which is a different day from local time for part of every day. Pinning
+  -- the session's timezone makes current_date mean the local date, which is
+  -- the date the settle-up day refers to.
+  perform set_config('TimeZone', tz, true);
+
+  return sw.raise_settle_reminders(null);
+end $$;
+
+-- pg_cron is enabled here rather than in the dashboard so a fresh project
+-- gets it from schema.sql alone. Wrapped, because a role without permission
+-- to create extensions must not stop the rest of the schema applying — the
+-- launch path still works without it, just later in the day.
+-- Three separate blocks on purpose. The first version put the extension and
+-- an unschedule in one block, and unschedule raises when the job does not
+-- exist yet — which rolled the whole block back, extension included, so
+-- pg_cron silently never installed on a fresh project.
+do $$
+begin
+  create extension if not exists pg_cron;
+exception
+  when others then
+    raise notice 'pg_cron not available or not permitted (%). Settle-up '
+      'reminders will still be raised when somebody opens the app, just '
+      'later in the day.', sqlerrm;
+end $$;
+
+do $$
+begin
+  -- Only if it is there: unschedule raises on a name it does not know.
+  if exists (select 1 from cron.job where jobname = 'splittywise-settle-reminders') then
+    perform cron.unschedule('splittywise-settle-reminders');
+  end if;
+exception
+  when others then null;   -- no cron, nothing to clear
+end $$;
+
+do $$
+begin
+  perform cron.schedule('splittywise-settle-reminders', '0 * * * *',
+                        'select public.cron_settle_reminders()');
+  raise notice 'settle-up reminders scheduled hourly; each run acts only at '
+    'local midnight';
+exception
+  when others then
+    raise notice 'could not schedule settle-up reminders (%)', sqlerrm;
+end $$;
+
+
 
 -- Anything in your trash for more than thirty days goes for good. Called at
 -- launch, so the bin empties itself without a scheduler.
@@ -2690,6 +2935,15 @@ begin
                                  from public.app_settings where key = 'signups_enabled'), true),
     'invite_only',     coalesce((select (value->>'enabled')::boolean
                                  from public.app_settings where key = 'invite_only'), false),
+    'timezone',        coalesce((select value->>'tz' from public.app_settings
+                                 where key = 'timezone'), 'Asia/Kolkata'),
+    'local_now',       to_char(now() at time zone coalesce(
+                         (select value->>'tz' from public.app_settings
+                          where key = 'timezone'), 'Asia/Kolkata'),
+                         'YYYY-MM-DD HH24:MI'),
+    'reminders_scheduled', exists (
+                         select 1 from cron.job
+                         where jobname = 'splittywise-settle-reminders' and active),
     'allowed_emails',  (select count(*) from public.allowed_emails),
     -- Thirty days of counts, zero-filled, so a gap shows as a gap.
     'series',          (select coalesce(jsonb_agg(jsonb_build_object(
@@ -2857,6 +3111,31 @@ begin
 end $$;
 
 -- Global switches.
+-- Which midnight the settle-up day means. Validated against Postgres's own
+-- timezone list, so a typo cannot leave reminders never firing — an invalid
+-- name would make `now() at time zone tz` raise inside the cron job, where
+-- nobody would see it.
+create or replace function public.admin_set_timezone(p_tz text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); wanted text := trim(coalesce(p_tz, ''));
+begin
+  if not sw.is_admin(me) then raise exception 'Not an administrator.'; end if;
+  if not exists (select 1 from pg_timezone_names where name = wanted) then
+    raise exception '% is not a timezone Postgres knows.', wanted;
+  end if;
+
+  insert into public.app_settings (key, value, updated_at, updated_by)
+  values ('timezone', jsonb_build_object('tz', wanted), now(), me)
+  on conflict (key) do update
+    set value = excluded.value, updated_at = now(), updated_by = me;
+
+  perform public.admin_log('timezone_changed', null, null,
+    jsonb_build_object('tz', wanted));
+
+  return jsonb_build_object('tz', wanted,
+    'local_now', to_char(now() at time zone wanted, 'YYYY-MM-DD HH24:MI'));
+end $$;
+
 create or replace function public.admin_set_setting(p_key text, p_enabled boolean)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare me uuid := auth.uid();
@@ -2984,6 +3263,20 @@ begin
   loop
     execute 'revoke all on function ' || r.sig || ' from public';
     execute 'revoke all on function ' || r.sig || ' from anon';
+    -- `authenticated` too, and this one matters most.
+    --
+    -- Supabase sets ALTER DEFAULT PRIVILEGES so a newly created function in
+    -- public is granted to anon and authenticated automatically. Revoking
+    -- only from public and anon therefore left every function callable by
+    -- any signed-in user — harmless for the ones that check their caller,
+    -- and not harmless at all for cron_settle_reminders(), which a user
+    -- could call to write reminders into every other member's feed.
+    --
+    -- With this, the explicit grants below are the whole story: if it is not
+    -- listed there, no client can call it. `./scripts/db attack` tries the
+    -- two that must stay out of reach, and ./scripts/db e2e calls every one
+    -- the app actually uses.
+    execute 'revoke all on function ' || r.sig || ' from authenticated';
   end loop;
 end $$;
 
@@ -2996,6 +3289,7 @@ grant execute on function public.create_invite(uuid)                    to authe
 grant execute on function public.redeem_invite(text)                    to authenticated;
 grant execute on function public.nudge(uuid, uuid, numeric)              to authenticated;
 grant execute on function public.run_due_recurring()                     to authenticated;
+grant execute on function public.run_due_settle_reminders()              to authenticated;
 grant execute on function public.set_expense_deleted(uuid, boolean)      to authenticated;
 grant execute on function public.purge_trash()                           to authenticated;
 grant execute on function public.next_occurrence(date, text, int)        to authenticated;
@@ -3007,6 +3301,9 @@ grant execute on function public.update_expense(
 -- Admin functions. Every one refuses a non-admin caller on its first line,
 -- so granting them to `authenticated` is safe: what stops a normal user is
 -- the check inside, not the grant.
+grant execute on function sw.group_member_net(uuid, uuid)                   to authenticated;
+grant execute on function sw.settle_summary(uuid, uuid)                    to authenticated;
+grant execute on function sw.money(numeric)                                to authenticated;
 grant execute on function sw.shift_month_words(text, int)                  to authenticated;
 grant execute on function public.rename_category(text, text)               to authenticated;
 grant execute on function public.undo_settlement(uuid)                     to authenticated;
@@ -3017,6 +3314,7 @@ grant execute on function public.admin_user_detail(uuid)                   to au
 grant execute on function public.admin_set_profile(uuid, text, text, boolean) to authenticated;
 grant execute on function public.admin_set_expense_deleted(uuid, boolean)  to authenticated;
 grant execute on function public.admin_delete_group(uuid)                  to authenticated;
+grant execute on function public.admin_set_timezone(text)                  to authenticated;
 grant execute on function public.admin_set_setting(text, boolean)          to authenticated;
 grant execute on function public.admin_allow_email(text, text)             to authenticated;
 grant execute on function public.admin_disallow_email(text)                to authenticated;

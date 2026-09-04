@@ -134,6 +134,7 @@ for t in tests/*.test.js; do node "$t"; done
 ```bash
 SITE_URL=https://your-site.netlify.app ./scripts/db e2e
 ./scripts/db months     # the month-rolling rule, through both implementations
+./scripts/db nets       # the SQL balance against the app's, on the real ledger
 ```
 
 **Run that one before letting anybody else near the app.** The seventeen
@@ -689,6 +690,40 @@ as the bell, so muting a type mutes both.
 If mail stops arriving, **Netlify → Logs → Functions** shows the reason —
 a spent Brevo quota comes back as a 502 with Brevo's own message rather than
 being swallowed.
+
+### 4.8 Settle-up reminders, and when midnight is
+
+A group's settle-up day means **midnight in one timezone**, and reminders are
+raised by `pg_cron` — so they arrive on the day whether or not anybody opens
+the app.
+
+`schema.sql` enables `pg_cron` and registers one hourly job. Each run acts
+only in the midnight hour of the configured timezone, so the schedule never
+has to be recomputed for a timezone or for daylight saving; the database is
+UTC and one function knows it is not.
+
+Set the zone in the console under **Access → Settle-up reminders** — any name
+Postgres knows. It defaults to `Asia/Kolkata`. The console also shows whether
+the job is actually registered, which is worth glancing at after a fresh
+setup: if the role applying the schema cannot create extensions, `schema.sql`
+says so and carries on, and reminders then fall back to being raised when
+somebody opens the app — correct, just later in the day.
+
+A reminder is only sent when **that person** has something outstanding in
+that group, and it says what:
+
+> **Settle up in Flatmates**
+> You owe ₹600
+> Md Sameer is owed ₹600
+> 1 expense since you last settled here, your share ₹600
+
+Those figures come from `sw.group_member_net()`, which mirrors the app's own
+`SW.groupMemberNets()` — including its fallback of attributing an expense
+with no payer rows to `payer_id`. Balances are otherwise derived on the
+device, and a reminder at midnight has no device to ask, so there are two
+implementations of one sum. `./scripts/db nets` compares them member by
+member on the real ledger, because an email that disagrees with the app is
+worse than no email.
 
 ---
 

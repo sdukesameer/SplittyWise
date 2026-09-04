@@ -255,6 +255,38 @@ realtime as (
     and tablename = 'notifications'
 ),
 
+-- 12b. Anything a signed-in user can call must check who is calling.
+--
+--      Supabase's default ACL grants EXECUTE on every new function in public
+--      to anon AND authenticated. The revoke loop in schema.sql strips both,
+--      so the explicit grant list is the whole story — but a function that
+--      is granted and does not look at its caller is an open door. Every one
+--      on the list should reference auth.uid(), sw.is_admin, or be a pure
+--      helper that takes the caller as an argument.
+authed_unguarded as (
+  select
+    'every function a user can call checks its caller' as check,
+    case when count(*) = 0 then 'PASS' else 'FAIL' end as result,
+    coalesce(string_agg(proname, ', '), 'none') as detail
+  from (
+    select p.proname, pg_get_functiondef(p.oid) as def
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname in ('public', 'sw')
+      and p.prokind = 'f'
+      and has_function_privilege('authenticated', p.oid, 'EXECUTE')
+  ) f
+  where def not like '%auth.uid()%'
+    and def not like '%sw.is_admin%'
+    -- Pure helpers: they compute from their arguments and read nothing the
+    -- caller is not already entitled to through RLS.
+    and proname not in ('next_occurrence', 'ordinal_day', 'shift_month_words',
+                        'money', 'group_member_net', 'settle_summary',
+                        'is_group_member', 'is_group_owner', 'are_friends',
+                        'group_peers', 'has_split', 'can_see_expense',
+                        'can_see_profile', 'settle_reminder_body')
+),
+
 -- 13. No client may write the admin tables. Writes happen only inside the
 --     security definer admin_* functions, each of which checks is_admin on
 --     its first line. A stray insert or update policy on any of these would
@@ -324,6 +356,7 @@ union all select * from payments
 union all select * from strays
 union all select * from overloads
 union all select * from realtime
+union all select * from authed_unguarded
 union all select * from admin_writes
 union all select * from admin_flag
 union all select * from admin_checked;
