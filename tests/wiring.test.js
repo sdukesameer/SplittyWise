@@ -1272,9 +1272,26 @@ check('the new type has an icon, a switch and an email rule',
   /account_created: '/.test(js['js/shell.js']) &&
   /key: 'account_created'/.test(js['js/shell.js']) &&
   /'account_created'/.test(fs.readFileSync('netlify/functions/notify-email.mjs', 'utf8')));
+const attackSql = fs.readFileSync('supabase/security-tests.sql', 'utf8');
 check('and the attack suite proves the signup survives',
-  /a signup survives a notification that cannot be written/.test(
-    fs.readFileSync('supabase/security-tests.sql', 'utf8')));
+  /a signup survives a notification that cannot be written/.test(attackSql));
+// Admins hear when an account is *created*. A signup that is turned away
+// creates nothing, so there is nothing to announce — and announcing it would
+// make the notification an alert about people who never got in.
+check('a refused signup is proved to notify nobody',
+  /a refused signup notifies nobody/.test(attackSql));
+check('the notification is written after the gates, not before',
+  (function () {
+    // The body ends with `end $$;`, not `$$;` — matching the latter found
+    // nothing, so this check quietly returned false rather than testing the
+    // ordering it claims to.
+    const fn = (noSqlComments(schema).match(
+      /create or replace function public\.handle_new_user[\s\S]*?\nend \$\$;/) || [''])[0];
+    if (!fn) return false;
+    const gate = Math.max(fn.indexOf('banned_emails'), fn.indexOf('invite_only'));
+    const tell = fn.indexOf("'account_created'");
+    return gate > -1 && tell > gate;
+  })());
 
 // A ReferenceError partway through printed a page of PASSes and then died
 // before this line, which reads like a quiet success unless you notice the

@@ -245,5 +245,71 @@ begin
     alter table public.notifications drop constraint probe_break_notifications;
   end;
 
+  -- ---- 11. a refused signup tells nobody --------------------------------
+  --
+  -- Admins hear when an account is *created*. A signup that is turned away —
+  -- banned address, signups closed, invite-only — creates nothing, so there
+  -- is nothing to announce, and announcing it would turn the notification
+  -- into an alert about people who never got in.
+  declare
+    watcher  uuid;
+    before_n int;
+    after_n  int;
+    pid      uuid;
+  begin
+    select id into watcher from public.profiles where is_admin limit 1;
+    if watcher is null then
+      out := out || 'SKIP - no admin to watch' || E'\n';
+    else
+      select count(*) into before_n from public.notifications
+       where type = 'account_created' and user_id = watcher;
+
+      insert into public.banned_emails (email) values ('attack-blocked@example.com');
+      begin
+        insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                                email_confirmed_at, raw_user_meta_data, created_at, updated_at)
+        values (gen_random_uuid(), '00000000-0000-0000-0000-000000000000',
+                'authenticated', 'authenticated', 'attack-blocked@example.com', 'x',
+                now(), '{}'::jsonb, now(), now());
+        out := out || 'FAIL - a banned address created an account' || E'\n';
+      exception when others then
+        out := out || 'PASS - a banned address creates no account' || E'\n';
+      end;
+
+      update public.app_settings set value = '{"enabled": false}'::jsonb
+       where key = 'signups_enabled';
+      begin
+        insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                                email_confirmed_at, raw_user_meta_data, created_at, updated_at)
+        values (gen_random_uuid(), '00000000-0000-0000-0000-000000000000',
+                'authenticated', 'authenticated', 'attack-closed@example.com', 'x',
+                now(), '{}'::jsonb, now(), now());
+        out := out || 'FAIL - an account was created while signups were closed' || E'\n';
+      exception when others then
+        out := out || 'PASS - no account is created while signups are closed' || E'\n';
+      end;
+
+      select count(*) into after_n from public.notifications
+       where type = 'account_created' and user_id = watcher;
+      out := out || format('%s - and a refused signup notifies nobody (%s then %s)',
+        case when after_n = before_n then 'PASS' else 'FAIL' end,
+        before_n, after_n) || E'\n';
+
+      update public.app_settings set value = '{"enabled": true}'::jsonb
+       where key = 'signups_enabled';
+
+      pid := gen_random_uuid();
+      insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                              email_confirmed_at, raw_user_meta_data, created_at, updated_at)
+      values (pid, '00000000-0000-0000-0000-000000000000', 'authenticated',
+              'authenticated', 'attack-welcome@example.com', 'x', now(),
+              '{"full_name":"Attack Welcome"}'::jsonb, now(), now());
+      select count(*) into after_n from public.notifications
+       where type = 'account_created' and user_id = watcher and actor_id = pid;
+      out := out || format('%s - while one that IS created reaches every admin (%s)',
+        case when after_n = 1 then 'PASS' else 'FAIL' end, after_n) || E'\n';
+    end if;
+  end;
+
   raise exception E'\n%', out;
 end $$;

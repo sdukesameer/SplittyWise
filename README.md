@@ -1150,12 +1150,21 @@ which you will hit the first time you set `SUPABASE_URL`.
 
 ### 12.4 What it does
 
-Admins are told when somebody creates an account — in Activity, and by email
-if that is on. The notification is written inside the transaction that
-creates the user, so it is wrapped in its own exception block: a signup must
-never fail because a courtesy notification could not be written. `./scripts/db
-attack` proves that by breaking the insert on purpose and checking the signup
-still goes through.
+Admins are told when an account **is created** — in Activity, and by email
+if that is on. Including accounts made from the console itself, since those
+go through the same trigger.
+
+A signup that is *turned away* — banned address, signups closed, invite-only
+— creates nothing, so it announces nothing. The notification is written after
+those three gates, not before, or it would become an alert about people who
+never got in.
+
+The write happens inside the transaction that creates the user, so it is
+wrapped in its own exception block: **a signup must never fail because a
+courtesy notification could not be written.** `./scripts/db attack` proves
+both halves — it breaks the notification insert on purpose and checks the
+account is still created, and it attempts two refused signups and checks
+nobody was told.
 
 **Overview** — eight figures and thirty days of signups, expenses and
 failures as one chart. "Active" means *wrote something*, not *opened the
