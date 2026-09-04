@@ -2867,11 +2867,35 @@ button.is-loading .spinner { display: block; }
 .admin-chip:active { transform: scale(0.97); }
 
 /* On a narrow phone the name, the email and a chip do not fit on one line,
-   so the chip drops beneath rather than squeezing the name to nothing. */
-@media (max-width: 380px) {
-  .profile-head { flex-wrap: wrap; }
-  .profile-who { flex: 1 1 100%; order: 2; }
-  .admin-chip { order: 3; margin-left: 82px; }
+   so the chip drops beneath. The first attempt gave .profile-who
+   `flex: 1 1 100%`, which pushed the avatar onto a row of its own and left
+   the chip indented into empty space — floating, aligned with nothing.
+ 
+   The avatar and the text stay on one row; only the chip wraps, and it lines
+   up with the left edge of the name rather than an arbitrary indent. */
+@media (max-width: 400px) {
+  .profile-head {
+    flex-wrap: wrap;
+    /* 68px avatar + 15px gap, so the wrapped row starts under the name. */
+    row-gap: 12px;
+  }
+  .profile-who { flex: 1 1 auto; min-width: 0; }
+  .admin-chip {
+    order: 3;
+    /* 0 0 100%, not 1 1 100%: it takes the whole row and neither grows nor
+       shrinks, which is what is meant — and a nowrap chip that can shrink
+       below its label clips it rather than wrapping. */
+    flex: 0 0 100%;
+    justify-content: center;
+    margin-left: 83px;
+    margin-right: 0;
+  }
+}
+
+/* Narrower still and the indent costs more than it buys: a phone at 340px
+   needs the chip using the full width. */
+@media (max-width: 340px) {
+  .admin-chip { margin-left: 0; }
 }
 
 /* ---- reading a value off a chart ---------------------------------------- */

@@ -1223,6 +1223,59 @@ const dirty = templates.filter(f => {
 check('each is clean HTML with the confirmation link', dirty.length === 0, dirty);
 
 
+/* ---------------- 34. this round ---------------- */
+
+console.log('\n--- accent, microphone, admins ---');
+
+// microphone=() is an EMPTY allowlist: it disables the feature for every
+// origin including this one, so the browser refused without prompting.
+const pp = (toml.match(/Permissions-Policy = "([^"]*)"/) || [, ''])[1];
+check('the microphone is allowed for this origin', /microphone=\(self\)/.test(pp), pp);
+check('and nothing is allowed for everyone', !/=\*/.test(pp), pp);
+check('geolocation stays denied', /geolocation=\(\)/.test(pp), pp);
+
+// The accent was defined in shell.js and applied only from there, so every
+// launch painted the default first and then snapped to the saved colour.
+const theme = js['js/theme.js'];
+check('the accent list lives in the file that runs before first paint',
+  /SW\.ACCENTS = \[/.test(theme));
+check('and is applied there too',
+  /SW\.applyAccent\(SW\.readAccent\(\)\)/.test(theme));
+check('shell.js reuses it rather than keeping a second copy',
+  /const ACCENTS = SW\.ACCENTS/.test(js['js/shell.js']) &&
+  !/\{ key: 'teal',\s*light:/.test(js['js/shell.js']));
+check('theme.js is loaded before shell.js',
+  html.indexOf('js/theme.js') < html.indexOf('js/shell.js'));
+check('theme.js is loaded first of all the app scripts',
+  (function () {
+    const scripts = [...html.matchAll(/<script src="(js\/[a-z]+\.js)"><\/script>/g)]
+      .map((m) => m[1]);
+    return scripts[0] === 'js/theme.js';
+  })(), [...html.matchAll(/<script src="(js\/[a-z]+\.js)"><\/script>/g)].map((m) => m[1])[0]);
+check('all six accents survived the move',
+  ([...theme.matchAll(/\{ key: '\w+',\s*light: '#\w{6}',\s*dark: '#\w{6}' \}/g)] || []).length === 6);
+
+// The profile header used to give the text 100% width, which pushed the
+// avatar onto its own row and left the chip indented into empty space.
+check('the narrow profile header does not push the avatar to its own row',
+  !/\.profile-who \{ flex: 1 1 100%/.test(css));
+check('and the admin chip lines up with the name when it wraps',
+  /\.admin-chip \{[^}]*margin-left: 83px/.test(css));
+
+// Notifying admins runs inside the transaction that creates the user, so it
+// has to be unable to fail the signup.
+check('admins are told when somebody signs up',
+  /'account_created'/.test(schema) && /where p\.is_admin and p\.id <> new\.id/.test(schema));
+check('and it cannot take the signup down with it',
+  /begin\s*\n\s*insert into public\.notifications[\s\S]{0,600}?exception when others then[\s\S]{0,200}?null;\s*\n\s*end;/.test(schema));
+check('the new type has an icon, a switch and an email rule',
+  /account_created: '/.test(js['js/shell.js']) &&
+  /key: 'account_created'/.test(js['js/shell.js']) &&
+  /'account_created'/.test(fs.readFileSync('netlify/functions/notify-email.mjs', 'utf8')));
+check('and the attack suite proves the signup survives',
+  /a signup survives a notification that cannot be written/.test(
+    fs.readFileSync('supabase/security-tests.sql', 'utf8')));
+
 // A ReferenceError partway through printed a page of PASSes and then died
 // before this line, which reads like a quiet success unless you notice the
 // exit code. So the file counts its own check() calls and refuses to report

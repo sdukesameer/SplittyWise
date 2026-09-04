@@ -122,6 +122,14 @@ async function removeUser(id, label) {
   return res.ok;
 }
 
+// An admin has to exist before the signup, or there is nobody for the
+// new-account notification to reach.
+async function firstExistingAdmin() {
+  const res = await api('/rest/v1/profiles?is_admin=is.true&select=id,email&limit=1',
+    { headers: svcHead });
+  return Array.isArray(res.body) && res.body[0] ? res.body[0] : null;
+}
+
 const stamp = Date.now();
 const A_EMAIL = 'e2e-a-' + stamp + '@example.com';
 const B_EMAIL = 'e2e-b-' + stamp + '@example.com';
@@ -145,6 +153,8 @@ try {
     }),
   });
 
+  const watchingAdmin = await firstExistingAdmin();
+
   const mailBroken = su.status >= 500 &&
     /sending (confirmation|recovery|magic|invite)/i.test(JSON.stringify(su.body || ''));
 
@@ -162,6 +172,23 @@ try {
     });
     if (su.body && su.body.id) signupId = su.body.id;
     if (su.body && su.body.user && su.body.user.id) signupId = su.body.user.id;
+  }
+
+  // Every admin hears about a new account — and, just as importantly, the
+  // signup still succeeds when that notification cannot be written, because
+  // it runs inside the same transaction.
+  if (!watchingAdmin) {
+    skip('every admin is told about the new account', 'no admin exists yet');
+  } else if (!su.ok) {
+    skip('every admin is told about the new account', 'the signup itself failed');
+  } else {
+    const told = await api('/rest/v1/notifications?type=eq.account_created' +
+      '&user_id=eq.' + watchingAdmin.id +
+      '&order=created_at.desc&limit=5&select=title,body', { headers: svcHead });
+    ok('every admin is told about the new account',
+      Array.isArray(told.body) &&
+      told.body.some((n) => (n.body || '').toLowerCase() === SIGNUP_EMAIL),
+      told.body);
   }
 
   // Whatever happened, it must not leave a half-made account behind.
@@ -517,6 +544,15 @@ try {
       ok('the email test sends to the caller only',
         mail.ok && mailBody.sentTo === A_EMAIL, { status: mail.status, body: mailBody });
     }
+
+    // microphone=() disables it for every origin including ours, so the
+    // browser refuses without ever prompting. Checked on the served header,
+    // because that is the thing that actually reaches a phone.
+    const head = await fetch(site + '/', { method: 'GET' });
+    const pp = head.headers.get('permissions-policy') || '';
+    ok('the served headers allow this origin to use the microphone',
+      /microphone=\(self\)/.test(pp), pp);
+    ok('and still deny geolocation outright', /geolocation=\(\)/.test(pp), pp);
 
     const noTok = await fetch(site + '/.netlify/functions/admin', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },

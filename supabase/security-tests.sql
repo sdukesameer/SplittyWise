@@ -211,5 +211,39 @@ begin
     out := out || 'FAIL - admin_set_profile could never grant admin: ' || SQLERRM || E'\n';
   end;
 
+  -- ---- 10. a courtesy notification must never fail a signup -------------
+  --
+  -- handle_new_user() runs inside the transaction that creates the user, so
+  -- anything raising in it takes the signup down. That is how a mail
+  -- misconfiguration once became "500, account not created", and telling
+  -- every admin about a new account put another insert on that same path.
+  reset role;
+  declare
+    probe_id uuid := gen_random_uuid();
+  begin
+    alter table public.notifications
+      add constraint probe_break_notifications
+      check (type <> 'account_created') not valid;
+
+    begin
+      insert into auth.users (id, instance_id, aud, role, email,
+                              encrypted_password, email_confirmed_at,
+                              raw_user_meta_data, created_at, updated_at)
+      values (probe_id, '00000000-0000-0000-0000-000000000000', 'authenticated',
+              'authenticated', 'attack-signup-probe@example.com', 'x', now(),
+              '{"full_name":"Attack Probe"}'::jsonb, now(), now());
+      out := out || 'PASS - a signup survives a notification that cannot be written' || E'\n';
+    exception when others then
+      out := out || format('FAIL - a failed notification took the signup down: %s',
+        SQLERRM) || E'\n';
+    end;
+
+    select count(*) into n from public.profiles where id = probe_id;
+    out := out || format('%s - and the person still gets a profile (%s)',
+      case when n = 1 then 'PASS' else 'FAIL' end, n) || E'\n';
+
+    alter table public.notifications drop constraint probe_break_notifications;
+  end;
+
   raise exception E'\n%', out;
 end $$;

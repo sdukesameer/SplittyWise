@@ -40,6 +40,9 @@ const WORTH_AN_EMAIL = new Set([
   'settle_reminder',
   'friend_added',
   'group_added',
+  // Only admins ever receive this one, and somebody joining is exactly the
+  // sort of thing worth knowing without opening the app.
+  'account_created',
 ]);
 
 const QUIET_MINUTES = 15;

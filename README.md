@@ -932,6 +932,23 @@ An older copy of the schema tried to delete the `receipts` bucket in SQL.
 Pull the current version — it prints a reminder instead — and remove the
 bucket by hand as above.
 
+**Speaking an expense says "Microphone access was refused" without asking**
+
+The `Permissions-Policy` header. `microphone=()` is an *empty allowlist* — it
+disables the feature for every origin including your own, so the browser
+refuses outright and never shows a prompt. It must be `microphone=(self)`,
+which is what `netlify.toml` now sets. Checking the browser's site
+permissions is a dead end: the page never gets far enough to ask.
+
+**The accent colour looks like it resets on every launch**
+
+It was being applied twice: `js/theme.js` runs before the first frame and set
+the theme, but the accent was applied later from `js/shell.js` — so every
+launch painted the default teal and then snapped to the saved colour. The
+accent now lives in `theme.js` alongside the theme, and `shell.js` reuses it
+rather than keeping a second copy. If you see this again, check that
+`js/theme.js` is still the first script in `index.html`.
+
 **A picture will not upload**
 It is re-encoded on the device until it fits under 100 KB. A very large or
 very detailed image can fail that after several attempts, and the toast says
@@ -1132,6 +1149,13 @@ See also
 which you will hit the first time you set `SUPABASE_URL`.
 
 ### 12.4 What it does
+
+Admins are told when somebody creates an account — in Activity, and by email
+if that is on. The notification is written inside the transaction that
+creates the user, so it is wrapped in its own exception block: a signup must
+never fail because a courtesy notification could not be written. `./scripts/db
+attack` proves that by breaking the insert on purpose and checking the signup
+still goes through.
 
 **Overview** — eight figures and thirty days of signups, expenses and
 failures as one chart. "Active" means *wrote something*, not *opened the

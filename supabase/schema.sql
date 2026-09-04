@@ -2393,6 +2393,31 @@ begin
     )
   )
   on conflict (id) do nothing;
+
+  -- Every admin hears about a new account.
+  --
+  -- Wrapped in its own exception block, and this matters more than it looks:
+  -- everything in this trigger runs inside the transaction that creates the
+  -- user, so anything that raises here takes the whole signup with it. That
+  -- is precisely how an unrelated mail misconfiguration turned into "500,
+  -- account not created" — a signup must never fail because a courtesy
+  -- notification could not be written.
+  begin
+    insert into public.notifications (user_id, actor_id, type, title, body)
+    select p.id, new.id, 'account_created',
+           coalesce(
+             nullif(trim(new.raw_user_meta_data->>'full_name'), ''),
+             split_part(new.email, '@', 1)
+           ) || ' created an account',
+           addr
+    from public.profiles p
+    where p.is_admin and p.id <> new.id;
+  exception when others then
+    -- Deliberately silent. There is nowhere useful to report this from
+    -- inside a signup, and failing is not an option.
+    null;
+  end;
+
   return new;
 end $$;
 

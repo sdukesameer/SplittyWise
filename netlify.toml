@@ -83,7 +83,14 @@
       """
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    Permissions-Policy = "geolocation=(), microphone=(), camera=(), interest-cohort=()"
+    # microphone=(self), not microphone=(). An empty allowlist disables the
+    # feature for EVERY origin including this one, so speaking an expense
+    # failed with "Microphone access was refused" and no permission prompt
+    # ever appeared. (self) allows this origin and nothing else.
+    #
+    # camera stays empty: receipt scanning uses a file input, which opens the
+    # camera through the picker and needs no getUserMedia permission.
+    Permissions-Policy = "geolocation=(), microphone=(self), camera=(), interest-cohort=()"
     Strict-Transport-Security = "max-age=31536000; includeSubDomains"
     X-Frame-Options = "DENY"
 

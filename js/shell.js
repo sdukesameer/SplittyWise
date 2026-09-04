@@ -73,48 +73,19 @@ window.SW = window.SW || {};
   const ACCENT_KEY = 'splittywise.accent';
   const BLACK_KEY = 'splittywise.black';
 
-  const ACCENTS = [
-    { key: 'teal',   light: '#0E9878', dark: '#1FC69E' },
-    { key: 'indigo', light: '#4F46E5', dark: '#8B93F8' },
-    { key: 'rose',   light: '#C2185B', dark: '#F06292' },
-    { key: 'amber',  light: '#B26A00', dark: '#F0A85C' },
-    { key: 'violet', light: '#7C3AED', dark: '#A78BFA' },
-    { key: 'sky',    light: '#0369A1', dark: '#4CB5E8' },
-  ];
+  // The list and the applying both live in js/theme.js, which is the only
+  // file that runs before the first frame. Duplicating them here is how the
+  // accent came to be painted twice on every launch — default first, saved
+  // second — which looked exactly like it resetting itself.
+  const ACCENTS = SW.ACCENTS;
+  const readAccent = SW.readAccent;
+  const applyAccent = SW.applyAccent;
 
   function isDarkNow() {
     const stamped = document.documentElement.getAttribute('data-theme');
     if (stamped === 'dark') return true;
     if (stamped === 'light') return false;
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
-  }
-
-  function readAccent() {
-    try { return localStorage.getItem(ACCENT_KEY) || 'teal'; } catch (e) { return 'teal'; }
-  }
-
-  function applyAccent(key) {
-    const found = ACCENTS.filter(function (a) { return a.key === key; })[0];
-    const root = document.documentElement;
-
-    // Only override when it is not the built-in accent, so the designed
-    // palette is left exactly as it is by default.
-    if (!found || key === 'teal') {
-      root.style.removeProperty('--teal');
-      root.style.removeProperty('--teal-press');
-      root.style.removeProperty('--teal-soft');
-    } else {
-      // Each accent has a light and a dark variant, because one hex cannot
-      // hold contrast on both grounds.
-      const hex = isDarkNow() ? found.dark : found.light;
-      root.style.setProperty('--teal', hex);
-      root.style.setProperty('--teal-press', hex);
-      root.style.setProperty('--teal-soft', hex + '22');
-    }
-
-    document.querySelectorAll('[data-accent]').forEach(function (b) {
-      b.classList.toggle('is-on', b.getAttribute('data-accent') === (key || 'teal'));
-    });
   }
 
   function renderAccentRow() {
@@ -246,6 +217,7 @@ window.SW = window.SW || {};
 
   const TYPE_EMOJI = {
     friend_added: '👋',
+    account_created: '🎉',
     group_added: '🏠',
     group_created: '🏠',
     group_deleted: '🗑️',
@@ -767,6 +739,9 @@ window.SW = window.SW || {};
     { key: 'comment',         label: 'Comments' },
     { key: 'nudge',           label: 'Reminders' },
     { key: 'friend_added',    label: 'New friends' },
+    // Only ever written to an admin, so it simply never appears for anybody
+    // else — no need to hide the switch.
+    { key: 'account_created', label: 'Somebody new signs up (admins)' },
     { key: 'group_added',     label: 'Being added to a group' },
     { key: 'settle_reminder', label: 'Monthly settle-up day' },
     { key: 'own_actions',     label: 'A record of your own actions' },
