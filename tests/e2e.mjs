@@ -179,21 +179,33 @@ try {
     if (su.body && su.body.user && su.body.user.id) signupId = su.body.user.id;
   }
 
-  // Every admin hears about a new account — and, just as importantly, the
-  // signup still succeeds when that notification cannot be written, because
-  // it runs inside the same transaction.
+  // Every admin hears about a new account — except this one. It is an
+  // example.com address, which RFC 2606 reserves so it can never be a real
+  // person, and this suite creates one on every run: each of those put a
+  // "somebody created an account" notification on every admin's phone, for
+  // somebody who is deleted again a few seconds later.
+  //
+  // So the assertion here is the inverse. That a *real* address does reach
+  // every admin is proved by ./scripts/db attack, which can create one and
+  // roll it back.
   if (!watchingAdmin) {
-    skip('every admin is told about the new account', 'no admin exists yet');
+    skip('a throwaway test signup wakes no admin', 'no admin exists yet');
   } else if (!su.ok) {
-    skip('every admin is told about the new account', 'the signup itself failed');
+    skip('a throwaway test signup wakes no admin', 'the signup itself failed');
   } else {
     const told = await api('/rest/v1/notifications?type=eq.account_created' +
       '&user_id=eq.' + watchingAdmin.id +
-      '&order=created_at.desc&limit=5&select=title,body', { headers: svcHead });
-    ok('every admin is told about the new account',
+      '&order=created_at.desc&limit=10&select=title,body', { headers: svcHead });
+    ok('a throwaway test signup wakes no admin',
       Array.isArray(told.body) &&
-      told.body.some((n) => (n.body || '').toLowerCase() === SIGNUP_EMAIL),
+      !told.body.some((n) => (n.body || '').toLowerCase() === SIGNUP_EMAIL),
       told.body);
+
+    // And nothing is quietly suppressing all of them: the account exists.
+    const made = await api('/rest/v1/profiles?email=eq.' +
+      encodeURIComponent(SIGNUP_EMAIL) + '&select=id', { headers: svcHead });
+    ok('while the account itself is still created',
+      Array.isArray(made.body) && made.body.length === 1, made.body);
   }
 
   // Whatever happened, it must not leave a half-made account behind.

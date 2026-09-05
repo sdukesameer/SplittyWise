@@ -36,6 +36,13 @@ function noSqlComments(src) {
   return String(src || '').replace(/--[^\n]*/g, ' ');
 }
 
+// CSS has only /* */ comments. Same trap a third time: the check that this
+// stylesheet no longer contains `margin-left: 83px` matched the comment
+// explaining why it does not.
+function noCssComments(src) {
+  return String(src || '').replace(/\/\*[\s\S]*?\*\//g, ' ');
+}
+
 function codeOnly(src) {
   return noComments(src)
     .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
@@ -1324,8 +1331,19 @@ check('all six accents survived the move',
 // avatar onto its own row and left the chip indented into empty space.
 check('the narrow profile header does not push the avatar to its own row',
   !/\.profile-who \{ flex: 1 1 100%/.test(css));
-check('and the admin chip lines up with the name when it wraps',
-  /\.admin-chip \{[^}]*margin-left: 83px/.test(css));
+
+// Then it was moved with `flex: 0 0 100%` and `margin-left: 83px` — 100% of
+// the row *plus* an 83px indent, so on a 360px phone the chip hung exactly
+// 83px off the right edge. This check used to assert that indent, so it
+// passed while the chip was off the screen.
+check('the admin chip is inside the person block, not beside it',
+  /<div class="profile-who">[\s\S]*?class="admin-chip"[\s\S]*?<\/div>\s*<\/div>/
+    .test(html));
+check('so it needs no guess at how wide the phone is',
+  !/margin-left:\s*83px/.test(noCssComments(css)) &&
+  !/\.admin-chip \{[^}]*flex:\s*0 0 100%/.test(noCssComments(css)));
+check('and it can never be wider than the space it has',
+  /\.admin-chip \{[^}]*max-width:\s*100%/.test(css));
 
 // Notifying admins runs inside the transaction that creates the user, so it
 // has to be unable to fail the signup.
@@ -1569,6 +1587,39 @@ check('a summary is laid out as rows, not one run-together paragraph',
   /const LISTED = new Set\(\['settle_reminder', 'month_summary'\]\)/.test(notifyFn));
 check('the button says what it does',
   /month_summary: 'Review your spending'/.test(notifyFn));
+
+/* ---------------- 40. no paging over a test fixture ---------------- */
+
+// Every ./scripts/db e2e run signs up a throwaway account, and every one of
+// them reached every admin's phone. Seventy-six of the seventy-seven
+// announcements on this project were for people who never existed.
+check('an address that can never be a person is recognised',
+  /create or replace function sw\.is_test_address/.test(schema));
+check('and reserved domains are the definition, not a hardcoded suite prefix',
+  /example\\\.\(com\|net\|org\)/.test(schema) &&
+  /test\|example\|invalid\|localhost/.test(schema));
+check('the admin announcement is skipped for one',
+  /if not sw\.is_test_address\(addr\) then/.test(schema));
+check('but only the announcement — the account is still created',
+  (function () {
+    const fn = (noSqlComments(schema).match(
+      /create or replace function public\.handle_new_user[\s\S]*?\nend \$\$;/) || [''])[0];
+    if (!fn) return false;
+    // The profile insert must sit outside the guarded block.
+    return fn.indexOf('insert into public.profiles') <
+           fn.indexOf('if not sw.is_test_address');
+  })());
+check('the ones already sent are cleared, and safe to re-run',
+  /delete from public\.notifications\s*\n\s*where type = 'account_created' and sw\.is_test_address\(body\);/
+    .test(schema));
+check('the attack suite proves a real address still reaches every admin',
+  /while one that IS created reaches every admin/.test(attackSql) &&
+  !/attack-welcome@example\.com/.test(attackSql));
+check('and that a reserved one reaches nobody but still gets an account',
+  /but a reserved test address wakes nobody/.test(attackSql) &&
+  /and it still gets an account and a profile/.test(attackSql));
+check('e2e asserts the inverse for its own throwaway signup',
+  /a throwaway test signup wakes no admin/.test(fs.readFileSync('tests/e2e.mjs', 'utf8')));
 
 // Storing the itemisation is only worth anything if it reopens. It did not:
 // renderRows() writes into #scan-rows, which renderItemise() creates, so

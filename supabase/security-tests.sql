@@ -348,16 +348,38 @@ begin
       update public.app_settings set value = '{"enabled": true}'::jsonb
        where key = 'signups_enabled';
 
+      -- Deliberately NOT an example.com address. Reserved test domains no
+      -- longer announce themselves, so using one here would have this check
+      -- pass for the wrong reason — it would be measuring the suppression.
       pid := gen_random_uuid();
       insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
                               email_confirmed_at, raw_user_meta_data, created_at, updated_at)
       values (pid, '00000000-0000-0000-0000-000000000000', 'authenticated',
-              'authenticated', 'attack-welcome@example.com', 'x', now(),
+              'authenticated', 'attack-welcome@sw-attack-suite.co', 'x', now(),
               '{"full_name":"Attack Welcome"}'::jsonb, now(), now());
       select count(*) into after_n from public.notifications
        where type = 'account_created' and user_id = watcher and actor_id = pid;
       out := out || format('%s - while one that IS created reaches every admin (%s)',
         case when after_n = 1 then 'PASS' else 'FAIL' end, after_n) || E'\n';
+
+      -- And the other way round: a throwaway account on a domain RFC 2606
+      -- reserves is still created, but wakes nobody. ./scripts/db e2e signs
+      -- one up on every run, and each one used to reach every admin's phone.
+      pid := gen_random_uuid();
+      insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                              email_confirmed_at, raw_user_meta_data, created_at, updated_at)
+      values (pid, '00000000-0000-0000-0000-000000000000', 'authenticated',
+              'authenticated', 'attack-fixture@example.com', 'x', now(),
+              '{"full_name":"Attack Fixture"}'::jsonb, now(), now());
+      select count(*) into after_n from public.notifications
+       where type = 'account_created' and actor_id = pid;
+      out := out || format('%s - but a reserved test address wakes nobody (%s)',
+        case when after_n = 0 then 'PASS' else 'FAIL' end, after_n) || E'\n';
+
+      out := out || format('%s - and it still gets an account and a profile (%s)',
+        case when exists (select 1 from public.profiles where id = pid)
+             then 'PASS' else 'FAIL' end,
+        (select count(*) from public.profiles where id = pid)) || E'\n';
     end if;
   end;
 

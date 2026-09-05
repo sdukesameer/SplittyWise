@@ -2847,8 +2847,13 @@ button.is-loading .spinner { display: block; }
 .profile-who { min-width: 0; flex: 1; }
 
 .admin-chip {
-  flex: none;
-  align-self: center;
+  /* Inline-level inside .profile-who, so it starts its own line under the
+     email and is only as wide as its label. Nothing here depends on how wide
+     the screen is, which is what the two media queries it replaced got
+     wrong: `flex: 0 0 100%` with `margin-left: 83px` is 100% of the row plus
+     83px, so on a 360px phone it hung exactly 83px off the right edge. */
+  margin-top: 11px;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -2866,37 +2871,10 @@ button.is-loading .spinner { display: block; }
 .admin-chip svg { width: 16px; height: 16px; }
 .admin-chip:active { transform: scale(0.97); }
 
-/* On a narrow phone the name, the email and a chip do not fit on one line,
-   so the chip drops beneath. The first attempt gave .profile-who
-   `flex: 1 1 100%`, which pushed the avatar onto a row of its own and left
-   the chip indented into empty space — floating, aligned with nothing.
- 
-   The avatar and the text stay on one row; only the chip wraps, and it lines
-   up with the left edge of the name rather than an arbitrary indent. */
-@media (max-width: 400px) {
-  .profile-head {
-    flex-wrap: wrap;
-    /* 68px avatar + 15px gap, so the wrapped row starts under the name. */
-    row-gap: 12px;
-  }
-  .profile-who { flex: 1 1 auto; min-width: 0; }
-  .admin-chip {
-    order: 3;
-    /* 0 0 100%, not 1 1 100%: it takes the whole row and neither grows nor
-       shrinks, which is what is meant — and a nowrap chip that can shrink
-       below its label clips it rather than wrapping. */
-    flex: 0 0 100%;
-    justify-content: center;
-    margin-left: 83px;
-    margin-right: 0;
-  }
-}
-
-/* Narrower still and the indent costs more than it buys: a phone at 340px
-   needs the chip using the full width. */
-@media (max-width: 340px) {
-  .admin-chip { margin-left: 0; }
-}
+/* No media queries here on purpose. Two of them used to move this chip
+   about by hand — one at 400px, another at 340px — and both were guesses at
+   the width of a phone. It sits in the flow inside .profile-who now, so
+   every width is handled by the same three lines above. */
 
 /* ---- reading a value off a chart ---------------------------------------- */
 

@@ -3125,6 +3125,31 @@ create trigger on_error_report
   before insert on public.error_reports
   for each row execute function public.cap_error_reports();
 
+-- An address that can never belong to a real person.
+--
+-- RFC 2606 sets example.com/net/org aside, and the .test, .example, .invalid
+-- and .localhost top-level domains, precisely so they can never be resolved
+-- or delivered to. ./scripts/db e2e signs up a throwaway account on one of
+-- them every time it runs, and every one of those put a "somebody created an
+-- account" notification on every admin's phone — for a person who does not
+-- exist and is deleted again seconds later.
+--
+-- Only the admin announcement is suppressed. The account is still created,
+-- still appears in the console's People list, and a real failure is still
+-- reported: this is about not paging somebody over a test fixture.
+create or replace function sw.is_test_address(addr text)
+returns boolean language sql immutable set search_path = '' as $$
+  select lower(coalesce(addr, '')) ~
+    '@(([^@]*\.)?example\.(com|net|org)|([^@]*\.)?(test|example|invalid|localhost))$';
+$$;
+
+-- And clear the ones already sent. Seventy-six of the seventy-seven
+-- announcements on this project were throwaway accounts from ./scripts/db
+-- e2e, for people who never existed and were deleted seconds later. Safe to
+-- re-run, and it only ever touches announcements about reserved addresses.
+delete from public.notifications
+ where type = 'account_created' and sw.is_test_address(body);
+
 -- ---------------------------------------------------------------------------
 --  Signup gate
 --
@@ -3163,7 +3188,8 @@ begin
   )
   on conflict (id) do nothing;
 
-  -- Every admin hears about a new account.
+  -- Every admin hears about a new account — unless it is a reserved test
+  -- address, which is never a person. See sw.is_test_address().
   --
   -- Wrapped in its own exception block, and this matters more than it looks:
   -- everything in this trigger runs inside the transaction that creates the
@@ -3171,21 +3197,23 @@ begin
   -- is precisely how an unrelated mail misconfiguration turned into "500,
   -- account not created" — a signup must never fail because a courtesy
   -- notification could not be written.
-  begin
-    insert into public.notifications (user_id, actor_id, type, title, body)
-    select p.id, new.id, 'account_created',
-           coalesce(
-             nullif(trim(new.raw_user_meta_data->>'full_name'), ''),
-             split_part(new.email, '@', 1)
-           ) || ' created an account',
-           addr
-    from public.profiles p
-    where p.is_admin and p.id <> new.id;
-  exception when others then
-    -- Deliberately silent. There is nowhere useful to report this from
-    -- inside a signup, and failing is not an option.
-    null;
-  end;
+  if not sw.is_test_address(addr) then
+    begin
+      insert into public.notifications (user_id, actor_id, type, title, body)
+      select p.id, new.id, 'account_created',
+             coalesce(
+               nullif(trim(new.raw_user_meta_data->>'full_name'), ''),
+               split_part(new.email, '@', 1)
+             ) || ' created an account',
+             addr
+      from public.profiles p
+      where p.is_admin and p.id <> new.id;
+    exception when others then
+      -- Deliberately silent. There is nowhere useful to report this from
+      -- inside a signup, and failing is not an option.
+      null;
+    end;
+  end if;
 
   return new;
 end $$;

@@ -1292,12 +1292,25 @@ A signup that is *turned away* — banned address, signups closed, invite-only
 those three gates, not before, or it would become an alert about people who
 never got in.
 
+**Reserved test addresses announce nothing either.** RFC 2606 sets aside
+`example.com`, `example.net`, `example.org` and the `.test`, `.example`,
+`.invalid` and `.localhost` top-level domains precisely so they can never be
+delivered to, so an account on one is never a person. `./scripts/db e2e`
+signs up a throwaway account on every run, and each one used to put "somebody
+created an account" on every admin's phone for somebody deleted seconds
+later — 76 of the 77 announcements on this project were that. The account is
+still created and still appears in **People**; only the announcement is
+skipped, and applying the schema clears the ones already sent.
+
 The write happens inside the transaction that creates the user, so it is
 wrapped in its own exception block: **a signup must never fail because a
 courtesy notification could not be written.** `./scripts/db attack` proves
 both halves — it breaks the notification insert on purpose and checks the
 account is still created, and it attempts two refused signups and checks
-nobody was told.
+nobody was told. It also creates one account on a real-looking address and
+one on a reserved test address, and checks that the first reaches every admin
+and the second reaches nobody — the positive case lives there rather than in
+`e2e`, because `e2e`'s own accounts are all on `example.com`.
 
 **Overview** — eight figures and thirty days of signups, expenses and
 failures as one chart. "Active" means *wrote something*, not *opened the

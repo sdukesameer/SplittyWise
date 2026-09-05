@@ -476,15 +476,20 @@
         <div class="profile-who">
           <div class="profile-name" id="profile-name">&nbsp;</div>
           <div class="profile-email" id="profile-email">&nbsp;</div>
+          <!-- Only rendered for an admin. A plain link, so it works inside the
+               installed app on iOS: /admin is within the manifest scope, so it
+               opens in the same standalone window rather than kicking out to
+               Safari.
+
+               Inside .profile-who, not beside it: it belongs to the person,
+               it lines up under their name at every width because that is
+               where the block starts, and it cannot be pushed off the screen
+               by an indent that assumed how wide the phone was. -->
+          <a class="admin-chip" id="admin-link" href="admin.html" hidden>
+            <svg aria-hidden="true"><use href="#ic-gear"/></svg>
+            <span>Admin</span>
+          </a>
         </div>
-        <!-- Only rendered for an admin. A plain link, so it works inside the
-             installed app on iOS: /admin is within the manifest scope, so it
-             opens in the same standalone window rather than kicking out to
-             Safari. -->
-        <a class="admin-chip" id="admin-link" href="admin.html" hidden>
-          <svg aria-hidden="true"><use href="#ic-gear"/></svg>
-          <span>Admin</span>
-        </a>
       </div>
 
       <div class="card">
