@@ -503,9 +503,15 @@ window.SW = window.SW || {};
       .catch(function () { return 'unknown'; });
   }
 
+  // Why the good reader was not the one used, when it was configured. A
+  // silent fallback is what made "the key is set but nothing uses it" so hard
+  // to see: the model name had been retired and the app said nothing.
+  let cloudNote = '';
+
   // Returns rows, or null if this deploy has no reader configured — in which
   // case the caller falls back to on-device OCR rather than failing.
   async function readInCloud(files) {
+    cloudNote = '';
     if (cloudReader === 'no') return null;
 
     const images = [];
@@ -525,11 +531,23 @@ window.SW = window.SW || {};
     if (res.status === 501 || res.status === 404) { cloudReader = 'no'; return null; }
     const body = await res.json().catch(function () { return {}; });
     if (!res.ok) {
-      if (body.fallback) return null;          // quota, or a bad answer
+      // Recoverable — no quota, a refusal, a model that has been retired.
+      // Fall back, but say that is what happened.
+      if (body.fallback) {
+        cloudNote = body.error || 'The reader could not be used just now.';
+        return null;
+      }
       throw new Error(body.error || 'The reader could not read that.');
     }
     cloudReader = 'yes';
-    return Array.isArray(body.rows) ? body.rows : [];
+    const got = Array.isArray(body.rows) ? body.rows : [];
+    // Nothing found is not an answer worth keeping: let the on-device reader
+    // have a go before telling somebody their receipt has no items in it.
+    if (!got.length) {
+      cloudNote = 'Nothing was found in those, so they were read here instead.';
+      return null;
+    }
+    return got;
   }
 
   // Loaded on first use only: the OCR engine pulls several megabytes of wasm
@@ -753,6 +771,7 @@ window.SW = window.SW || {};
           found = parsed.rows;
           meta.merged = parsed.merged;
           meta.glyph = parsed.glyph;
+          meta.note = cloudNote;
         } catch (err) {
           return failed(err);
         }
@@ -875,6 +894,9 @@ window.SW = window.SW || {};
           ? '<div class="scan-warn">The reader saw every ₹ as ' +
             '"' + esc(meta.glyph) + '", which has been undone. Worth a glance ' +
             'down the amounts.</div>'
+          : '') +
+        (meta.note
+          ? '<div class="scan-warn">' + esc(meta.note) + '</div>'
           : '') +
         (meta.added === 0
           ? '<div class="scan-warn">Nothing new in those — every line was ' +

@@ -19,7 +19,18 @@
 //  it is used, and the on-device reader stays one tap away.
 // ---------------------------------------------------------------------------
 
-const MODEL = 'gemini-2.5-flash';
+// Google retires model names from under you: gemini-2.5-flash started
+// answering "no longer available to new users" and naming its successor in
+// the error, which the scanner read as a failure and quietly fell back from.
+// So try them in order and use the first that answers. GEMINI_MODEL jumps the
+// queue, for when the next one lands before this list is updated.
+const MODELS = [
+  process.env.GEMINI_MODEL,
+  'gemini-3.6-flash',
+  'gemini-2.5-flash',
+  'gemini-flash-latest',
+].filter(Boolean);
+
 const MAX_IMAGES = 5;
 const MAX_BYTES = 5 * 1024 * 1024;       // per image, after the client shrinks it
 
@@ -74,7 +85,30 @@ export default async (request) => {
   // A GET is the scanner asking, before it shows anything, whether this
   // deploy has a reader — so that it can say truthfully where the picture
   // goes instead of promising one thing and doing another.
-  if (request.method === 'GET') return json({ ready: !!key });
+  //
+  // ?diagnose=1 additionally asks Google which models this key can actually
+  // see. "The key is set but nothing uses it" took a rendered receipt and a
+  // 404 body to work out; it should take one curl.
+  if (request.method === 'GET') {
+    if (!key) return json({ ready: false, tried: MODELS });
+    if (!new URL(request.url).searchParams.has('diagnose')) {
+      return json({ ready: true, tried: MODELS });
+    }
+    const list = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',
+      { headers: { 'x-goog-api-key': key } },
+    ).then((r) => r.json()).catch((e) => ({ error: String(e) }));
+    const usable = (list.models || [])
+      .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+      .map((m) => String(m.name || '').replace(/^models\//, ''));
+    return json({
+      ready: true,
+      tried: MODELS,
+      willUse: MODELS.find((m) => usable.includes(m)) || null,
+      available: usable,
+      error: list.error || undefined,
+    });
+  }
   if (request.method !== 'POST') return json({ error: 'POST only' }, 405);
 
   if (!key) {
@@ -109,35 +143,51 @@ export default async (request) => {
     parts.push({ inline_data: { mime_type: mime, data: data } });
   }
 
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
-              MODEL + ':generateContent';
+  const body = JSON.stringify({
+    contents: [{ parts }],
+    generationConfig: {
+      temperature: 0,
+      responseMimeType: 'application/json',
+      responseSchema: SCHEMA,
+    },
+  });
 
   let res;
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: {
-          temperature: 0,
-          responseMimeType: 'application/json',
-          responseSchema: SCHEMA,
+  let raw = '';
+  let model = null;
+
+  for (const candidate of MODELS) {
+    try {
+      res = await fetch(
+        'https://generativelanguage.googleapis.com/v1beta/models/' +
+          candidate + ':generateContent',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+          body,
         },
-      }),
-    });
-  } catch (err) {
-    return json({ error: 'Could not reach the reader', detail: String(err) }, 502);
+      );
+    } catch (err) {
+      return json({ error: 'Could not reach the reader', detail: String(err),
+                    fallback: true }, 502);
+    }
+
+    raw = await res.text();
+    if (res.ok) { model = candidate; break; }
+
+    // A retired or misspelt name: try the next. Anything else — a bad key, no
+    // quota, a refusal — is about this request and trying again will not help.
+    if (res.status !== 404) break;
   }
 
-  const raw = await res.text();
-  if (!res.ok) {
-    // The key being out of quota is the one failure worth naming, because the
-    // answer is "wait, or use the on-device reader" and not "try again".
-    const quota = res.status === 429;
+  if (!model) {
+    // Quota is the one failure worth naming, because the answer is "wait, or
+    // use the on-device reader" rather than "try again".
+    const quota = res && res.status === 429;
     return json({
       error: quota ? 'The free reader is out of quota for now' : 'The reader refused that',
       detail: raw.slice(0, 400),
+      tried: MODELS,
       fallback: true,
     }, quota ? 429 : 502);
   }
@@ -149,7 +199,8 @@ export default async (request) => {
     const parsed = JSON.parse(text);
     rows = Array.isArray(parsed.rows) ? parsed.rows : [];
   } catch (err) {
-    return json({ error: 'The reader sent back something unreadable', fallback: true }, 502);
+    return json({ error: 'The reader sent back something unreadable',
+                  fallback: true }, 502);
   }
 
   // Money crosses the wire as rupees and becomes paise here, so the client
@@ -171,7 +222,7 @@ export default async (request) => {
   // Fees last, the same order js/scan.js puts them in.
   const items = clean.filter((r) => r.kind === 'item');
   const fees = clean.filter((r) => r.kind === 'fee');
-  return json({ rows: items.concat(fees), by: MODEL });
+  return json({ rows: items.concat(fees), by: model });
 };
 
 function json(body, status = 200) {
