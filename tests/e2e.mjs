@@ -566,6 +566,44 @@ try {
   ok('calling it twice in a month raises nothing the second time',
     again.ok && again.body === 0, again.body);
 
+  /* =================================================================== */
+  section('the month summary');
+
+  // Two implementations of one sum: the app derives balances on the device,
+  // and this has to derive the same figure at midnight with no device to
+  // ask. ./scripts/db nets compares them on the real ledger; here the point
+  // is that a real user can raise their own and only their own.
+  const summary = await A.api.rpc('run_due_month_summary');
+  ok('run_due_month_summary runs for a real user',
+    summary.ok && typeof summary.body === 'number', summary.body);
+
+  const summaryAgain = await A.api.rpc('run_due_month_summary');
+  ok('and raises nothing the second time in a month',
+    summaryAgain.ok && summaryAgain.body === 0, summaryAgain.body);
+
+  const mine = await A.api.select('notifications?type=eq.month_summary' +
+    '&select=user_id,title,body&limit=5');
+  ok('every summary raised belongs to the caller',
+    Array.isArray(mine.body) && mine.body.every((n) => n.user_id === A.id),
+    mine.body);
+  if (Array.isArray(mine.body) && mine.body.length) {
+    const s0 = mine.body[0];
+    ok('it names the month that ended', / is over/.test(s0.title), s0.title);
+    ok('and leads with where the reader stands',
+      /^You (owe|are owed|are square)/.test(s0.body), s0.body);
+  } else {
+    skip('it names the month that ended', 'nothing outstanding to summarise');
+    skip('and leads with where the reader stands', 'nothing outstanding to summarise');
+  }
+
+  // The cron entry point writes into every account in the database, so no
+  // client may reach it. ./scripts/db attack proves the same from SQL; this
+  // proves it over HTTP with a real user's token, which is how it would
+  // actually be attacked.
+  const cronReach = await A.api.rpc('cron_month_summaries');
+  ok('the cron entry point is not callable by a signed-in user',
+    !cronReach.ok, { status: cronReach.status, body: cronReach.body });
+
   await A.api.patch('groups?id=eq.' + gid, { settle_up_day: null });
 
   /* =================================================================== */

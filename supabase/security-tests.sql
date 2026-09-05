@@ -208,6 +208,30 @@ begin
     out := out || 'PASS - raising reminders for everybody is out of reach' || E'\n';
   end;
 
+  -- Same two doors on the month summary. cron_month_summaries() writes a
+  -- notification into every account in the database; sw.raise_month_summaries
+  -- (null) does the same without the clock check.
+  begin
+    perform public.cron_month_summaries();
+    out := out || 'FAIL - a signed-in user could run the monthly summary job' || E'\n';
+  exception when others then
+    out := out || 'PASS - the monthly summary job is out of a user''s reach' || E'\n';
+  end;
+
+  begin
+    perform sw.raise_month_summaries(null);
+    out := out || 'FAIL - a user could post a summary into everybody''s feed' || E'\n';
+  exception when others then
+    out := out || 'PASS - summarising for everybody is out of reach' || E'\n';
+  end;
+
+  begin
+    perform sw.user_net('00000000-0000-0000-0000-000000000000'::uuid);
+    out := out || 'FAIL - a user could read anybody''s overall position' || E'\n';
+  exception when others then
+    out := out || 'PASS - reading another account''s position is out of reach' || E'\n';
+  end;
+
   begin
     perform public.admin_set_timezone('UTC');
     out := out || 'FAIL - a non-admin changed the reminder timezone' || E'\n';

@@ -132,7 +132,7 @@ see section 4.7.
 ### Running the tests
 
 ```bash
-for t in tests/*.test.js; do node "$t"; done
+for t in tests/*.test.js tests/*.test.mjs; do node "$t"; done
 ```
 
 ```bash
@@ -148,7 +148,7 @@ real users with real tokens, so RLS applies and triggers fire. It creates its
 own throwaway accounts on `example.com` and removes them afterwards. 73
 checks across every module.
 
-Eighteen suites, no database and no browser needed:
+Nineteen suites, no database and no browser needed:
 
 | Suite | Covers |
 |---|---|
@@ -157,7 +157,8 @@ Eighteen suites, no database and no browser needed:
 | `groups.test.js` | Member nets sum to zero, who-paid vs whose-share, debt simplification clears every balance |
 | `emoji.test.js` | Description-to-icon guessing and rule precedence |
 | `prorate.test.js` | Fees allocated by order size, landing on the total exactly |
-| `scan.test.js` | Receipt parsing from realistic OCR output, and itemised splits |
+| `scan.test.js` | Receipt parsing from realistic OCR output — including a real Blinkit screenshot where every ₹ was read as a "2" — and itemised splits |
+| `scanfn.test.mjs` | The receipt reader function, actually called: a retired model name is not a dead end, quota and a bad key fall back rather than stranding the scan, and rupees land as integer paise |
 | `insights.test.js` | Categories, monthly buckets, search, and CSV including formula-injection guarding |
 | `splitmodes.test.js` | All five split modes, checked against the reference app's own on-screen numbers |
 | `payers.test.js` | Multiple payers: one payer still behaves identically, and several net into the fewest transfers |
@@ -774,6 +775,34 @@ nothing is ever uploaded.
 
 Either way the result is a list you correct before it is applied, and it is
 saved with the expense so it can be reopened and reassigned later.
+
+### 4.10 The summary when a month ends
+
+On the 1st, one email: where you stand overall, where you stand in each group
+that is not square, the biggest few expenses and which way each went for you,
+and what the month came to.
+
+> **September is over — here is where you stand**
+> Overall — **you are owed ₹1,000.50**
+> Flatmates — you are owed ₹1,159.50
+> Goa trip — you owe ₹159
+> Outside any group — you are owed ₹208
+> Electricity (Sep 1) — you lent ₹1,139
+> 14 expenses this month — your share ₹6,240
+
+Nothing to configure. `pg_cron` raises it at local midnight on the 1st, the
+same hourly job pattern as [4.8](#48-settle-up-reminders-and-when-midnight-is);
+where cron could not be enabled it is raised when somebody next opens the app.
+A month with no activity and nothing outstanding sends nothing.
+
+Turn it off, or any other kind, under **Account → Notifications**.
+
+The figure at the top comes from `sw.user_net()`, which mirrors the app's own
+`SW.overallNet(SW.friendBalances())`. It exists because the first version
+summed each group's position and so missed an expense split with a friend
+outside any group — telling somebody who owed ₹208 that they were square.
+`./scripts/db nets` now compares both implementations, person by person, and
+checks that everybody's positions cancel out.
 
 ---
 

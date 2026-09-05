@@ -41,6 +41,9 @@ const WORTH_AN_EMAIL = new Set([
   'settlement_undone',
   'nudge',
   'settle_reminder',
+  // The month is over and here is where you stand — the one email that is
+  // worth sending to somebody who has not opened the app in weeks.
+  'month_summary',
   'friend_added',
   'group_added',
   // Only admins ever receive this one, and somebody joining is exactly the
@@ -49,6 +52,38 @@ const WORTH_AN_EMAIL = new Set([
 ]);
 
 const QUIET_MINUTES = 15;
+
+// Types whose body is a "·"-joined set of facts rather than a sentence.
+const LISTED = new Set(['settle_reminder', 'month_summary']);
+
+// Types where the heading ends in the one figure the mail is about.
+const HERO_FROM_TITLE = new Set(['settlement', 'settlement_undone']);
+
+// The small uppercase label above the heading — what kind of mail this is,
+// readable before the sentence is.
+const KICKER = {
+  settlement: 'Payment recorded',
+  settlement_undone: 'Payment undone',
+  settle_reminder: 'Settle up',
+  month_summary: 'Your month',
+  expense_added: 'New expense',
+  expense_updated: 'Expense changed',
+  added_to_expense: 'You were added',
+  expense_deleted: 'Expense deleted',
+  comment: 'New comment',
+  nudge: 'A nudge',
+  friend_added: 'New friend',
+  group_added: 'New group',
+  account_created: 'New account',
+};
+
+// What the button should say, where "open it" is vaguer than it needs to be.
+const LABEL = {
+  settle_reminder: 'Settle up now',
+  month_summary: 'Review your spending',
+  settlement: 'See the payment',
+  comment: 'Read the comment',
+};
 
 export default async (request) => {
   if (request.method !== 'POST') {
@@ -132,26 +167,69 @@ export default async (request) => {
       : row.group_id ? '/#/group/' + row.group_id
       : '/#/activity');
 
-  // A settle-up reminder's body is several facts joined by "·" — what you
-  // owe, who else is not square, what has piled up since. One paragraph
-  // makes them run together; a list is read at a glance, which is the whole
-  // point of a reminder.
+  // A settle-up reminder or a month's summary is several facts joined by
+  // "·" — what you owe, who else is not square, what piled up since. One
+  // paragraph makes them run together; a list is read at a glance, which is
+  // the whole point of it.
   const lines = String(row.body || '').split(' · ').filter(Boolean);
-  const asList = row.type === 'settle_reminder' && lines.length > 1;
+  const asList = LISTED.has(row.type) && lines.length > 1;
+
+  // Where one figure is the whole point, lift it out of the heading and set
+  // it on its own — "Shriyansh paid you" over a green ₹9,847.17, rather than
+  // an amount buried in a sentence. The wording is this app's own, written
+  // in schema.sql, so reading it back is not guesswork.
+  let heading = row.title;
+  let hero = null;
+  const money = /(₹[\d,]+(?:\.\d{1,2})?)\s*$/;
+
+  if (HERO_FROM_TITLE.has(row.type) && money.test(row.title)) {
+    const amount = row.title.match(money)[1];
+    const head = row.title.replace(money, '').replace(/[\s—–-]+$/, '');
+    if (head) {
+      heading = head;
+      // Which way the money went, from the reader's side. Only two of these
+      // are ever emailed — a person's own copy of their own action arrives
+      // already read — but "You recorded a payment from Ali" means money
+      // came in, and an earlier rule that matched "recorded" painted it red.
+      //
+      // An undone payment is left uncoloured: "Ali undid a payment of ₹500"
+      // does not say whose payment, so it could have moved the reader either
+      // way, and picking a colour would be a guess printed in green.
+      const out = /^you paid\b/i.test(head) || /recorded your payment/i.test(head);
+      hero = {
+        value: amount,
+        tone: row.type === 'settlement' ? (out ? 'owe' : 'good') : null,
+      };
+    }
+  } else if (asList && money.test(lines[0])) {
+    // A reminder leads with the reader's own position. That is the figure.
+    hero = {
+      label: lines[0].replace(money, '').replace(/[\s—–-]+$/, ''),
+      value: lines[0].match(money)[1],
+      tone: /you owe|you borrowed/i.test(lines[0]) ? 'owe' : 'good',
+    };
+  }
+
+  const detail = asList ? lines.slice(hero && !HERO_FROM_TITLE.has(row.type) ? 1 : 0) : null;
 
   const sent = await sendMail({
     to: profile.email,
     name: profile.full_name,
     subject: row.title,
-    html: shell(row.title, asList ? '' : (row.body || ''),
-                appUrl ? { href: deepLink, label: 'Open it in SplittyWise' } : null,
-                asList ? lines : null) +
-      '<div style="font-family:-apple-system,sans-serif;max-width:520px;' +
-        'margin:-14px auto 0;padding:0 24px 24px;font-size:12.5px;color:#7C8D86">' +
-        'You are getting this because email notifications are on in your ' +
-        'SplittyWise account. Turn them off under Account &rarr; Notifications.' +
-      '</div>',
-    text: row.title + (row.body ? '\n\n' + row.body : '') +
+    html: shell(
+      heading,
+      asList ? '' : (row.body || ''),
+      appUrl ? { href: deepLink, label: LABEL[row.type] || 'Open it in SplittyWise' } : null,
+      detail && detail.length ? detail : null,
+      {
+        kicker: KICKER[row.type] || null,
+        hero: hero,
+        note: 'You are getting this because email notifications are on in ' +
+              'your SplittyWise account. Turn them off, or pick which ones ' +
+              'you want, under Account → Notifications.',
+      },
+    ),
+    text: row.title + (row.body ? '\n\n' + row.body.split(' · ').join('\n') : '') +
           (appUrl ? '\n\n' + deepLink : ''),
   });
 

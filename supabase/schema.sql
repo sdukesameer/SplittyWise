@@ -2154,6 +2154,249 @@ end $$;
 
 
 
+-- Somebody's whole position, groups and friend-only expenses together —
+-- what the app puts at the top of the groups screen. sw.group_member_net()
+-- cannot answer this: it takes a group id, and an expense split with a
+-- friend outside any group has none, so summing group positions reported
+-- "square overall" to somebody who owed ₹208. Same arithmetic, no group
+-- filter: what they put in, less their share, plus what they have handed
+-- over, less what they have been paid.
+--
+-- Mirrors SW.overallNet(SW.friendBalances()) in js/balances.js, which sums
+-- the same differences edge by edge. ./scripts/db nets compares them.
+create or replace function sw.user_net(uid uuid)
+returns numeric language sql stable security definer set search_path = '' as $$
+  select
+      coalesce((
+        select sum(
+          case
+            when exists (select 1 from public.expense_payers ep
+                         where ep.expense_id = e.id)
+            then coalesce((select sum(ep.amount) from public.expense_payers ep
+                           where ep.expense_id = e.id and ep.user_id = uid), 0)
+            else case when e.payer_id = uid then e.amount else 0 end
+          end)
+        from public.expenses e
+        where e.deleted_at is null
+      ), 0)
+    + coalesce((select sum(s.amount) from public.settlements s
+                where s.deleted_at is null and s.from_user = uid), 0)
+    - coalesce((select sum(es.amount) from public.expense_splits es
+                join public.expenses e on e.id = es.expense_id
+                where e.deleted_at is null and es.user_id = uid), 0)
+    - coalesce((select sum(s.amount) from public.settlements s
+                where s.deleted_at is null and s.to_user = uid), 0);
+$$;
+
+-- ---------------------------------------------------------------------------
+--  The month that just ended
+--
+--  One email on the 1st: where you stand overall, where you stand in each
+--  group that is not square, the biggest few expenses and which way they
+--  went for you, and what the month came to. Built out of the same
+--  sw.group_member_net() the app and the settle-up reminder use, so the
+--  three cannot disagree.
+--
+--  Returned as facts joined by " · ", the shape the notification body
+--  already has and the email function already lays out as rows. Null when
+--  the month was empty and nothing is outstanding: a summary of a month
+--  somebody did not use the app is not worth an email.
+-- ---------------------------------------------------------------------------
+create or replace function sw.month_summary(uid uuid, m date)
+returns text language plpgsql stable security definer set search_path = '' as $$
+declare
+  from_d   date := date_trunc('month', m)::date;
+  to_d     date := (date_trunc('month', m) + interval '1 month')::date;
+  overall  numeric := sw.user_net(uid);
+  ingroups numeric := 0;
+  loose    numeric;
+  parts    text[] := '{}';
+  gparts   text[] := '{}';
+  g        record;
+  e        record;
+  cnt      int := 0;
+  share    numeric := 0;
+begin
+  -- Their position in each group, and the sum of those positions, which is
+  -- the same overall figure the app shows on the groups screen.
+  for g in
+    select gr.name, sw.group_member_net(gr.id, uid) as net
+    from public.groups gr
+    join public.group_members gm on gm.group_id = gr.id and gm.user_id = uid
+    order by abs(sw.group_member_net(gr.id, uid)) desc, gr.name
+  loop
+    ingroups := ingroups + g.net;
+    if round(g.net, 2) <> 0 then
+      gparts := gparts || (replace(g.name, ' · ', ' - ') || ' — ' ||
+        case when g.net < 0 then 'you owe ' || sw.money(-g.net)
+             else 'you are owed ' || sw.money(g.net) end);
+    end if;
+  end loop;
+
+  -- Every expense they were part of, paying or owing. Counting only the ones
+  -- they had a split on dropped the month entirely for somebody who paid for
+  -- a friend and took no share of it.
+  select count(*),
+         coalesce(sum(coalesce((select sum(es.amount) from public.expense_splits es
+                                where es.expense_id = ex.id and es.user_id = uid), 0)), 0)
+    into cnt, share
+  from public.expenses ex
+  where ex.deleted_at is null
+    and ex.expense_date >= from_d and ex.expense_date < to_d
+    and (ex.payer_id = uid
+         or exists (select 1 from public.expense_splits es4
+                    where es4.expense_id = ex.id and es4.user_id = uid)
+         or exists (select 1 from public.expense_payers ep3
+                    where ep3.expense_id = ex.id and ep3.user_id = uid));
+
+  if cnt = 0 and round(overall, 2) = 0 then return null; end if;
+
+  parts := parts || (case
+    when round(overall, 2) = 0 then 'You are square overall'
+    when overall < 0 then 'You owe ' || sw.money(-overall)
+    else 'You are owed ' || sw.money(overall) end);
+
+  -- Four groups at most. A list long enough to scroll is not a summary.
+  parts := parts || gparts[1:4];
+
+  -- Whatever is left once the groups are accounted for is owed to or by a
+  -- friend directly, with no group involved. Without this line the rows
+  -- would not add up to the figure above them.
+  loose := overall - ingroups;
+  if round(loose, 2) <> 0 then
+    parts := parts || ('Outside any group — ' ||
+      case when loose < 0 then 'you owe ' || sw.money(-loose)
+           else 'you are owed ' || sw.money(loose) end);
+  end if;
+
+  -- The biggest three, and which way each went for this person: what they
+  -- put in, less their own share. Mirrors the payer_id fallback in
+  -- sw.group_member_net() — an expense with no payer rows is the one payer's.
+  for e in
+    select ex.description, ex.expense_date,
+           (case
+              when exists (select 1 from public.expense_payers ep
+                           where ep.expense_id = ex.id)
+              then coalesce((select sum(ep.amount) from public.expense_payers ep
+                             where ep.expense_id = ex.id and ep.user_id = uid), 0)
+              else case when ex.payer_id = uid then ex.amount else 0 end
+            end)
+           - coalesce((select sum(es2.amount) from public.expense_splits es2
+                       where es2.expense_id = ex.id and es2.user_id = uid), 0) as mine
+    from public.expenses ex
+    where ex.deleted_at is null
+      and ex.expense_date >= from_d and ex.expense_date < to_d
+      and (ex.payer_id = uid
+           or exists (select 1 from public.expense_splits es3
+                      where es3.expense_id = ex.id and es3.user_id = uid)
+           or exists (select 1 from public.expense_payers ep2
+                      where ep2.expense_id = ex.id and ep2.user_id = uid))
+    order by ex.amount desc, ex.expense_date desc
+    limit 3
+  loop
+    parts := parts || (replace(e.description, ' · ', ' - ') || ' (' ||
+      to_char(e.expense_date, 'FMMon FMDD') || ') — ' ||
+      case when round(e.mine, 2) > 0 then 'you lent ' || sw.money(e.mine)
+           when round(e.mine, 2) < 0 then 'you borrowed ' || sw.money(-e.mine)
+           else 'square for you' end);
+  end loop;
+
+  if cnt > 0 then
+    parts := parts || (cnt ||
+      case when cnt = 1 then ' expense' else ' expenses' end ||
+      ' this month — your share ' || sw.money(share));
+  end if;
+
+  return array_to_string(parts, ' · ');
+end $$;
+
+-- Dedupe is per calendar month, so being called hourly by cron and again at
+-- launch produces one summary, and a month that is missed is missed rather
+-- than caught up on.
+create or replace function sw.raise_month_summaries(only_user uuid default null)
+returns int language plpgsql security definer set search_path = public as $$
+declare
+  r     record;
+  body  text;
+  last  date := (date_trunc('month', current_date) - interval '1 month')::date;
+  made  int := 0;
+begin
+  -- Before the 1st there is no finished month to report on. current_date is
+  -- the local date here: cron_month_summaries() pins the session's timezone
+  -- before calling, exactly as the settle-up reminders do.
+  for r in
+    select p.id from public.profiles p
+    where (only_user is null or p.id = only_user)
+      and not exists (
+        select 1 from public.notifications n
+        where n.user_id = p.id
+          and n.type = 'month_summary'
+          and n.created_at >= date_trunc('month', current_date)
+      )
+  loop
+    body := sw.month_summary(r.id, last);
+    if body is null then continue; end if;
+
+    insert into public.notifications (user_id, actor_id, type, title, body)
+    values (r.id, null, 'month_summary',
+            to_char(last, 'FMMonth') || ' is over — here is where you stand',
+            body);
+    made := made + 1;
+  end loop;
+
+  return made;
+end $$;
+
+-- The launch path, for a project where pg_cron could not be enabled. Only
+-- ever writes to the caller's own feed, so no device can post into anybody
+-- else's bell.
+create or replace function public.run_due_month_summary()
+returns int language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then return 0; end if;
+  return sw.raise_month_summaries(auth.uid());
+end $$;
+
+create or replace function public.cron_month_summaries()
+returns int language plpgsql security definer set search_path = public as $$
+declare
+  tz    text := coalesce((select value->>'tz' from public.app_settings
+                          where key = 'timezone'), 'Asia/Kolkata');
+  local timestamp;
+begin
+  local := (now() at time zone tz);
+  if extract(hour from local)::int <> 0 then return 0; end if;
+
+  -- Pinned before the day is read: the database's UTC date is a different
+  -- day from local time for part of every day, and "the 1st" means the 1st
+  -- where the people are.
+  perform set_config('TimeZone', tz, true);
+  if extract(day from current_date)::int <> 1 then return 0; end if;
+
+  return sw.raise_month_summaries(null);
+end $$;
+
+do $$
+begin
+  if exists (select 1 from cron.job where jobname = 'splittywise-month-summaries') then
+    perform cron.unschedule('splittywise-month-summaries');
+  end if;
+exception
+  when others then null;
+end $$;
+
+do $$
+begin
+  perform cron.schedule('splittywise-month-summaries', '0 * * * *',
+                        'select public.cron_month_summaries()');
+  raise notice 'month summaries scheduled hourly; each run acts only at local '
+    'midnight on the 1st';
+exception
+  when others then
+    raise notice 'could not schedule month summaries (%)', sqlerrm;
+end $$;
+
+
 -- Anything in your trash for more than thirty days goes for good. Called at
 -- launch, so the bin empties itself without a scheduler.
 create or replace function public.purge_trash()
@@ -3338,6 +3581,7 @@ grant execute on function public.redeem_invite(text)                    to authe
 grant execute on function public.nudge(uuid, uuid, numeric)              to authenticated;
 grant execute on function public.run_due_recurring()                     to authenticated;
 grant execute on function public.run_due_settle_reminders()              to authenticated;
+grant execute on function public.run_due_month_summary()                 to authenticated;
 grant execute on function public.set_expense_deleted(uuid, boolean)      to authenticated;
 grant execute on function public.purge_trash()                           to authenticated;
 grant execute on function public.next_occurrence(date, text, int)        to authenticated;

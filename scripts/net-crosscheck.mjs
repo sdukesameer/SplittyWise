@@ -105,4 +105,46 @@ for (const g of groups) {
   }
 }
 if (!bad) console.log('  and every group\'s positions sum to zero');
-process.exit(bad ? 1 : 0);
+
+// ---------------------------------------------------------------------------
+//  And the whole position, groups and friend-only expenses together
+//
+//  sw.user_net() exists because summing group positions misses an expense
+//  split with a friend outside any group — which reported "square overall"
+//  to somebody who owed ₹208. So it is compared against the client's own
+//  overall, which sums the same differences edge by edge.
+// ---------------------------------------------------------------------------
+const people = q(`
+  select p.id, p.full_name, round(sw.user_net(p.id), 2)::text as net
+  from public.profiles p order by p.full_name`);
+
+let overallBad = 0;
+for (const person of people) {
+  const others = people.filter((o) => o.id !== person.id).map((o) => o.id);
+
+  // A new object each time, so friendBalances() cannot serve its memo.
+  SW.ledger = Object.assign({}, SW.ledger, { me: person.id, friendIds: others });
+
+  const fromClient = SW.overallNet(SW.friendBalances());
+  const fromSql = Math.round(Number(person.net) * 100);
+  if (fromSql !== fromClient) {
+    overallBad++;
+    console.log('  DISAGREE  ' + JSON.stringify(person.full_name) +
+      '\n            sql:    ' + fromSql + ' paise' +
+      '\n            client: ' + fromClient + ' paise');
+  }
+}
+console.log('  ' + people.length + ' overall position(s) compared · ' +
+  (overallBad ? overallBad + ' DISAGREEMENT(S)' : 'they agree'));
+
+// Everybody's overall positions must cancel out, for the same reason a
+// group's do: every split sums to its expense and every settlement cancels.
+const sum = people.reduce((t, p) => t + Math.round(Number(p.net) * 100), 0);
+if (sum !== 0) {
+  overallBad++;
+  console.log('  OVERALL POSITIONS DO NOT SUM TO ZERO: ' + sum + ' paise');
+} else {
+  console.log('  and they sum to zero across the whole project');
+}
+
+process.exit(bad + overallBad ? 1 : 0);

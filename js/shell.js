@@ -229,6 +229,7 @@ window.SW = window.SW || {};
     settlement: '✅',
     settlement_undone: '↩️',
     settle_reminder: '📅',
+    month_summary: '📊',
     comment: '💬',
     nudge: '🔔',
     invite_accepted: '🤝',
@@ -746,6 +747,7 @@ window.SW = window.SW || {};
     { key: 'account_created', label: 'Somebody new signs up (admins)' },
     { key: 'group_added',     label: 'Being added to a group' },
     { key: 'settle_reminder', label: 'Monthly settle-up day' },
+    { key: 'month_summary',   label: 'A summary when the month ends' },
     { key: 'own_actions',     label: 'A record of your own actions' },
   ];
 
@@ -1035,6 +1037,14 @@ window.SW = window.SW || {};
       // Monthly settle-up reminders. Writes only to your own feed and
       // dedupes per calendar month, so this is safe to call every day.
       db.rpc('run_due_settle_reminders').then(function (r) {
+        if (r && r.data > 0 && SW.refreshUnread) SW.refreshUnread();
+      }, function () {});
+
+      // And the summary of the month that has just ended. Same shape: your
+      // own feed only, deduped per calendar month, so calling it daily gives
+      // one summary — and somebody whose project has no pg_cron still gets
+      // it, just whenever they next open the app.
+      db.rpc('run_due_month_summary').then(function (r) {
         if (r && r.data > 0 && SW.refreshUnread) SW.refreshUnread();
       }, function () {});
 

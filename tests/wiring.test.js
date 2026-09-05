@@ -782,7 +782,9 @@ const claimedPolicies = (readme.match(/(\d+)\s*\n?row-level-security policies/) 
                          readme.match(/(\d+) row-level-security policies/) || [])[1];
 check('and its policy count is right (' + policies + ')',
   Number(claimedPolicies) === policies, { claimed: claimedPolicies, actual: policies });
-const suites = fs.readdirSync('tests').filter(f => f.endsWith('.test.js')).length;
+// .mjs too: the receipt reader is an ES module, so its suite has to be one.
+const suites = fs.readdirSync('tests')
+  .filter(f => f.endsWith('.test.js') || f.endsWith('.test.mjs')).length;
 const words = ['zero','one','two','three','four','five','six','seven','eight',
   'nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen',
   'seventeen','eighteen','nineteen','twenty'];
@@ -1476,14 +1478,97 @@ check('an unconfigured deploy still scans, on the device',
   /'unconfigured'/.test(scanFn) &&
   /res\.status === 501 \|\| res\.status === 404\) \{ cloudReader = 'no'; return null; \}/
     .test(scanJs));
+// These two used to match the exact lines they described. Both then failed
+// the moment those lines were fixed — after passing while the model name in
+// them had been retired by Google for a week. What they check now is the
+// contract; tests/scanfn.test.mjs runs the function and proves the behaviour.
 check('so does one whose free quota is spent',
-  /const quota = res\.status === 429/.test(scanFn) && /if \(body\.fallback\) return null;/.test(scanJs));
+  /body\.fallback/.test(scanJs) && /fallback: true/.test(scanFn));
 check('the screen says which reader it has before anything is picked',
-  /request\.method === 'GET'\) return json\(\{ ready: !!key \}\)/.test(scanFn) &&
+  /request\.method === 'GET'/.test(scanFn) && /\bready:/.test(scanFn) &&
   /function probeCloud/.test(scanJs) &&
   /never uploaded/.test(scanJs));
+check('and the function is run, not just read',
+  fs.existsSync('tests/scanfn.test.mjs') &&
+  /await scan\(one\(\)\)/.test(fs.readFileSync('tests/scanfn.test.mjs', 'utf8')));
+check('including that a retired model name is not a dead end',
+  /is no longer available to new users/
+    .test(fs.readFileSync('tests/scanfn.test.mjs', 'utf8')));
 check('and the README says where the picture goes',
   /GEMINI_API_KEY/.test(readme) && /the screenshots leave the phone/i.test(readme));
+
+/* ---------------- 38. the month that just ended ---------------- */
+
+const notifyFn = fs.readFileSync('netlify/functions/notify-email.mjs', 'utf8');
+
+// Summing group positions missed an expense split with a friend outside any
+// group, and told somebody who owed ₹208 that they were square.
+check('the overall position counts expenses with no group',
+  /create or replace function sw\.user_net/.test(schema) &&
+  /overall  numeric := sw\.user_net\(uid\)/.test(schema));
+check('and the rows add up to it, with the groupless part named',
+  /Outside any group/.test(schema));
+check('the summary is null when the month was empty and nothing is owed',
+  /if cnt = 0 and round\(overall, 2\) = 0 then return null; end if;/.test(schema));
+check('an expense somebody paid but took no share of still counts',
+  /Counting only the ones/.test(noSqlComments(schema)) ||
+  /or exists \(select 1 from public\.expense_splits es4/.test(schema));
+check('it acts at local midnight on the 1st',
+  /create or replace function public\.cron_month_summaries/.test(schema) &&
+  /if extract\(day from current_date\)::int <> 1 then return 0; end if;/.test(schema));
+check('the timezone is pinned before the day is read',
+  (function () {
+    const fn = (noSqlComments(schema).match(
+      /create or replace function public\.cron_month_summaries[\s\S]*?\nend \$\$;/) || [''])[0];
+    if (!fn) return false;
+    return fn.indexOf("set_config('TimeZone'") < fn.indexOf('extract(day from current_date)');
+  })());
+check('a project with no pg_cron still gets it, from the caller alone',
+  /create or replace function public\.run_due_month_summary/.test(schema) &&
+  /grant execute on function public\.run_due_month_summary\(\)/.test(schema) &&
+  /run_due_month_summary/.test(js['js/shell.js']));
+check('but the job that writes into everybody is granted to nobody',
+  !/grant execute on function public\.cron_month_summaries/.test(schema));
+check('and the attack suite tries both doors',
+  /the monthly summary job is out of a user/.test(attackSql) &&
+  /summarising for everybody is out of reach/.test(attackSql));
+check('the two implementations of the overall sum are compared',
+  /sw\.user_net/.test(fs.readFileSync('scripts/net-crosscheck.mjs', 'utf8')) &&
+  /SW\.overallNet\(SW\.friendBalances\(\)\)/
+    .test(fs.readFileSync('scripts/net-crosscheck.mjs', 'utf8')));
+check('the new type has an icon, a switch and an email rule',
+  /month_summary: '/.test(js['js/shell.js']) &&
+  /key: 'month_summary'/.test(js['js/shell.js']) &&
+  /'month_summary'/.test(notifyFn));
+
+// The emails these produce are the thing people actually see.
+check('every email declares its charset',
+  /<meta charset="utf-8">/.test(mailLib));
+check('because without it a ₹ arrives as mojibake',
+  /â‚¹/.test(mailLib));
+check('money is coloured the way the app colours it',
+  /const GOOD = '#0F8657'/.test(mailLib) && /const OWE = '#C9431A'/.test(mailLib));
+check('only the reader\'s own position is coloured, not somebody else\'s',
+  /function toneOf/.test(mailLib) && /is owed/.test(mailLib) === false ||
+  /Md Sameer is owed/.test(mailLib));
+check('a dark inbox gets the app\'s dark palette, not the client\'s guess',
+  /prefers-color-scheme: dark/.test(mailLib) &&
+  /\.m-good\{color:#35C88A!important\}/.test(mailLib));
+check('and every colour is still inline, for clients that strip <style>',
+  /class="m-ink" style="font-family:/.test(mailLib));
+check('one figure is lifted out of the heading where it is the whole point',
+  /HERO_FROM_TITLE/.test(notifyFn) && /hero: hero/.test(notifyFn));
+// "Ali recorded your payment of ₹500" is money going out; "You recorded a
+// payment from Ali" is money coming in. A rule that just matched "recorded"
+// painted the second one red.
+check('the direction is read from the reader\'s side, not the verb',
+  /recorded your payment/.test(notifyFn) && /\^you paid/.test(notifyFn));
+check('and an undone payment, which does not say whose, is left uncoloured',
+  /row\.type === 'settlement' \? \(out \? 'owe' : 'good'\) : null/.test(notifyFn));
+check('a summary is laid out as rows, not one run-together paragraph',
+  /const LISTED = new Set\(\['settle_reminder', 'month_summary'\]\)/.test(notifyFn));
+check('the button says what it does',
+  /month_summary: 'Review your spending'/.test(notifyFn));
 
 // Storing the itemisation is only worth anything if it reopens. It did not:
 // renderRows() writes into #scan-rows, which renderItemise() creates, so
