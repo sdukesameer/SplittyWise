@@ -646,6 +646,7 @@ try {
   if (!site) {
     skip('signup-check answers', 'SITE_URL not set');
     skip('the email test sends', 'SITE_URL not set');
+    skip('the receipt reader says whether it is configured', 'SITE_URL not set');
   } else {
     const chk = await fetch(site + '/.netlify/functions/signup-check', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -663,6 +664,16 @@ try {
       ok('the email test sends to the caller only',
         mail.ok && mailBody.sentTo === A_EMAIL, { status: mail.status, body: mailBody });
     }
+
+    // The scanner asks this before it draws anything, so that it can say
+    // truthfully whether the picture stays on the phone. A deploy where this
+    // 404s would have the scanner claim on-device reading and be right, so
+    // the failure that matters is this answering something unreadable.
+    const reader = await fetch(site + '/.netlify/functions/scan');
+    const readerBody = await reader.json().catch(() => ({}));
+    ok('the receipt reader says whether it is configured',
+      reader.ok && typeof readerBody.ready === 'boolean',
+      { status: reader.status, body: readerBody });
 
     // microphone=() disables it for every origin including ours, so the
     // browser refuses without ever prompting. Checked on the served header,

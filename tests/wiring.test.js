@@ -1407,9 +1407,11 @@ check('and only sends it when the itemiser was opened',
 check('itemising alone is allowed',
   !/itemising for yourself alone/.test(js['js/expense.js']) &&
   /Itemising alone is allowed/.test(js['js/expense.js']));
+// This check used to pin the exact line that was broken — it asserted the
+// call to renderRows(), which is what crashed. Matching the code as written
+// is not the same as knowing the code works.
 check('the scanner reopens from a saved itemisation',
-  /opts\.items \|\| \[\]/.test(js['js/scan.js']) &&
-  /if \(saved\.length\) \{ rows = saved; renderRows\(\); \}/.test(js['js/scan.js']));
+  /opts\.items \|\| \[\]/.test(js['js/scan.js']));
 check('and drops anybody no longer on the expense',
   /people\.indexOf\(id\) > -1/.test(js['js/scan.js']));
 check('it hands the items back to be stored',
@@ -1431,6 +1433,63 @@ check('the new type has an icon, a switch and an email rule',
   /added_to_expense: '/.test(js['js/shell.js']) &&
   /key: 'added_to_expense'/.test(js['js/shell.js']) &&
   /'added_to_expense'/.test(fs.readFileSync('netlify/functions/notify-email.mjs', 'utf8')));
+
+/* ---------------- 37. reading a receipt ---------------- */
+
+// A screenshot of a Blinkit order came back with every amount inflated by a
+// leading "2" — the ₹ glyph, which Tesseract's English model has never seen.
+// Nothing in one line can tell 235 from ₹35; the document can.
+const scanJs = js['js/scan.js'];
+check('the misread rupee sign is inferred across the whole receipt',
+  /SW\.detectRupeeGlyph = function/.test(scanJs) &&
+  /votes >= 4/.test(scanJs));
+check('and only when no real currency mark survived anywhere',
+  /if \(lines\.some\(function \(l\) \{ return REAL_MARK\.test\(l\); \}\)\) return null;/
+    .test(scanJs));
+check('a size row under an item is not a second item',
+  /function isDescriptor/.test(scanJs) && /if \(isDescriptor\(base\)\)/.test(scanJs));
+check('an order number welded to letters is not an amount',
+  /\[A-Za-z\]\{2\}\|#/.test(scanJs));
+check('the payable price is the smaller of a discounted pair',
+  /function pickPrice/.test(scanJs) && /Math\.min\(prices\[0\], prices\[1\]\)/.test(scanJs));
+check('the thumbnail junk in front of a name is stripped',
+  /function stripLeadingJunk/.test(scanJs));
+
+// One screen does not hold a ten-item order, which is why the first attempt
+// produced half a receipt.
+check('more than one screenshot can be picked',
+  /input\.multiple = true/.test(scanJs) && /MAX_SHOTS/.test(scanJs));
+check('and more can be added to a list already started',
+  /id="scan-more"/.test(scanJs) && /readReceipt\(files, true\)/.test(scanJs));
+check('an item seen in two overlapping screenshots is added once',
+  /already on the list at the same price is the overlap/.test(codeOnly(scanJs)) ||
+  /have\[key\]\) return;/.test(scanJs));
+
+const scanFn = fs.readFileSync('netlify/functions/scan.mjs', 'utf8');
+check('a vision model reads it when a key is configured',
+  /GEMINI_API_KEY/.test(scanFn) && /responseSchema/.test(scanFn));
+check('and it is told the struck-out price is not what was paid',
+  /use the amount PAID/.test(scanFn));
+check('money crosses the wire as rupees and lands as integer paise',
+  /Math\.round\(price \* 100\)/.test(scanFn));
+check('an unconfigured deploy still scans, on the device',
+  /'unconfigured'/.test(scanFn) &&
+  /res\.status === 501 \|\| res\.status === 404\) \{ cloudReader = 'no'; return null; \}/
+    .test(scanJs));
+check('so does one whose free quota is spent',
+  /const quota = res\.status === 429/.test(scanFn) && /if \(body\.fallback\) return null;/.test(scanJs));
+check('the screen says which reader it has before anything is picked',
+  /request\.method === 'GET'\) return json\(\{ ready: !!key \}\)/.test(scanFn) &&
+  /function probeCloud/.test(scanJs) &&
+  /never uploaded/.test(scanJs));
+check('and the README says where the picture goes',
+  /GEMINI_API_KEY/.test(readme) && /the screenshots leave the phone/i.test(readme));
+
+// Storing the itemisation is only worth anything if it reopens. It did not:
+// renderRows() writes into #scan-rows, which renderItemise() creates, so
+// opening a saved one threw on a null element before drawing a single line.
+check('a saved itemisation reopens through the stage that holds it',
+  /if \(saved\.length\) \{ rows = saved; renderItemise\(/.test(scanJs));
 
 // A ReferenceError partway through printed a page of PASSes and then died
 // before this line, which reads like a quiet success unless you notice the

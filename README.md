@@ -382,8 +382,9 @@ marked private:
 | `avatars` | One picture per person | ≤ 100 KB each |
 | `covers` | One picture per group | ≤ 100 KB each |
 
-**There is deliberately no bucket for receipts.** A receipt is read on the
-device and the image is thrown away — what gets saved is the itemised split
+**There is deliberately no bucket for receipts.** A receipt is read — on the
+device, or by the reader in [4.9](#49-reading-receipts-optional-free) — and
+the image is thrown away — what gets saved is the itemised split
 and a note, not a photograph. That is what keeps storage in the tens of
 megabytes rather than the gigabytes.
 
@@ -621,6 +622,7 @@ Environment variables**:
 | `EMAIL_FROM` | The sender address you verified |
 | `EMAIL_FROM_NAME` | `SplittyWise` |
 | `WEBHOOK_SECRET` | Any long random string — `openssl rand -hex 32` |
+| `GEMINI_API_KEY` | *Optional.* Reads receipt screenshots properly — see [4.9](#49-reading-receipts-optional-free). Unset, scanning falls back to on-device OCR |
 | `APP_URL` | *Optional.* Only needed for a custom domain — the function otherwise takes the site's address from the request it was called on, so a wrong or missing value cannot produce a broken link. Setting it to the example above is worse than leaving it unset |
 
 Redeploy after setting them.
@@ -728,6 +730,50 @@ device, and a reminder at midnight has no device to ask, so there are two
 implementations of one sum. `./scripts/db nets` compares them member by
 member on the real ledger, because an email that disagrees with the app is
 worse than no email.
+
+### 4.9 Reading receipts (optional, free)
+
+Scanning works with nothing configured: Tesseract runs in the browser, on the
+phone, and the picture never leaves it. It is character recognition, though,
+not a reader of receipts — and its English model has never been shown a **₹**,
+so it substitutes the nearest glyph it knows. On Blinkit that is a `2`, which
+turns ₹35 into 235 and a ₹469 basket into ₹53,727.
+
+`js/scan.js` detects and undoes that: if not one real currency mark survived
+anywhere and every amount in the right-hand column carries the same stray
+leading character, that character *is* the ₹. It also drops the size row under
+each item, whose amount is the struck-out MRP, and the app furniture that a
+screenshot carries — the status bar, the order number, **Rate Order**.
+
+That is a repair, not a cure. Setting one variable replaces it with a vision
+model, which reads the layout rather than the shapes:
+
+| Variable | Value |
+|---|---|
+| `GEMINI_API_KEY` | A key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Free tier — no card, no billing account |
+
+The free tier is generous enough that a household scanning a few orders a day
+will not come near it, and when it *is* exhausted the scanner falls back to
+reading on the device rather than failing.
+
+What changes with it set:
+
+- The **₹** is read as a ₹.
+- A crossed-out MRP is understood as the old price, not a second item.
+- **Several screenshots are read as one order.** A long list takes two or
+  three screens; pick them all and an item visible in two of them is counted
+  once. On-device OCR gets this too, but the model is better at spotting the
+  overlap.
+- A product thumbnail is a picture, not a word.
+
+What changes for privacy: **the screenshots leave the phone.** They are sent
+to Google, read, and not stored by either end. The scanner says which of the
+two readers it has before you pick anything, and **Paste the order text**
+stays there as the exact, on-device path. Leave `GEMINI_API_KEY` unset and
+nothing is ever uploaded.
+
+Either way the result is a list you correct before it is applied, and it is
+saved with the expense so it can be reopened and reassigned later.
 
 ---
 
@@ -1039,7 +1085,7 @@ js/lock.js              Face ID or fingerprint on the installed app
 js/expense.js           add/edit form, splitting, one expense's page
 js/groups.js            groups list, one group's page, membership, settings
 js/settle.js            recording payments, and the plan to clear a group
-js/scan.js              on-device OCR, receipt parsing, itemised assignment
+js/scan.js              receipt reading, parsing, itemised assignment
 js/insights.js          hand-drawn SVG charts and CSV export
 js/search.js            expense search
 js/realtime.js          live notifications, and resync on foreground
@@ -1052,7 +1098,8 @@ tests/                  seventeen suites, no database or browser needed
 icons/                  app icon: SVG source + 5 rendered PNG sizes
 supabase/schema.sql     tables, RLS policies, RPCs, triggers, storage
 netlify.toml            publish settings, redirects, security headers
-netlify/functions/      one function: optional email notifications (4.7)
+netlify/functions/      optional email notifications (4.7), the admin API
+                        (12), the signup gate, and the receipt reader (4.9)
 ```
 
 ### The database

@@ -1,11 +1,16 @@
 // ---------------------------------------------------------------------------
-//  Receipt scanning — OCR in the browser, then an editable itemisation
+//  Receipt scanning — read a screenshot, then an editable itemisation
 //
-//  The image is read on this device and thrown away. Nothing is uploaded and
-//  nothing is stored: what gets saved is the itemised split and a note.
+//  Two readers. Where a key is configured the screenshots go to a vision
+//  model, which understands that the right-hand column is money and that a
+//  crossed-out number is the old price. Where one is not, Tesseract reads
+//  them on the device and the parser below picks the result apart.
 //
-//  Tesseract is honest-to-goodness OCR, not a layout model, so the parser
-//  below is deliberately forgiving and everything it produces is editable.
+//  Tesseract is honest-to-goodness character recognition, not a layout model
+//  — it does not even know the ₹ glyph — so the parser is deliberately
+//  forgiving and everything either reader produces is editable before it is
+//  applied. No image is stored by either path; what gets saved is the
+//  itemisation and a note.
 // ---------------------------------------------------------------------------
 
 window.SW = window.SW || {};
@@ -21,6 +26,14 @@ window.SW = window.SW || {};
     '^arriv', '^eta\\b', '^paid\\s*(via|using)', '^payment', '^thank',
     '^you\\s*sav', '^sav(ed|ings)', '^discount', '^coupon', '^promo',
     '^mrp\\b', '^cart\\s*total', '^grand\\b', '^\\W*$',
+    // Screenshot chrome. A phone screenshot of an order carries the app's
+    // header and footer and the phone's own status bar, and every one of
+    // those lines ends in a number that is not an amount.
+    '^order\\s*[#:]', '^order\\s*(again|details|placed)', '^\\d+\\s*items?\\b',
+    '^items?\\s*in\\s*order', '^(get|need)\\s*help', '^rate\\s*(order|us)',
+    '^repeat\\s*order', '^track\\s*order', '^view\\s*(invoice|bill|details)',
+    '^download\\s*invoice', '^\\d{1,2}:\\d{2}\\s*(am|pm)?\\b',
+    '^\\d+(\\.\\d+)?\\s*(kb|mb)/s\\b', '^delivered\\b', '^refund',
   ].join('|'), 'i');
 
   // Rows that are charges rather than things anyone ordered. These get
@@ -34,6 +47,80 @@ window.SW = window.SW || {};
 
   // Units that follow a number, so "500 g" is a weight and not ₹500.
   const UNIT_AFTER = /^(g|gm|gms|kg|kgs|ml|l|ltr|litre|pc|pcs|piece|pieces|pack|packs|nos?|units?|dozen|combo|sachet|bottle|can|box|bag)\b/i;
+
+  // The same words, plus the filler around them, for deciding whether a line
+  // is *only* a size — "1 pc • 1 unit", "250 - 275 g • 2 units".
+  const SIZE_WORD = /^(g|gm|gms|kg|kgs|ml|l|ltr|litre|lit|pc|pcs|piece|pieces|pack|packs|packet|no|nos|unit|units|dozen|combo|sachet|bottle|can|box|bag|approx|each|of|per|x|gram|grams|kilo|kilos|litres|liters)$/i;
+
+  // Zepto, Blinkit and Instamart all print the size on its own row beneath
+  // the item, with the struck-out MRP beside it. That row is not an item and
+  // its amount is not what anybody paid.
+  function isDescriptor(name) {
+    const words = String(name).split(/\s+/).filter(Boolean);
+    if (!words.length) return false;
+    let sawSize = false;
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i].replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
+      if (!w) continue;
+      if (/^\d+(\.\d+)?$/.test(w)) continue;
+      if (SIZE_WORD.test(w)) { sawSize = true; continue; }
+      const glued = w.match(/^(\d+(?:\.\d+)?)([A-Za-z]+)$/);   // "275g"
+      if (glued && SIZE_WORD.test(glued[2])) { sawSize = true; continue; }
+      return false;
+    }
+    return sawSize;
+  }
+
+  /* ======================= the missing rupee ========================= */
+
+  // Tesseract's English model has never been shown a ₹, so it substitutes
+  // whatever glyph it thinks is closest — and it is perfectly consistent
+  // about it within one screenshot. On a Blinkit order it reads every ₹ as
+  // a "2", which silently turns ₹35 into 235 and a ₹469 basket into ₹53,727.
+  //
+  // Nothing in the line itself can tell 235 from ₹35. The whole document can:
+  // if not one real currency mark survived anywhere, and every amount in the
+  // right-hand column carries the same leading character, and that character
+  // is one a ₹ plausibly collapses into — then that character IS the ₹.
+  const MISREAD = /^[2356789zZsS$%?!|*&€¥£RrFfTtEe\]\}"']$/;
+  const REAL_MARK = /₹|₨|\brs\.?\s*\d|\binr\b/i;
+
+  // Only the amount column counts as evidence: one stray character, then at
+  // least two digits, at the end of a line. A genuine bare "45" is one digit
+  // after its first, so it never votes.
+  const COLUMN = /(?:^|\s)(\S)(\d\d[\d,]*(?:\.\d{1,2})?)\s*$/;
+
+  function escapeRe(ch) { return ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+  SW.detectRupeeGlyph = function (lines) {
+    if (lines.some(function (l) { return REAL_MARK.test(l); })) return null;
+    let glyph = null;
+    let votes = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (NOISE.test(lines[i])) continue;
+      const m = lines[i].match(COLUMN);
+      if (!m) continue;
+      if (!MISREAD.test(m[1])) return null;         // one dissenter is enough
+      if (glyph === null) glyph = m[1];
+      else if (glyph !== m[1]) return null;
+      votes++;
+    }
+    return votes >= 4 ? glyph : null;
+  };
+
+  // Rewrite only the run of amounts at the end of a line, so a "200 g" in
+  // the middle of a name is left alone while a struck MRP sitting beside the
+  // payable amount is not.
+  function restoreRupees(lines, glyph) {
+    const g = escapeRe(glyph);
+    const tail = new RegExp('((?:(?:^|\\s)' + g + '\\d\\d[\\d,]*(?:\\.\\d{1,2})?)+)\\s*$');
+    const one = new RegExp('(^|\\s)' + g + '(\\d)', 'g');
+    return lines.map(function (l) {
+      return l.replace(tail, function (run) { return run.replace(one, '$1₹$2'); });
+    });
+  }
+
+  /* ======================= prices and quantities ====================== */
 
   function pricesIn(line) {
     const found = [];
@@ -49,18 +136,26 @@ window.SW = window.SW || {};
     if (found.length) return found;
 
     // Otherwise a bare number at the very end of the line is the amount
-    // column. Anything followed by a unit is a weight, not a price.
-    const trailing = line.match(/([\d,]+(?:\.\d{1,2})?)\s*$/);
-    if (trailing) {
-      const before = line.slice(0, trailing.index).trim();
-      // Reject "Maggi 12" style trailing counts only when a unit follows,
-      // which by definition cannot happen at end of line — so accept.
-      if (!/[a-z]$/i.test(before) || before.length > 2) {
-        const v = toPaise(trailing[1]);
-        if (v !== null) found.push(v);
-      }
+    // column — unless it is welded to letters, which makes it a reference
+    // rather than an amount. "Order #HGTKKOIU49669" is not ₹49,669. A single
+    // letter in front is fine: that is a ₹ the reader did not recognise.
+    const trailing = line.match(/(\S*?)([\d,]+(?:\.\d{1,2})?)\s*$/);
+    if (trailing && !/[A-Za-z]{2}|#/.test(trailing[1]) && !/^[xX×]$/.test(trailing[1])) {
+      const v = toPaise(trailing[2]);
+      if (v !== null) found.push(v);
     }
     return found;
+  }
+
+  // A discounted row carries two amounts: what it cost, and the struck-out
+  // MRP. Which comes first depends on the app — Blinkit puts the payable
+  // above the MRP, Swiggy after it — but the payable is always the smaller
+  // of the two. A line doing arithmetic ("2 x 50 = 100") is left alone.
+  function pickPrice(prices, line) {
+    if (prices.length === 2 && !/\d\s*[x×@=]\s*[\d₹]/i.test(line)) {
+      return Math.min(prices[0], prices[1]);
+    }
+    return prices[prices.length - 1];
   }
 
   function toPaise(text) {
@@ -107,13 +202,26 @@ window.SW = window.SW || {};
     }
 
     const m = line.match(/\bqty\.?\s*[:\-]?\s*(\d{1,2})\b/i) ||
+              line.match(/(?:^|\s)(\d{1,2})\s*units?\b/i) ||
               line.match(/\((\d{1,2})\)\s*$/);
     if (!m) return 1;
     const q = parseInt(m[1], 10);
     return q >= 1 && q <= 99 ? q : 1;
   }
 
-  function cleanName(text) {
+  // The item thumbnail in a Zepto or Blinkit screenshot is read as a short
+  // run of nonsense to the left of the name: "& Bottle Gourd", "t3 Baby
+  // Apple Shimla", "© ..& Tomato Local". Everything before the first real
+  // word goes, as long as a real name is left behind.
+  function stripLeadingJunk(name) {
+    const words = name.split(' ');
+    let i = 0;
+    while (i < words.length - 1 && !/^[A-Za-z]{3,}/.test(words[i])) i++;
+    const rest = words.slice(i).join(' ');
+    return /[A-Za-z]{3}/.test(rest) ? rest : name;
+  }
+
+  function bareName(text) {
     return text
       // Currency-marked amounts first.
       .replace(/(?:₹|₨|rs\.?|inr|r5)\s*[\d,]+(?:\.\d{1,2})?/gi, ' ')
@@ -138,6 +246,10 @@ window.SW = window.SW || {};
       .trim();
   }
 
+  function cleanName(text) {
+    return stripLeadingJunk(bareName(text));
+  }
+
   /* ======================= the parser ================================= */
 
   // Returns { rows, merged, skipped }.
@@ -148,6 +260,10 @@ window.SW = window.SW || {};
       .split(/\r?\n/)
       .map(function (l) { return l.replace(/\s+/g, ' ').trim(); })
       .filter(function (l) { return l.length > 0; });
+
+    // Put the rupee sign back before anything is read, if the reader lost it.
+    const glyph = SW.detectRupeeGlyph(lines);
+    const readable = glyph ? restoreRupees(lines, glyph) : lines;
 
     const rows = [];
     let pending = [];      // name fragments awaiting a price on a later line
@@ -163,16 +279,29 @@ window.SW = window.SW || {};
 
     function push(name, qty, totalPaise) {
       const nice = cleanName(name);
-      if (!nice || totalPaise == null) return;
+      if (!nice || totalPaise == null) return -1;
       rows.push({
         name: nice,
         qty: qty,
         totalPaise: totalPaise,
         kind: FEE.test(nice) ? 'fee' : 'item',
       });
+      return rows.length - 1;
     }
 
-    lines.forEach(function (line) {
+    // A long product name wraps, and the half that spills onto the next line
+    // lands beside the struck-out MRP: "Ganesh Whole Wheat Chakki Pure Atta |"
+    // then "No Maida  ₹56". Without this that ₹56 becomes a "Maida" nobody
+    // bought. The separator left hanging at the wrap is what gives it away.
+    const WRAP_END = /[|/&]\s*$/;
+    let continueInto = -1;
+
+    function looksLikeContinuation(name) {
+      const words = name.split(' ').filter(Boolean);
+      return words.length > 0 && words.length <= 4 && !/\d/.test(name);
+    }
+
+    readable.forEach(function (line) {
       if (NOISE.test(line)) {
         // A noise line also breaks any half-built item.
         if (pending.length) { pending = []; skipped++; }
@@ -181,24 +310,50 @@ window.SW = window.SW || {};
       }
 
       const prices = pricesIn(line);
+      const base = bareName(line);
+
+      if (continueInto > -1) {
+        const carry = continueInto;
+        continueInto = -1;
+        if (!pending.length && looksLikeContinuation(base)) {
+          rows[carry].name = cleanName(rows[carry].name + ' ' + base);
+          rows[carry].kind = FEE.test(rows[carry].name) ? 'fee' : 'item';
+          skipped++;                 // its amount was the MRP, not a price
+          return;
+        }
+      }
+
       // Whether anything survives once currency markers and amounts are
       // stripped. "Rs 38" and "₹42" leave nothing, so they are price-only
       // lines; "500 g" leaves a weight, so it belongs to the name above it.
-      const named = cleanName(line).length > 0;
+      const named = base.length > 0;
 
       if (prices.length && named) {
+        const amount = pickPrice(prices, line);
+
+        // A size row carrying an amount — "1 pc • 1 unit  ₹99". If a name is
+        // still waiting then this is its size and its price. If not, the item
+        // above already took its price and this is the struck-out MRP printed
+        // underneath it, which nobody paid.
+        if (isDescriptor(base)) {
+          if (pending.length) { pending.push(base); flushPending(amount); }
+          else skipped++;
+          return;
+        }
+
         // Name and amount on the same line — the common case.
-        // Last price wins: on a discounted row the struck MRP comes first
-        // and the payable amount sits in the rightmost column.
         if (pending.length) flushPending(null);
-        push(line, quantityIn(line), prices[prices.length - 1]);
+        const at = push(line, quantityIn(line), amount);
+        if (at > -1 && WRAP_END.test(line.replace(/(?:₹|₨|rs\.?|inr|r5)?\s*[\d,]+(?:\.\d{1,2})?\s*$/i, ''))) {
+          continueInto = at;
+        }
         return;
       }
 
       if (prices.length && !named) {
         // A price on its own line, belonging to the name above it — which is
         // how Zepto and Blinkit lay their rows out.
-        if (!flushPending(prices[prices.length - 1])) skipped++;
+        if (!flushPending(pickPrice(prices, line))) skipped++;
         return;
       }
 
@@ -231,7 +386,7 @@ window.SW = window.SW || {};
     const items = deduped.filter(function (r) { return r.kind === 'item'; });
     const fees = deduped.filter(function (r) { return r.kind === 'fee'; });
 
-    return { rows: items.concat(fees), merged: merged, skipped: skipped };
+    return { rows: items.concat(fees), merged: merged, skipped: skipped, glyph: glyph };
   };
 
   /* ======================= itemised split ============================ */
@@ -301,6 +456,81 @@ window.SW = window.SW || {};
 
   const esc = SW.escapeHtml;
   const TESSERACT_SRC = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+  const CLOUD_URL = '/.netlify/functions/scan';
+  const MAX_SHOTS = 5;
+
+  // Remembered for the session so a deploy with no key asks once, not every
+  // time somebody scans.
+  let cloudReader = 'unknown';       // 'unknown' | 'yes' | 'no'
+
+  // A detached input, so the picker can be opened from anywhere without a
+  // hidden element having to already exist on the screen.
+  function pickFiles(onPicked) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.multiple = true;
+    input.style.display = 'none';
+    document.body.appendChild(input);
+    input.addEventListener('change', function () {
+      const files = Array.prototype.slice.call(input.files || []);
+      document.body.removeChild(input);
+      if (files.length) onPicked(files.slice(0, MAX_SHOTS));
+    });
+    input.click();
+  }
+
+  function toBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      const fr = new FileReader();
+      fr.onerror = function () { reject(new Error('Could not read that image.')); };
+      fr.onload = function () {
+        // "data:image/jpeg;base64,AAAA" — only the payload goes over the wire.
+        const s = String(fr.result || '');
+        resolve(s.slice(s.indexOf(',') + 1));
+      };
+      fr.readAsDataURL(blob);
+    });
+  }
+
+  // Asked once, before the picker is drawn, so the screen can say where the
+  // picture actually goes.
+  function probeCloud() {
+    if (cloudReader !== 'unknown') return Promise.resolve(cloudReader);
+    return fetch(CLOUD_URL, { method: 'GET' })
+      .then(function (r) { return r.ok ? r.json() : { ready: false }; })
+      .then(function (b) { cloudReader = b.ready ? 'yes' : 'no'; return cloudReader; })
+      .catch(function () { return 'unknown'; });
+  }
+
+  // Returns rows, or null if this deploy has no reader configured — in which
+  // case the caller falls back to on-device OCR rather than failing.
+  async function readInCloud(files) {
+    if (cloudReader === 'no') return null;
+
+    const images = [];
+    for (let i = 0; i < files.length; i++) {
+      // Full-page screenshots are tall; 1600px keeps small print legible while
+      // staying well inside what a function body can carry.
+      const blob = await SW.prepareImage(files[i], { maxDim: 1600, maxBytes: 900 * 1024 });
+      images.push({ mime: 'image/jpeg', data: await toBase64(blob) });
+    }
+
+    const res = await fetch(CLOUD_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ images: images }),
+    });
+
+    if (res.status === 501 || res.status === 404) { cloudReader = 'no'; return null; }
+    const body = await res.json().catch(function () { return {}; });
+    if (!res.ok) {
+      if (body.fallback) return null;          // quota, or a bad answer
+      throw new Error(body.error || 'The reader could not read that.');
+    }
+    cloudReader = 'yes';
+    return Array.isArray(body.rows) ? body.rows : [];
+  }
 
   // Loaded on first use only: the OCR engine pulls several megabytes of wasm
   // and language data, which nobody should pay for just to open the app.
@@ -368,7 +598,11 @@ window.SW = window.SW || {};
       confirm: null,
       cancel: 'Cancel',
       onOpen: function () {
-        if (saved.length) { rows = saved; renderRows(); }
+        // renderItemise, not renderRows: the rows go inside a stage that has
+        // to be built first. Calling renderRows here threw on a null #scan-rows
+        // — so reopening a saved itemisation, the whole point of storing one,
+        // died before it drew anything.
+        if (saved.length) { rows = saved; renderItemise({ merged: 0, manual: true }); }
         else renderPick();
       },
       onClose: function () { if (!applied && opts.onCancel) opts.onCancel(); },
@@ -382,34 +616,41 @@ window.SW = window.SW || {};
       stage().innerHTML =
         '<div class="scan-state">' +
           '<div class="scan-art">🧾</div>' +
-          '<h3>Pick a screenshot</h3>' +
-          '<p>A Zepto, Blinkit or Swiggy order screenshot works best. It is read ' +
-             'on this phone and never uploaded or saved.</p>' +
-          '<input type="file" id="scan-file" accept="image/*" hidden>' +
-          '<button type="button" class="btn btn-primary" id="scan-paste" ' +
-                  'style="max-width:280px">Paste the order text</button>' +
-          '<button type="button" class="btn btn-ghost" id="scan-pick" ' +
-                  'style="max-width:280px">Read a screenshot instead</button>' +
-          '<span class="hint" style="max-width:32ch;text-align:center">Pasted text ' +
-            'is read exactly. A screenshot has to be guessed at, so expect to ' +
-            'correct a row or two.</span>' +
+          '<h3>Pick your screenshots</h3>' +
+          '<p>A Zepto, Blinkit, Instamart, BigBasket or Swiggy order screen ' +
+             'works. Pick more than one if the order does not fit on a single ' +
+             'screen — they are read together as one order.</p>' +
+          '<button type="button" class="btn btn-primary" id="scan-pick" ' +
+                  'style="max-width:280px">Read screenshots</button>' +
+          '<button type="button" class="btn btn-ghost" id="scan-paste" ' +
+                  'style="max-width:280px">Paste the order text instead</button>' +
+          '<span class="hint" style="max-width:34ch;text-align:center" ' +
+                'id="scan-where">Pasted text is read exactly, so reach for it ' +
+            'if a scan comes out wrong.</span>' +
           '<button type="button" class="btn-text" id="scan-manual">' +
             'Or itemise by hand</button>' +
         '</div>';
 
-      const file = document.getElementById('scan-file');
       document.getElementById('scan-pick').addEventListener('click', function () {
-        file.click();
-      });
-      file.addEventListener('change', function () {
-        const chosen = file.files && file.files[0];
-        if (chosen) runOcr(chosen);
+        pickFiles(function (files) { readReceipt(files, false); });
       });
       document.getElementById('scan-manual').addEventListener('click', function () {
         rows = [];
         renderItemise({ merged: 0, manual: true });
       });
       document.getElementById('scan-paste').addEventListener('click', renderPaste);
+
+      // Say where the picture goes, once we know. Until then the line above
+      // claims nothing either way.
+      probeCloud().then(function (state) {
+        const where = document.getElementById('scan-where');
+        if (!where || state === 'unknown') return;
+        where.textContent = state === 'yes'
+          ? 'The screenshots are sent to be read and are not stored. ' +
+            'Pasting the text instead keeps them on this phone.'
+          : 'Screenshots are read on this phone and never uploaded. Pasted ' +
+            'text is read exactly, so reach for it if a scan comes out wrong.';
+      });
     }
 
     /* ---- stage 1b: paste it instead ---- */
@@ -469,69 +710,128 @@ window.SW = window.SW || {};
       });
     }
 
-    /* ---- stage 2: OCR ---- */
+    /* ---- stage 2: read the images ---- */
 
-    async function runOcr(file) {
+    // Two readers. The cloud one understands that the right-hand column is
+    // money and that a crossed-out number is the old price; Tesseract only
+    // knows shapes. So try the first, and quietly use the second when this
+    // deploy has no key, the free quota is spent, or the network is not
+    // there — because a scanner that refuses to scan is worse than one that
+    // needs a row corrected.
+    async function readReceipt(files, append) {
+      const many = files.length > 1;
       stage().innerHTML =
         '<div class="scan-state">' +
           '<div class="scan-art">🔍</div>' +
-          '<h3 id="scan-head">Reading the receipt</h3>' +
-          '<p id="scan-hint">The first scan downloads the reader, so it takes a ' +
-             'moment. After that it is quick.</p>' +
+          '<h3 id="scan-head">Reading ' + (many ? 'the screenshots' : 'the receipt') + '</h3>' +
+          '<p id="scan-hint">Picking out item names and prices.</p>' +
           '<div class="scan-bar"><span id="scan-prog"></span></div>' +
         '</div>';
 
       const bar = document.getElementById('scan-prog');
       function progress(pct) { if (bar) bar.style.width = Math.round(pct * 100) + '%'; }
+      function say(text) {
+        const hint = document.getElementById('scan-hint');
+        if (hint) hint.textContent = text;
+      }
 
+      let found = null;
+      let meta = { merged: 0 };
+
+      try {
+        progress(0.12);
+        found = await readInCloud(files);
+        if (found) { progress(1); meta.by = 'cloud'; }
+      } catch (err) {
+        return failed(err);
+      }
+
+      if (!found) {
+        try {
+          say('Reading it on this phone. The first scan downloads the reader.');
+          const parsed = await readOnDevice(files, progress, say);
+          found = parsed.rows;
+          meta.merged = parsed.merged;
+          meta.glyph = parsed.glyph;
+        } catch (err) {
+          return failed(err);
+        }
+      }
+
+      const fresh = found.map(function (r) {
+        return {
+          name: r.name,
+          qty: r.qty,
+          totalPaise: r.totalPaise,
+          kind: r.kind,
+          // Default an item to everyone, which is right more often than not
+          // and is one tap to narrow.
+          who: r.kind === 'fee' ? [] : people.slice(),
+        };
+      });
+
+      if (append) {
+        // A second batch of screenshots of the same order: anything already
+        // on the list at the same price is the overlap between them.
+        const have = {};
+        rows.forEach(function (r) { have[r.name.toLowerCase() + '|' + r.totalPaise] = true; });
+        let added = 0;
+        fresh.forEach(function (r) {
+          const key = r.name.toLowerCase() + '|' + r.totalPaise;
+          if (have[key]) return;
+          have[key] = true;
+          rows.push(r);
+          added++;
+        });
+        meta.added = added;
+      } else {
+        rows = fresh;
+      }
+
+      renderItemise(meta);
+    }
+
+    function failed(err) {
+      stage().innerHTML =
+        '<div class="scan-state">' +
+          '<div class="scan-art">😕</div>' +
+          '<h3>Could not read that</h3>' +
+          '<p>' + esc(err.message || String(err)) + '</p>' +
+          '<button type="button" class="btn btn-ghost" id="scan-retry" ' +
+                  'style="max-width:280px">Try other screenshots</button>' +
+          '<button type="button" class="btn-text" id="scan-manual2">' +
+            'Itemise by hand instead</button>' +
+        '</div>';
+      document.getElementById('scan-retry').addEventListener('click', renderPick);
+      document.getElementById('scan-manual2').addEventListener('click', function () {
+        rows = [];
+        renderItemise({ merged: 0, manual: true });
+      });
+    }
+
+    // One worker for all of the images: loading it is the slow part, and the
+    // pages are read into a single block of text so an item split across two
+    // screenshots still has its name and its price together.
+    async function readOnDevice(files, progress, say) {
       let worker;
       try {
         await loadTesseract();
-        progress(0.08);
+        progress(0.18);
 
         worker = await window.Tesseract.createWorker('eng', 1, {
           logger: function (m) {
-            if (m.status === 'recognizing text') progress(0.15 + m.progress * 0.85);
+            if (m.status === 'recognizing text') progress(0.25 + m.progress * 0.7);
           },
         });
 
-        const head = document.getElementById('scan-head');
-        const hint = document.getElementById('scan-hint');
-        if (head) head.textContent = 'Reading the receipt';
-        if (hint) hint.textContent = 'Looking for item names and prices.';
-
-        const result = await worker.recognize(file);
+        const pages = [];
+        for (let i = 0; i < files.length; i++) {
+          if (files.length > 1) say('Reading screenshot ' + (i + 1) + ' of ' + files.length + '.');
+          const result = await worker.recognize(files[i]);
+          pages.push(result.data.text);
+        }
         progress(1);
-
-        const parsed = SW.parseReceipt(result.data.text);
-        rows = parsed.rows.map(function (r) {
-          return {
-            name: r.name,
-            qty: r.qty,
-            totalPaise: r.totalPaise,
-            kind: r.kind,
-            // Default an item to everyone, which is right more often than not
-            // and is one tap to narrow.
-            who: r.kind === 'fee' ? [] : people.slice(),
-          };
-        });
-        renderItemise({ merged: parsed.merged });
-      } catch (err) {
-        stage().innerHTML =
-          '<div class="scan-state">' +
-            '<div class="scan-art">😕</div>' +
-            '<h3>Could not read that</h3>' +
-            '<p>' + esc(err.message || String(err)) + '</p>' +
-            '<button type="button" class="btn btn-ghost" id="scan-retry" ' +
-                    'style="max-width:280px">Try another image</button>' +
-            '<button type="button" class="btn-text" id="scan-manual2">' +
-              'Itemise by hand instead</button>' +
-          '</div>';
-        document.getElementById('scan-retry').addEventListener('click', renderPick);
-        document.getElementById('scan-manual2').addEventListener('click', function () {
-          rows = [];
-          renderItemise({ merged: 0, manual: true });
-        });
+        return SW.parseReceipt(pages.join('\n'));
       } finally {
         // Free the wasm worker either way; the image itself is never kept.
         if (worker) { try { await worker.terminate(); } catch (e) { /* ignore */ } }
@@ -552,7 +852,7 @@ window.SW = window.SW || {};
                'by hand, or try a clearer screenshot.</p>' +
             '<button type="button" class="btn btn-primary" id="scan-hand" ' +
                     'style="max-width:280px">Add items by hand</button>' +
-            '<button type="button" class="btn-text" id="scan-again">Try another image</button>' +
+            '<button type="button" class="btn-text" id="scan-again">Try other screenshots</button>' +
           '</div>';
         document.getElementById('scan-hand').addEventListener('click', function () {
           rows = [{ name: '', qty: 1, totalPaise: 0, kind: 'item', who: people.slice() }];
@@ -568,12 +868,30 @@ window.SW = window.SW || {};
             (meta.merged === 1 ? ' repeated row' : ' repeated rows') +
             '. Add it back below if it was a genuine second order.</div>'
           : '') +
+        // Tesseract does not know the ₹ glyph and puts something else in its
+        // place. That is undone before the amounts are read, but it is worth
+        // saying so, because it is the one failure that looks like a price.
+        (meta.glyph
+          ? '<div class="scan-warn">The reader saw every ₹ as ' +
+            '"' + esc(meta.glyph) + '", which has been undone. Worth a glance ' +
+            'down the amounts.</div>'
+          : '') +
+        (meta.added === 0
+          ? '<div class="scan-warn">Nothing new in those — every line was ' +
+            'already on the list.</div>'
+          : meta.added
+            ? '<div class="scan-warn">Added ' + meta.added +
+              (meta.added === 1 ? ' more line' : ' more lines') + '.</div>'
+            : '') +
         '<div class="card-head" style="display:flex;align-items:center;gap:8px">' +
           '<span style="flex:1">Tick who is in on each line</span>' +
         '</div>' +
         '<div class="item-list" id="scan-rows"></div>' +
-        '<div style="padding:10px 14px">' +
-          '<button type="button" class="btn btn-ghost" id="scan-add">Add an item</button>' +
+        '<div style="padding:10px 14px;display:flex;flex-wrap:wrap;gap:8px">' +
+          '<button type="button" class="btn btn-ghost" id="scan-add" ' +
+                  'style="flex:1 1 140px">Add an item</button>' +
+          '<button type="button" class="btn btn-ghost" id="scan-more" ' +
+                  'style="flex:1 1 140px">Add more screenshots</button>' +
         '</div>' +
         '<div class="itemise-foot" id="scan-foot"></div>' +
         '<div class="sheet-actions">' +
@@ -586,6 +904,10 @@ window.SW = window.SW || {};
         renderRows();
         const last = document.querySelector('#scan-rows .item-row:last-child .ir-name');
         if (last) last.focus();
+      });
+
+      document.getElementById('scan-more').addEventListener('click', function () {
+        pickFiles(function (files) { readReceipt(files, true); });
       });
 
       document.getElementById('scan-apply').addEventListener('click', apply);

@@ -153,6 +153,78 @@ check('"6 x 250 ml" is a pack, not six',
   SW.parseReceipt('Real Juice 6 x 250 ml ₹390').rows.map(x => x.qty),
   [1]);
 
+console.log('\n--- a real Blinkit screenshot, where OCR loses the rupee sign ---');
+// Reconstructed from the screenshot that failed: every ₹ came back as a "2",
+// so ₹35 read as 235 and the ₹469 basket totalled ₹53,727. The thumbnails
+// became junk in front of the names, the order number became an item, and the
+// struck-out MRP under each row became a second one.
+r = SW.parseReceipt([
+  '2:14 7.00 KB/S',
+  'Order #HGTKKOIU49669',
+  '10 items',
+  'Get Help',
+  '10 items in order',
+  '& Bottle Gourd 235',
+  '1pc + 1 unit 299',
+  '© ..& Tomato Local 226',
+  '500 g + 1 unit 263',
+  '& Capsicum Green 226',
+  '250 - 275 g + 1 unit 257',
+  'Banana Raw 211',
+  '2 pcs + 1 unit 228',
+  'Amul Taaza Toned Fresh Milk | Pouch 230',
+  '1 pack (500 ml) + 1 unit',
+  't3 Baby Apple Shimla 2178',
+  '500 g + 1 unit 2216',
+  '&7 Spinach (Palak) 234',
+  '250 g + 1 unit 267',
+  '2 Organically Grown Lady Finger 224',
+  '250 g + 2 units 264',
+  'Ganesh Whole Wheat Chakki Pure Atta | 252',
+  'No Maida 256',
+  '1 pack (1 kg) + 1 unit',
+  'Ovo Farms On-Day White Eggs 253',
+  '1 pack (6 pcs) + 1 unit 280',
+  'Rate Order Order Again',
+].join('\n'));
+check('the misread rupee sign is identified', r.glyph, '2');
+check('ten items, at the prices actually printed', brief(r), [
+  'Bottle Gourd|1|3500|item',
+  'Tomato Local|1|2600|item',
+  'Capsicum Green|1|2600|item',
+  'Banana Raw|1|1100|item',
+  'Amul Taaza Toned Fresh Milk Pouch|1|3000|item',
+  'Baby Apple Shimla|1|17800|item',
+  'Spinach (Palak)|1|3400|item',
+  'Organically Grown Lady Finger|1|2400|item',
+  'Ganesh Whole Wheat Chakki Pure Atta No Maida|1|5200|item',
+  'Ovo Farms On-Day White Eggs|1|5300|item',
+]);
+check('and the basket adds up to what the receipt says',
+  r.rows.reduce((s, x) => s + x.totalPaise, 0), 46900);
+console.log('  before: 11 rows, ₹53,727 — including "Order #HGTKKOIU" at ₹49,669');
+
+console.log('\n--- but a receipt that genuinely has no rupee sign is left alone ---');
+r = SW.parseReceipt([
+  'Brown Bread 45', 'Curd 400 g 38', 'Onion 1 kg 42', 'Tomato 500 g 26',
+  'Amul Butter 265',
+].join('\n'));
+check('no glyph inferred', r.glyph, null);
+check('amounts untouched', r.rows.map(x => x.totalPaise), [4500, 3800, 4200, 2600, 26500]);
+
+console.log('\n--- prices sitting beside their struck-out MRP ---');
+check('the payable one is the smaller, wherever it sits',
+  SW.parseReceipt('Amul Milk 500ml ₹28 ₹32').rows.map(x => x.totalPaise), [2800]);
+check('a size row on its own is not an item',
+  brief(SW.parseReceipt('Bottle Gourd ₹35\n1 pc • 1 unit ₹99')),
+  ['Bottle Gourd|1|3500|item']);
+check('but a size row still carries the price of the name above it',
+  brief(SW.parseReceipt('Onion\n1 kg ₹42')), ['Onion 1 kg|1|4200|item']);
+
+console.log('\n--- an order number is not an amount ---');
+check('welded to letters, so not a price',
+  brief(SW.parseReceipt('Order #HGTKKOIU49669\nOnion ₹42')), ['Onion|1|4200|item']);
+
 console.log('\n--- the scenario from the request ---');
 // 5 items across 4 people: 2 shared by all, 2 by three of them, 1 by one.
 const P = ['p1', 'p2', 'p3', 'p4'];
