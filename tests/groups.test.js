@@ -109,4 +109,45 @@ console.log('\n--- the example the UI promises ---');
     out.some(function (t) { return t.from === 'ali' || t.to === 'ali'; }), false);
 }
 
+
+console.log('\n--- who in this group is not a friend yet ---');
+// The whole point of the card in group settings: A and B are both in the
+// group, so A should be offered B — and only there.
+{
+  const base = SW.ledger;
+
+  const ledgerWith = (friendIds, members) => Object.assign({}, base, {
+    friendIds: friendIds,
+    members: Object.assign({}, base.members, { [G]: members }),
+  });
+
+  SW.ledger = ledgerWith([A, B, C], [ME, A, B, C]);
+  check('nobody to add when everyone is already a friend',
+    SW.groupStrangers(G), []);
+
+  SW.ledger = ledgerWith([A], [ME, A, B, C]);
+  check('the co-members who are not friends yet',
+    SW.groupStrangers(G), [B, C]);
+
+  SW.ledger = ledgerWith([], [ME, A]);
+  check('never yourself', SW.groupStrangers(G).indexOf(ME), -1);
+
+  SW.ledger = ledgerWith([], [ME]);
+  check('a group of one offers nothing', SW.groupStrangers(G), []);
+
+  // Only ever this group's members. Somebody in another group entirely must
+  // not turn up here, or the card would be offering strangers.
+  SW.ledger = Object.assign({}, base, {
+    friendIds: [],
+    members: { [G]: [ME, A], other: [ME, B] },
+  });
+  check('only people in the group asked about', SW.groupStrangers(G), [A]);
+  check('and the other group has its own answer', SW.groupStrangers('other'), [B]);
+
+  check('a group that does not exist is empty, not an error',
+    SW.groupStrangers('nope'), []);
+
+  SW.ledger = base;
+}
+
 process.exit(fails ? 1 : 0);

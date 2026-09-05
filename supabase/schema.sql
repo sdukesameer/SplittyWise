@@ -823,6 +823,72 @@ begin
   );
 end $$;
 
+-- Somebody you share a group with, added as a friend from inside that group.
+--
+-- add_friend_by_email() cannot serve this. You can see a co-member's name on
+-- the group screen without knowing their address, and asking two people to
+-- swap emails so they can record a split they are already sharing is silly.
+--
+-- The gate is the shared group, checked here rather than taken from the
+-- client: both of you must be in the group named. So this grants no reach
+-- that is not already there — it is the same set of people whose profiles
+-- sw.can_see_profile() already lets you read.
+--
+-- "You are not in that group" and "they are not in that group" return the
+-- same refusal on purpose. Told apart, this would answer "is X in group Y?"
+-- for any group id, to anybody.
+create or replace function public.add_group_peer_as_friend(
+  p_group_id uuid,
+  p_user_id  uuid
+)
+returns json language plpgsql security definer set search_path = public as $$
+declare
+  me       uuid := auth.uid();
+  my_name  text;
+  gname    text;
+  target   public.profiles;
+begin
+  if me is null then raise exception 'Not authenticated'; end if;
+  if p_user_id = me then
+    return json_build_object('ok', false, 'error', 'self');
+  end if;
+
+  if not exists (select 1 from public.group_members
+                 where group_id = p_group_id and user_id = me)
+     or not exists (select 1 from public.group_members
+                    where group_id = p_group_id and user_id = p_user_id) then
+    return json_build_object('ok', false, 'error', 'not_shared');
+  end if;
+
+  if sw.are_friends(me, p_user_id) then
+    return json_build_object('ok', false, 'error', 'already');
+  end if;
+
+  select * into target from public.profiles where id = p_user_id;
+  if target.id is null then
+    return json_build_object('ok', false, 'error', 'no_user');
+  end if;
+
+  insert into public.friendships (user_a, user_b, created_by)
+  values (least(me, p_user_id), greatest(me, p_user_id), me);
+
+  select full_name into my_name from public.profiles where id = me;
+  select name into gname from public.groups where id = p_group_id;
+
+  insert into public.notifications
+    (user_id, actor_id, type, title, body, group_id)
+  values (
+    p_user_id, me, 'friend_added',
+    coalesce(my_name, 'Somebody') || ' added you as a friend',
+    coalesce('You are both in ' || gname || '. ', '') ||
+      'You can split expenses outside it now too.',
+    p_group_id
+  );
+
+  return json_build_object('ok', true, 'id', target.id,
+    'full_name', target.full_name, 'avatar_emoji', target.avatar_emoji);
+end $$;
+
 -- ============================================================================
 --  7. GROUPS
 -- ============================================================================
@@ -3572,6 +3638,7 @@ begin
 end $$;
 
 grant execute on function public.add_friend_by_email(text)              to authenticated;
+grant execute on function public.add_group_peer_as_friend(uuid, uuid)    to authenticated;
 grant execute on function public.create_group(text, text, text)         to authenticated;
 grant execute on function public.add_group_member_by_email(uuid, text)  to authenticated;
 grant execute on function public.mark_all_notifications_read()          to authenticated;

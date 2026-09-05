@@ -1576,6 +1576,45 @@ check('the button says what it does',
 check('a saved itemisation reopens through the stage that holds it',
   /if \(saved\.length\) \{ rows = saved; renderItemise\(/.test(scanJs));
 
+/* ---------------- 39. adding a co-member as a friend ---------------- */
+
+// add_group_member_by_email() friends the person doing the adding, and only
+// them. So when one person builds a group, everybody in it knows the builder
+// and nobody else — and 1:1 balances with the person next to you are out of
+// reach until somebody types an address.
+check('a co-member can be added as a friend from inside the group',
+  /create or replace function public\.add_group_peer_as_friend/.test(schema) &&
+  /grant execute on function public\.add_group_peer_as_friend/.test(schema));
+check('the shared group is checked in the database, not taken from the client',
+  /where group_id = p_group_id and user_id = me/.test(schema) &&
+  /where group_id = p_group_id and user_id = p_user_id/.test(schema));
+check('and both halves of that check give the same refusal',
+  (function () {
+    const fn = (noSqlComments(schema).match(
+      /create or replace function public\.add_group_peer_as_friend[\s\S]*?\nend \$\$;/) || [''])[0];
+    // One `not_shared` between the two existence checks, not two different
+    // words — told apart, this answers "is X in group Y?" to anybody.
+    return (fn.match(/'not_shared'/g) || []).length === 1;
+  })());
+check('the person added is told, and which group it came from',
+  /'friend_added'[\s\S]{0,400}?p_group_id\n?\s*\);/.test(schema) ||
+  /You are both in ' \|\| gname/.test(schema));
+
+check('who is not a friend yet is worked out away from the view',
+  /SW\.groupStrangers = function/.test(js['js/balances.js']) &&
+  /SW\.groupStrangers\(gid\)/.test(js['js/groupsettings.js']));
+check('and it is unit tested rather than only rendered',
+  /groupStrangers/.test(fs.readFileSync('tests/groups.test.js', 'utf8')));
+check('the card exists and starts hidden',
+  /id="gs-strangers-card" hidden/.test(html));
+check('its button is wired',
+  /data-befriend/.test(js['js/groupsettings.js']) &&
+  /add_group_peer_as_friend/.test(js['js/groupsettings.js']));
+check('an "already" answer refreshes rather than shouting',
+  /data\.error === 'already'/.test(js['js/groupsettings.js']));
+check('and a real user proves the whole thing over HTTP',
+  /so B can add D, with no email typed/.test(fs.readFileSync('tests/e2e.mjs', 'utf8')));
+
 // A ReferenceError partway through printed a page of PASSes and then died
 // before this line, which reads like a quiet success unless you notice the
 // exit code. So the file counts its own check() calls and refuses to report

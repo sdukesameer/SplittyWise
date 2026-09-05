@@ -1259,6 +1259,19 @@ window.SW = window.SW || {};
   };
 
   // My own position in a group, and the total spent in it.
+  // The people in a group you have not added as a friend. Pure, and
+  // separate from the view, because the first version read a `me` that was
+  // scoped inside the render function — a ReferenceError that no syntax
+  // check would have found and no static check would have looked for.
+  SW.groupStrangers = function (groupId) {
+    const L = SW.ledger;
+    const members = (L.members && L.members[groupId]) || [];
+    const friends = L.friendIds || [];
+    return members.filter(function (id) {
+      return id !== L.me && friends.indexOf(id) === -1;
+    });
+  };
+
   SW.groupSummary = function (groupId) {
     const key = groupId === null ? '__none' : groupId;
     if (fresh(memoGroups[key])) return memoGroups[key].value;

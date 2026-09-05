@@ -154,7 +154,7 @@ Nineteen suites, no database and no browser needed:
 |---|---|
 | `balances.test.js` | Pairwise netting, per-group breakdown, payer's own split excluded, settlements both ways, ₹ formatting |
 | `splits.test.js` | Equal splits sum back to the total exactly, over 71,430 total/participant combinations |
-| `groups.test.js` | Member nets sum to zero, who-paid vs whose-share, debt simplification clears every balance |
+| `groups.test.js` | Member nets sum to zero, who-paid vs whose-share, debt simplification clears every balance, and who in a group is not a friend yet |
 | `emoji.test.js` | Description-to-icon guessing and rule precedence |
 | `prorate.test.js` | Fees allocated by order size, landing on the total exactly |
 | `scan.test.js` | Receipt parsing from realistic OCR output — including a real Blinkit screenshot where every ₹ was read as a "2" — and itemised splits |

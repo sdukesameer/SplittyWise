@@ -102,7 +102,71 @@ window.SW = window.SW || {};
           : '') +
       '</div>';
     }).join('');
+
+    renderStrangers();
   }
+
+  // The people in this group who are not friends yet. Kept out of the member
+  // rows on purpose: those already carry a name, an address, a balance and a
+  // remove button, and a fifth thing in them is how a row stops fitting on a
+  // phone. As its own card it also says something useful — that there are
+  // people here you could be splitting with elsewhere — and it disappears
+  // when there is nobody left to add.
+  function renderStrangers() {
+    const card = document.getElementById('gs-strangers-card');
+    const host = document.getElementById('gs-strangers');
+    const strangers = SW.groupStrangers(gid);
+
+    card.hidden = strangers.length === 0;
+    if (!strangers.length) { host.innerHTML = ''; return; }
+
+    host.innerHTML = strangers.map(function (id) {
+      const p = SW.person(id);
+      return '<div class="list-row" style="cursor:default">' +
+        SW.avatar(id, p.avatar_emoji) +
+        '<span class="row-main">' +
+          '<span class="row-title" style="font-size:15px">' +
+            esc(p.full_name || 'Someone') + '</span>' +
+          (p.email ? '<span class="row-sub">' + esc(p.email) + '</span>' : '') +
+        '</span>' +
+        '<button type="button" class="chip" data-befriend="' + esc(id) + '">' +
+          'Add friend</button>' +
+      '</div>';
+    }).join('');
+  }
+
+  document.getElementById('gs-strangers').addEventListener('click', async function (e) {
+    const b = e.target.closest('[data-befriend]');
+    if (!b) return;
+    const id = b.getAttribute('data-befriend');
+    const p = SW.person(id);
+
+    SW.busy(b, true);
+    const { data, error } = await db.rpc('add_group_peer_as_friend', {
+      p_group_id: gid,
+      p_user_id: id,
+    });
+    SW.busy(b, false);
+
+    if (error) { SW.toast(error.message, 'error'); return; }
+    if (!data || !data.ok) {
+      // 'already' is not a failure worth a red toast: the ledger simply had
+      // not caught up, and refreshing makes the row go away by itself.
+      if (data && data.error === 'already') {
+        await SW.refreshLedger();
+        render(gid);
+        return;
+      }
+      SW.toast(data && data.error === 'not_shared'
+        ? 'They are not in this group any more'
+        : 'Could not add them', 'error');
+      return;
+    }
+
+    await SW.refreshLedger();
+    render(gid);
+    SW.toast((p.full_name || 'They') + ' is now a friend', 'ok');
+  });
 
   SW.viewHooks['group-settings'] = render;
 

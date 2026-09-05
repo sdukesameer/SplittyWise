@@ -134,9 +134,14 @@ const stamp = Date.now();
 const A_EMAIL = 'e2e-a-' + stamp + '@example.com';
 const B_EMAIL = 'e2e-b-' + stamp + '@example.com';
 const C_EMAIL = 'e2e-c-' + stamp + '@example.com';
+// D shares nothing with anybody until the co-member test puts them in one
+// group. C cannot serve: redeem_invite() both enrols the redeemer and makes
+// them a friend of the inviter, so by then C is neither an outsider nor a
+// stranger — which is what the first version of this test assumed.
+const D_EMAIL = 'e2e-d-' + stamp + '@example.com';
 const SIGNUP_EMAIL = 'e2e-signup-' + stamp + '@example.com';
 
-let A = null, B = null, C = null, signupId = null;
+let A = null, B = null, C = null, D = null, signupId = null;
 
 try {
   /* =================================================================== */
@@ -204,6 +209,7 @@ try {
   A = await makeUser(A_EMAIL, 'Ay Tester');
   B = await makeUser(B_EMAIL, 'Bee Tester');
   C = await makeUser(C_EMAIL, 'Cee Outsider');
+  D = await makeUser(D_EMAIL, 'Dee Stranger');
   ok('three accounts exist with working tokens', !!(A.token && B.token && C.token));
 
   const prof = await A.api.select('profiles?id=eq.' + A.id +
@@ -607,6 +613,86 @@ try {
   await A.api.patch('groups?id=eq.' + gid, { settle_up_day: null });
 
   /* =================================================================== */
+  section('adding a co-member as a friend');
+
+  // The real gap, and the one worth closing. add_group_member_by_email()
+  // auto-friends the person doing the adding, and only them — so when A adds
+  // B and then adds D, A knows both and B and D are strangers to each other
+  // while sharing a group. This is that pair, from B's side.
+  const tgrp = await A.api.rpc('create_group',
+    { p_name: 'E2E Trip', p_group_type: 'trip', p_emoji: '🏝️' });
+  const tgid = tgrp.body && (tgrp.body.id || tgrp.body.group_id ||
+    (typeof tgrp.body === 'string' ? tgrp.body : null));
+  ok('a second group can be created', tgrp.ok && !!tgid, tgrp.body);
+
+  await A.api.rpc('add_group_member_by_email', { p_group_id: tgid, p_email: B_EMAIL });
+
+  // Before D is in it: nobody may be befriended through a group they are not
+  // in, or this would be a way to friend anybody at all.
+  const tooEarly = await B.api.rpc('add_group_peer_as_friend',
+    { p_group_id: tgid, p_user_id: D.id });
+  ok('somebody outside the group cannot be added through it',
+    tooEarly.body && tooEarly.body.ok === false &&
+    tooEarly.body.error === 'not_shared', tooEarly.body);
+
+  // And the refusal must not answer "is B in this group?" for somebody who
+  // is not in it themselves. C is in no group with these two, so C learns
+  // nothing about tgid whatever the truth about B is.
+  const probe = await C.api.rpc('add_group_peer_as_friend',
+    { p_group_id: tgid, p_user_id: B.id });
+  ok('a non-member gets the same refusal, learning nothing about who is in it',
+    probe.body && probe.body.ok === false && probe.body.error === 'not_shared',
+    probe.body);
+
+  const addD = await A.api.rpc('add_group_member_by_email',
+    { p_group_id: tgid, p_email: D_EMAIL });
+  ok('D can be added to that group by A', addD.ok, addD.body);
+
+  const strangers = await B.api.select('friendships?select=user_a,user_b');
+  const dPair = [B.id, D.id].sort();
+  ok('B and D share the group but are not friends',
+    Array.isArray(strangers.body) &&
+    !strangers.body.some((f) => f.user_a === dPair[0] && f.user_b === dPair[1]),
+    strangers.body);
+
+  const befriend = await B.api.rpc('add_group_peer_as_friend',
+    { p_group_id: tgid, p_user_id: D.id });
+  ok('so B can add D, with no email typed and none shown',
+    befriend.body && befriend.body.ok === true, befriend.body);
+
+  const link = await B.api.select('friendships?select=user_a,user_b' +
+    '&user_a=eq.' + dPair[0] + '&user_b=eq.' + dPair[1]);
+  ok('and the friendship is really there',
+    Array.isArray(link.body) && link.body.length === 1, link.body);
+
+  const heard = await D.api.select('notifications?type=eq.friend_added' +
+    '&actor_id=eq.' + B.id + '&select=title,body,group_id&limit=5');
+  ok('the person added hears about it, and which group it came from',
+    Array.isArray(heard.body) &&
+    heard.body.some((n) => n.group_id === tgid && / added you as a friend$/.test(n.title)),
+    heard.body);
+
+  const twice = await B.api.rpc('add_group_peer_as_friend',
+    { p_group_id: tgid, p_user_id: D.id });
+  ok('doing it twice says so rather than duplicating',
+    twice.body && twice.body.ok === false && twice.body.error === 'already',
+    twice.body);
+
+  const meSelf = await B.api.rpc('add_group_peer_as_friend',
+    { p_group_id: tgid, p_user_id: B.id });
+  ok('you cannot add yourself',
+    meSelf.body && meSelf.body.ok === false && meSelf.body.error === 'self',
+    meSelf.body);
+
+  // Somebody leaving does not undo a real friendship, but it does shut the
+  // door: C, still in no group with B, cannot be reached through tgid.
+  const afterLeaving = await B.api.rpc('add_group_peer_as_friend',
+    { p_group_id: tgid, p_user_id: C.id });
+  ok('and somebody who is not in the group stays out of reach',
+    afterLeaving.body && afterLeaving.body.ok === false &&
+    afterLeaving.body.error === 'not_shared', afterLeaving.body);
+
+  /* =================================================================== */
   section('error reporting');
 
   const rep = await A.api.insert('error_reports',
@@ -738,7 +824,8 @@ try {
   // Deleting the accounts cascades their groups, expenses, splits, payments,
   // notifications and categories away.
   const removals = [];
-  for (const [u, name] of [[A, 'the payer'], [B, 'the person who settled up'], [C, 'the invitee']]) {
+  for (const [u, name] of [[A, 'the payer'], [B, 'the person who settled up'],
+                           [C, 'the invitee'], [D, 'the stranger']]) {
     if (u && u.id) removals.push(await removeUser(u.id, name));
   }
   await removeUser(signupId);
