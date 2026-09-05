@@ -265,6 +265,17 @@ alter table public.settlements add column if not exists deleted_at timestamptz;
 alter table public.expenses       drop column if exists receipt_path;
 alter table public.groups        add column if not exists cover_path   text;
 alter table public.groups        add column if not exists whiteboard   text;
+-- The itemised receipt behind an expense, when there was one: what was
+-- bought, at what price, and who was in on each line.
+--
+-- Kept as jsonb on the expense rather than in its own table because it is
+-- read and written whole, never queried across, and belongs to exactly one
+-- expense. Storing it at all is a change of mind — the first version threw
+-- the itemisation away and kept only a note — and the reason is editing:
+-- "one egg, later split three ways" is impossible to revisit from prose.
+--
+-- Shape: [{ name, qty, totalPaise, kind: 'item'|'fee', who: [user_id] }]
+alter table public.expenses         add column if not exists items jsonb;
 alter table public.profiles      add column if not exists email_notify boolean not null default false;
 alter table public.profiles      add column if not exists last_email_at timestamptz;
 alter table public.groups        add column if not exists settle_up_on date;
@@ -1067,7 +1078,8 @@ create or replace function public.create_expense(
   p_split_mode   text    default 'equal',
   p_expense_date date    default current_date,
   p_notes        text    default null,
-  p_payers       jsonb   default null
+  p_payers       jsonb   default null,
+  p_items        jsonb   default null
 ) returns uuid language plpgsql security definer set search_path = public as $$
 declare
   me          uuid := auth.uid();
@@ -1176,6 +1188,10 @@ begin
     nullif(trim(coalesce(p_notes, '')), ''), me
   ) returning id into eid;
 
+  if p_items is not null and jsonb_array_length(p_items) > 0 then
+    update public.expenses set items = p_items where id = eid;
+  end if;
+
   insert into public.expense_splits (expense_id, user_id, amount)
   select eid, (s->>'user_id')::uuid, round((s->>'amount')::numeric, 2)
   from jsonb_array_elements(p_splits) s;
@@ -1255,7 +1271,8 @@ create or replace function public.update_expense(
   p_split_mode   text default null,
   p_expense_date date default null,
   p_notes        text default null,
-  p_payers       jsonb default null
+  p_payers       jsonb default null,
+  p_items        jsonb default null
 ) returns void language plpgsql security definer set search_path = public as $$
 declare
   me          uuid := auth.uid();
@@ -1408,26 +1425,57 @@ begin
     values (p_expense_id, me, diff);
   end if;
 
+  -- Null means "leave the itemisation alone"; an empty array clears it. An
+  -- edit that never opened the itemiser must not silently discard it.
+  if p_items is not null then
+    update public.expenses
+       set items = case when jsonb_array_length(p_items) > 0 then p_items else null end
+     where id = p_expense_id;
+  end if;
+
   select full_name into actor_name from public.profiles where id = me;
   if p_group_id is not null then
     select name into gname from public.groups where id = p_group_id;
   end if;
 
+  -- Somebody who was not on this expense a moment ago is not being told
+  -- that something "changed" — they are being told they are now on it, and
+  -- for how much. That is a different message and a different decision to
+  -- make about it, so it is a different type with its own switch.
   insert into public.notifications
     (user_id, actor_id, type, title, body, group_id, expense_id, is_read)
-  select uid, me, 'expense_updated',
-         case when uid = me then 'You changed "'
-              else actor_name || ' changed "' end || trim(p_description) || '"',
-         '₹' || to_char(round(p_amount, 2), 'FM999999990.00')
-             || coalesce(' in ' || gname, ''),
-         p_group_id, p_expense_id, uid = me
+  select t.uid, me,
+         case when t.was_there or t.uid = me then 'expense_updated'
+              else 'added_to_expense' end,
+         case
+           when t.uid = me then 'You changed "' || trim(p_description) || '"'
+           when t.was_there then actor_name || ' changed "' || trim(p_description) || '"'
+           else actor_name || ' added you to "' || trim(p_description) || '"'
+         end,
+         case
+           when t.was_there or t.uid = me
+             then '₹' || to_char(round(p_amount, 2), 'FM999999990.00')
+                      || coalesce(' in ' || gname, '')
+           else 'Your share is ₹' ||
+                to_char(coalesce((select round((s->>'amount')::numeric, 2)
+                                  from jsonb_array_elements(p_splits) s
+                                  where (s->>'user_id')::uuid = t.uid), 0),
+                        'FM999999990.00')
+                || ' of ₹' || to_char(round(p_amount, 2), 'FM999999990.00')
+                || coalesce(' in ' || gname, '')
+         end,
+         p_group_id, p_expense_id, t.uid = me
   from (
-    select unnest(coalesce(was_on, '{}'::uuid[])) as uid
-    union
-    select (s->>'user_id')::uuid from jsonb_array_elements(p_splits) s
-    union
-    select me
-  ) touched;
+    select uid, bool_or(was_there) as was_there
+    from (
+      select unnest(coalesce(was_on, '{}'::uuid[])) as uid, true as was_there
+      union all
+      select (s->>'user_id')::uuid, false from jsonb_array_elements(p_splits) s
+      union all
+      select me, true
+    ) all_touched
+    group by uid
+  ) t;
 end $$;
 
 -- ============================================================================
@@ -3294,9 +3342,9 @@ grant execute on function public.set_expense_deleted(uuid, boolean)      to auth
 grant execute on function public.purge_trash()                           to authenticated;
 grant execute on function public.next_occurrence(date, text, int)        to authenticated;
 grant execute on function public.create_expense(
-  numeric, text, jsonb, uuid, uuid, text, text, text, date, text, jsonb) to authenticated;
+  numeric, text, jsonb, uuid, uuid, text, text, text, date, text, jsonb, jsonb) to authenticated;
 grant execute on function public.update_expense(
-  uuid, numeric, text, jsonb, uuid, uuid, text, text, text, date, text, jsonb) to authenticated;
+  uuid, numeric, text, jsonb, uuid, uuid, text, text, text, date, text, jsonb, jsonb) to authenticated;
 
 -- Admin functions. Every one refuses a non-admin caller on its first line,
 -- so granting them to `authenticated` is safe: what stops a normal user is

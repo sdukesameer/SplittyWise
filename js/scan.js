@@ -338,19 +338,39 @@ window.SW = window.SW || {};
 
   /* ======================= the scanner sheet ========================= */
 
-  // opts: { participants: [userId], onApply(result), onCancel() }
-  //   result: { grandTotal, totals, note }
+  // opts: { participants: [userId], items, onApply(result), onCancel() }
+  //   result: { grandTotal, totals, note, items }
+  //
+  // `items` on the way in is a previously saved itemisation, which opens
+  // straight into the editor rather than asking for a screenshot again —
+  // that is the whole point of storing it: an egg bought for one person can
+  // be shared out weeks later without re-scanning anything.
   SW.openScanner = function (opts) {
     const people = opts.participants.slice();
     let rows = [];
     let applied = false;
 
+    // Anybody on a saved line who is no longer part of the expense is
+    // dropped, or a removed person would keep a share of the egg.
+    const saved = (opts.items || []).map(function (r) {
+      return {
+        name: String(r.name || ''),
+        qty: Number(r.qty) || 1,
+        totalPaise: Number(r.totalPaise) || 0,
+        kind: r.kind === 'fee' ? 'fee' : 'item',
+        who: (r.who || []).filter(function (id) { return people.indexOf(id) > -1; }),
+      };
+    }).filter(function (r) { return r.name || r.totalPaise; });
+
     SW.sheet({
-      title: 'Scan a receipt',
+      title: saved.length ? 'Edit the items' : 'Scan a receipt',
       rawBody: '<div id="scan-stage"></div>',
       confirm: null,
       cancel: 'Cancel',
-      onOpen: renderPick,
+      onOpen: function () {
+        if (saved.length) { rows = saved; renderRows(); }
+        else renderPick();
+      },
       onClose: function () { if (!applied && opts.onCancel) opts.onCancel(); },
     });
 
@@ -719,6 +739,14 @@ window.SW = window.SW || {};
         grandTotal: s.grandTotal,
         totals: s.totals,
         note: SW.itemisedNote(usable, shortName),
+        // Stored on the expense so this screen can be reopened later and the
+        // lines reassigned without scanning anything again.
+        items: usable.map(function (r) {
+          return {
+            name: r.name, qty: r.qty, totalPaise: r.totalPaise,
+            kind: r.kind, who: (r.who || []).slice(),
+          };
+        }),
       });
     }
   };

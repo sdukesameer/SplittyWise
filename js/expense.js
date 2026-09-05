@@ -230,9 +230,17 @@ window.SW = window.SW || {};
       out += pickerRow('exp-f-repeat', 'Repeats',
         f.repeat ? SW.cadenceLabel(f.repeat) : 'Never', !f.repeat);
     }
-    if (shows('scan')) {
+    // Shown whenever the row is enabled, and always when this expense
+    // already has an itemisation — hiding the row under Account must not
+    // make a stored one uneditable.
+    if (shows('scan') || (f.items && f.items.length)) {
+      const n = (f.items || []).length;
       out += '<button type="button" class="btn btn-ghost" id="exp-f-scan">' +
-        '🧾 Scan a receipt to itemise</button>';
+        (n
+          ? '🧾 Edit the ' + n + (n === 1 ? ' item' : ' items') +
+            ' · change who is in on each'
+          : '🧾 Scan a receipt to itemise') +
+        '</button>';
     }
     if (shows('note')) {
       out += pickerRow('exp-f-note', 'Note',
@@ -401,22 +409,30 @@ window.SW = window.SW || {};
     const scanBtn = document.getElementById('exp-f-scan');
     if (scanBtn) scanBtn.addEventListener('click', function () {
       const people = participants();
-      if (people.length < 2) {
-        return SW.setError('exp-f-error',
-          'Choose at least one other person — itemising for yourself alone has ' +
-          'nothing to divide.');
+      if (!people.length) {
+        return SW.setError('exp-f-error', 'There is nobody to itemise this for.');
       }
+
+      // Itemising alone is allowed and useful: it adds the order up, records
+      // what was in it, and — now that the itemisation is stored — leaves
+      // something to come back and share out later. Refusing it meant a
+      // receipt could not even be entered until somebody else was on the
+      // expense.
 
       // The form closes while the scanner runs, then comes back with the
       // itemisation applied — or unchanged if it was cancelled.
       SW.closeSheet();
       SW.openScanner({
         participants: people,
+        items: f.items || null,
         onApply: function (result) {
           f.amountPaise = result.grandTotal;
           f.amountText = SW.rupees(result.grandTotal);
           f.mode = 'exact';
           f.exact = result.totals;
+          // Kept so the itemisation can be reopened and reassigned later —
+          // "one egg, then split three ways" is not recoverable from prose.
+          f.items = result.items;
           f.included = {}; f.percent = {}; f.shares = {}; f.adjust = {};
           f.note = result.note;
           if (!f.description.trim()) {
@@ -1285,6 +1301,10 @@ window.SW = window.SW || {};
         p_split_mode: f.mode,
         p_expense_date: f.date,
         p_notes: f.note || null,
+        // undefined means "leave whatever is stored alone"; the RPC only
+        // touches it when something is sent. An edit that never opened the
+        // itemiser must not discard it.
+        p_items: f.items === undefined ? undefined : (f.items || []),
         // Omitted entirely for the ordinary one-payer case; the RPC then
         // treats the single payer as having covered the whole amount.
         p_payers: f.payers
@@ -1444,6 +1464,9 @@ window.SW = window.SW || {};
       shares: {},
       adjust: {},
       note: e.notes || '',
+      // Carried onto the form so the itemiser reopens where it left off, and
+      // so an edit that never touches it sends nothing and leaves it alone.
+      items: Array.isArray(e.items) ? e.items : undefined,
     };
   }
 
@@ -1529,7 +1552,36 @@ window.SW = window.SW || {};
       : 'Added by ' + addedBy;
 
     // The itemised breakdown, if this expense was scanned.
-    const noteEl = document.getElementById('exp-note');
+    // The itemisation, if there is one. Read-only here; editing goes through
+  // the form, where reassigning a line recomputes everybody's share.
+  const itemsEl = document.getElementById('exp-items');
+  if (itemsEl) {
+    const items = Array.isArray(e.items) ? e.items : [];
+    itemsEl.hidden = !items.length;
+    if (items.length) {
+      itemsEl.innerHTML =
+        '<div class="card-head">What was in it</div>' +
+        items.map(function (r) {
+          const who = (r.who || []).map(function (id) {
+            return id === SW.ledger.me ? 'you' : SW.person(id).full_name.split(' ')[0];
+          });
+          return '<div class="set-row" style="cursor:default">' +
+            '<span class="grow">' +
+              '<span class="set-title">' + esc(r.name) +
+                (r.qty > 1 ? ' ×' + r.qty : '') + '</span>' +
+              '<span class="set-sub">' +
+                (r.kind === 'fee'
+                  ? 'shared out by what each person ordered'
+                  : (who.length ? esc(who.join(', ')) : 'nobody')) +
+              '</span></span>' +
+            '<span class="set-title" style="flex:none">' +
+              SW.money(r.totalPaise) + '</span>' +
+          '</div>';
+        }).join('');
+    }
+  }
+
+  const noteEl = document.getElementById('exp-note');
     if (e.notes) {
       noteEl.textContent = e.notes;
       noteEl.hidden = false;

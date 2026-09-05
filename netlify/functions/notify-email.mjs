@@ -32,6 +32,9 @@ import { sendMail, shell, siteUrl } from '../lib/mail.mjs';
 
 const WORTH_AN_EMAIL = new Set([
   'expense_added',
+  // Somebody putting you on an expense costs you money without you
+  // doing anything, which is exactly what an email is for.
+  'added_to_expense',
   'settlement',
   // A payment being un-recorded moves somebody's balance without them
   // doing anything, which is exactly when an email is worth sending.

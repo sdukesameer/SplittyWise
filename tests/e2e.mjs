@@ -466,6 +466,71 @@ try {
     (nudgeAgain.body && nudgeAgain.body.ok === false), nudgeAgain.body);
 
   /* =================================================================== */
+  section('itemised receipts');
+
+  // Scanning alone used to be refused outright. It is useful on its own —
+  // it totals the order and records what was in it — and now that the
+  // itemisation is stored, it leaves something to share out later.
+  const solo = await A.api.rpc('create_expense', {
+    p_amount: 300, p_description: 'E2E Zepto order',
+    p_splits: [{ user_id: A.id, amount: 300 }],
+    p_payer_id: A.id,
+    p_items: [
+      { name: 'Eggs 6', qty: 1, totalPaise: 9000, kind: 'item', who: [A.id] },
+      { name: 'Milk 1L', qty: 2, totalPaise: 13000, kind: 'item', who: [A.id] },
+      { name: 'Handling fee', qty: 1, totalPaise: 8000, kind: 'fee', who: [A.id] },
+    ],
+  });
+  const soloId = typeof solo.body === 'string' ? solo.body : (solo.body && solo.body.id);
+  ok('one person can itemise a receipt alone', solo.ok && !!soloId, solo.body);
+
+  const stored = await A.api.select('expenses?id=eq.' + soloId + '&select=items');
+  ok('and the itemisation is stored, not thrown away',
+    Array.isArray(stored.body) && Array.isArray(stored.body[0].items) &&
+    stored.body[0].items.length === 3, stored.body);
+  ok('with who was in on each line',
+    stored.body[0].items[0].who && stored.body[0].items[0].who[0] === A.id,
+    stored.body[0].items[0]);
+
+  // The egg, later shared.
+  const reassign = await A.api.rpc('update_expense', {
+    p_expense_id: soloId, p_amount: 300, p_description: 'E2E Zepto order',
+    p_splits: [{ user_id: A.id, amount: 255 }, { user_id: B.id, amount: 45 }],
+    p_items: [
+      { name: 'Eggs 6', qty: 1, totalPaise: 9000, kind: 'item', who: [A.id, B.id] },
+      { name: 'Milk 1L', qty: 2, totalPaise: 13000, kind: 'item', who: [A.id] },
+      { name: 'Handling fee', qty: 1, totalPaise: 8000, kind: 'fee', who: [A.id, B.id] },
+    ],
+  });
+  ok('a line can be reassigned later', reassign.ok, reassign.body);
+
+  const after = await A.api.select('expenses?id=eq.' + soloId + '&select=items');
+  ok('and the stored itemisation follows',
+    after.body[0].items[0].who.length === 2, after.body[0].items[0]);
+
+  const told = await B.api.select('notifications?expense_id=eq.' + soloId +
+    '&select=type,title,body&order=created_at.desc&limit=1');
+  ok('the person newly added is told they were added',
+    Array.isArray(told.body) && told.body[0] &&
+    told.body[0].type === 'added_to_expense' &&
+    /added you to/.test(told.body[0].title), told.body);
+  ok('and told what their share is',
+    told.body[0] && /Your share is ₹45\.00 of ₹300\.00/.test(told.body[0].body),
+    told.body[0]);
+
+  // An edit that never opens the itemiser must not discard it.
+  const keepItems = await A.api.rpc('update_expense', {
+    p_expense_id: soloId, p_amount: 300, p_description: 'E2E Zepto order renamed',
+    p_splits: [{ user_id: A.id, amount: 255 }, { user_id: B.id, amount: 45 }],
+  });
+  const stillThere = await A.api.select('expenses?id=eq.' + soloId + '&select=items');
+  ok('an edit that never opened the itemiser keeps it',
+    keepItems.ok && Array.isArray(stillThere.body[0].items) &&
+    stillThere.body[0].items.length === 3, stillThere.body[0]);
+
+  await A.api.rpc('set_expense_deleted', { p_expense_id: soloId, p_deleted: true });
+
+  /* =================================================================== */
   section('settle-up reminders');
 
   // A group whose settle-up day is today, so a reminder is due right now.

@@ -878,9 +878,12 @@ window.SW = window.SW || {};
       db.from('friendships').select('user_a, user_b'),
       // Live rows only. Deleted ones live on for thirty days so a mistake
       // can be undone, but they must not touch a balance meanwhile.
+      // `items` is the stored itemisation. Without selecting it, reopening
+      // the itemiser would find nothing and quietly start from scratch — the
+      // same shape of bug as the profile columns that read as never set.
       db.from('expenses').select(
         'id, group_id, payer_id, amount, description, emoji, category, split_mode, ' +
-        'notes, expense_date, created_at, created_by, ' +
+        'notes, items, expense_date, created_at, created_by, ' +
         'expense_splits(user_id, amount), expense_payers(user_id, amount)'
       ).is('deleted_at', null).order('expense_date', { ascending: false }),
       db.from('settlements').select(

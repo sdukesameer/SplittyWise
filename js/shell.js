@@ -223,6 +223,7 @@ window.SW = window.SW || {};
     group_deleted: '🗑️',
     expense_added: '🧾',
     expense_updated: '✏️',
+    added_to_expense: '➕',
     expense_deleted: '🗑️',
     expense_restored: '♻️',
     settlement: '✅',
@@ -733,6 +734,7 @@ window.SW = window.SW || {};
   const NOTIFY_KINDS = [
     { key: 'expense_added',   label: 'Expenses added' },
     { key: 'expense_updated', label: 'Expenses changed' },
+    { key: 'added_to_expense', label: 'Being added to an expense' },
     { key: 'expense_deleted', label: 'Expenses deleted' },
     { key: 'settlement',      label: 'Payments recorded' },
     { key: 'settlement_undone', label: 'Payments undone' },

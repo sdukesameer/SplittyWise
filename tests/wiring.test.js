@@ -62,6 +62,15 @@ for (const m of schema.matchAll(/create table if not exists public\.(\w+)\s*\(([
     .filter(Boolean);
 }
 
+// Columns added later by `alter table ... add column` count too. Reading only
+// the create-table blocks made every such column look like it did not exist —
+// profiles.is_admin and expenses.items both read as typos.
+for (const m of schema.matchAll(
+  /alter table\s+public\.(\w+)\s+add column\s+(?:if not exists\s+)?(\w+)/gi)) {
+  const [, table, col] = m;
+  if (tables[table] && !tables[table].includes(col)) tables[table].push(col);
+}
+
 const functions = {};
 for (const m of schema.matchAll(/create or replace function public\.(\w+)\s*\(([\s\S]*?)\)\s*returns/g)) {
   functions[m[1]] = [...m[2].matchAll(/(?:^|,)\s*(p_\w+)/g)].map(x => x[1]);
@@ -239,7 +248,12 @@ check(deleteTriggerFns.length + ' before-delete triggers, none writing a cascadi
 console.log('\n--- columns the client touches ---');
 const colProblems = [];
 
-for (const [file, src] of Object.entries(js)) {
+for (const [file, rawSrc] of Object.entries(js)) {
+  // Comments stripped first. A `//` line inside a concatenated select string
+  // stopped the pattern mid-expression and left a stray `+` looking like a
+  // column named "+" — which reads as a missing column and is not one.
+  const src = noComments(rawSrc);
+
   // .from('t').select('a, b, nested(x, y)')
   for (const m of src.matchAll(/\.from\('(\w+)'\)\s*\.select\(\s*((?:'[^']*'\s*\+?\s*)+)/g)) {
     const table = m[1];
@@ -1373,6 +1387,50 @@ check('the year is shifted per run, not by one whole-string replace',
   /left\(chunk, 2\) in \('19', '20'\)/.test(schema));
 check('and digits are their own kind of run',
   /\^\[\^A-Za-z0-9\]\+/.test(schema));
+
+/* ---------------- 36. the itemisation, kept ---------------- */
+
+console.log('\n--- itemised receipts ---');
+check('the itemisation is stored on the expense',
+  /add column if not exists items jsonb/.test(schema));
+check('and both write paths take it',
+  /p_items\s+jsonb\s+default null/.test(schema) &&
+  (schema.match(/p_items/g) || []).length >= 4);
+check('null leaves a stored itemisation alone, an empty list clears it',
+  /if p_items is not null then/.test(schema) &&
+  /jsonb_array_length\(p_items\) > 0 then p_items else null end/.test(schema));
+check('the client selects it, or reopening would start blank',
+  /notes, items, expense_date/.test(js['js/balances.js']));
+check('and only sends it when the itemiser was opened',
+  /f\.items === undefined \? undefined/.test(js['js/expense.js']));
+
+check('itemising alone is allowed',
+  !/itemising for yourself alone/.test(js['js/expense.js']) &&
+  /Itemising alone is allowed/.test(js['js/expense.js']));
+check('the scanner reopens from a saved itemisation',
+  /opts\.items \|\| \[\]/.test(js['js/scan.js']) &&
+  /if \(saved\.length\) \{ rows = saved; renderRows\(\); \}/.test(js['js/scan.js']));
+check('and drops anybody no longer on the expense',
+  /people\.indexOf\(id\) > -1/.test(js['js/scan.js']));
+check('it hands the items back to be stored',
+  /items: usable\.map/.test(js['js/scan.js']));
+check('a stored itemisation stays reachable even with the row switched off',
+  /shows\('scan'\) \|\| \(f\.items && f\.items\.length\)/.test(js['js/expense.js']));
+check('and the expense page shows what was in it',
+  /id="exp-items"/.test(html) && /What was in it/.test(js['js/expense.js']));
+
+// Being put on an expense costs you money without you doing anything, which
+// is a different message from "something changed".
+check('somebody newly added is told they were added',
+  /'added_to_expense'/.test(schema) && /added you to/.test(schema));
+check('and told their share of the total',
+  /Your share is/.test(schema));
+check('while somebody already on it still hears "changed"',
+  /when t\.was_there or t\.uid = me then 'expense_updated'/.test(schema));
+check('the new type has an icon, a switch and an email rule',
+  /added_to_expense: '/.test(js['js/shell.js']) &&
+  /key: 'added_to_expense'/.test(js['js/shell.js']) &&
+  /'added_to_expense'/.test(fs.readFileSync('netlify/functions/notify-email.mjs', 'utf8')));
 
 // A ReferenceError partway through printed a page of PASSes and then died
 // before this line, which reads like a quiet success unless you notice the

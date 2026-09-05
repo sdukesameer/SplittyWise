@@ -83,7 +83,11 @@ by exact amounts, see who owes whom, and settle up with partial payments.
 Every balance is derived from the ledger, never stored.
 
 Receipts can be scanned on-device to itemise an order: tick who was in on
-each line, and fees are shared out by the size of each person's order.
+each line, and fees are shared out by the size of each person's order. The
+itemisation is kept, so an egg bought for one person can be shared three ways
+weeks later without scanning anything again — and whoever is added that way is
+told they have been, and for how much. Itemising works on your own too: it
+adds the order up and records what was in it, ready to share out later.
 
 Spending charts by category and month, expense search, CSV export, live
 notifications, and it installs to the home screen on both iPhone and
@@ -1063,6 +1067,17 @@ netlify/functions/      one function: optional email notifications (4.7)
 | `expense_splits` | Who owes what on one expense. Always sums to the expense amount |
 | `settlements` | Paybacks, kept separate from expenses so history is never rewritten |
 | `notifications` | Feeds the bell and the Activity tab. Written only server-side |
+
+`expenses.items` holds the itemised receipt behind an expense, when there was
+one: `[{ name, qty, totalPaise, kind, who }]`. It is jsonb on the expense
+rather than its own table because it is read and written whole, never queried
+across, and belongs to exactly one expense. Storing it at all is a change of
+mind — the first version threw the itemisation away and kept only a note —
+and the reason is editing: "one egg, later split three ways" cannot be
+recovered from prose.
+
+Sending `null` leaves a stored itemisation alone; sending `[]` clears it. An
+edit that never opens the itemiser therefore cannot silently discard it.
 
 A notification's `is_read` carries a second meaning worth knowing: a row that
 is inserted **already read** is one about your own action. It belongs in your
