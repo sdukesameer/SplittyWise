@@ -148,7 +148,7 @@ real users with real tokens, so RLS applies and triggers fire. It creates its
 own throwaway accounts on `example.com` and removes them afterwards. 73
 checks across every module.
 
-Nineteen suites, no database and no browser needed:
+Twenty suites, no database and no browser needed:
 
 | Suite | Covers |
 |---|---|
@@ -159,6 +159,7 @@ Nineteen suites, no database and no browser needed:
 | `prorate.test.js` | Fees allocated by order size, landing on the total exactly |
 | `scan.test.js` | Receipt parsing from realistic OCR output — including a real Blinkit screenshot where every ₹ was read as a "2" — and itemised splits |
 | `scanfn.test.mjs` | The receipt reader function, actually called: a retired model name is not a dead end, quota and a bad key fall back rather than stranding the scan, and rupees land as integer paise |
+| `notifymail.test.mjs` | The email webhook, actually called: a repeat of the last mail is dropped while anything else gets through, one webhook delivered twice sends once, a refused send puts its claim back, and nothing reaches somebody who did not opt in |
 | `insights.test.js` | Categories, monthly buckets, search, and CSV including formula-injection guarding |
 | `splitmodes.test.js` | All five split modes, checked against the reference app's own on-screen numbers |
 | `payers.test.js` | Multiple payers: one payer still behaves identically, and several net into the fewest transfers |
@@ -682,9 +683,24 @@ What it deliberately does *not* do:
 - **Only money and people events** — an expense added, a payment recorded, a
   nudge, the monthly settle-up day, a new friend, being added to a group. Not
   edits, deletions or comments.
-- **At most one email per person every fifteen minutes**, stamped on
-  `profiles.last_email_at` only after a successful send, so a failed send does
-  not eat somebody's quiet window.
+- **Never the same email twice in a row.** Every notification worth an email
+  gets one — but if it would say exactly what the last one said, it is
+  dropped. "The same" means the same type, title, body and destination.
+
+  This replaced a fifteen-minute quiet window, which was a blunt instrument:
+  a settle-up reminder and somebody adding you to an expense two minutes
+  later are not the same news, and the second was silently thrown away.
+
+  `notifications.emailed_at` records which rows produced an email, so the
+  last one can be read back and compared. The row is *claimed* before the
+  mail is sent — a `PATCH` filtered on `emailed_at is null` — so a webhook
+  delivered twice cannot send the same mail twice, and a failed send puts the
+  claim back so a retry can still get through.
+
+  `authenticated` is granted `UPDATE (is_read)` on that table and nothing
+  more. Supabase hands out a blanket update grant on new tables, which would
+  have let anybody stamp their own row as already-sent and quietly lose their
+  own mail.
 - **Nothing at all until configured.** With the variables unset the function
   returns 204, so an unconfigured deploy is quiet rather than broken.
 - **Nothing from an unsigned request.** Without the matching
@@ -1025,8 +1041,11 @@ misbehaves.
 
 **No email arrived**
 Check, in order: the switch is on under **Account → Notifications**; the
-event is one of the six types 4.7 lists; it was not your own action; the last
-email to you was over fifteen minutes ago; and the type is not muted. Then
+event is one of the types 4.7 lists; it was not your own action; the type is
+not muted; and it does not say exactly what the previous email said — a
+repeat of the last one is dropped, and `select title, emailed_at from
+notifications where user_id = '…' order by created_at desc` shows which rows
+produced mail. Then
 **Netlify → Logs → Functions** — a 403 there means the webhook's
 `x-webhook-secret` header does not match `WEBHOOK_SECRET`, and a 502 carries
 Brevo's own message, usually a spent daily quota.

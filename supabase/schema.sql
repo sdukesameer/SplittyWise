@@ -25,9 +25,10 @@ create table if not exists public.profiles (
   -- see. Kept as JSON because both are lists of small flags that will grow.
   notify_prefs  jsonb not null default '{}'::jsonb,
   ui_prefs      jsonb not null default '{}'::jsonb,
-  -- Email notifications are off until asked for, and the Netlify function
-  -- that sends them stamps last_email_at so nobody gets a burst. See
-  -- netlify/functions/notify-email.mjs and README 4.7.
+  -- Email notifications are off until asked for. last_email_at records when
+  -- the last one went out; it is no longer a gate. Whether a mail is sent is
+  -- decided per notification, by comparing it with the one before — see
+  -- notifications.emailed_at, netlify/functions/notify-email.mjs, README 4.7.
   email_notify  boolean not null default false,
   last_email_at timestamptz,
   created_at    timestamptz not null default now(),
@@ -278,6 +279,15 @@ alter table public.groups        add column if not exists whiteboard   text;
 alter table public.expenses         add column if not exists items jsonb;
 alter table public.profiles      add column if not exists email_notify boolean not null default false;
 alter table public.profiles      add column if not exists last_email_at timestamptz;
+
+-- Which notifications produced an email, so the last one sent can be read
+-- back and compared with the next. That replaced a fifteen-minute quiet
+-- window, which threw away anything that happened to follow something else
+-- — a settle reminder and being added to an expense two minutes later are
+-- not the same news. Also makes a webhook retry harmless: the row is claimed
+-- before the mail is sent, and a claim that fails means somebody already
+-- sent it.
+alter table public.notifications add column if not exists emailed_at timestamptz;
 alter table public.groups        add column if not exists settle_up_on date;
 alter table public.groups        add column if not exists settle_up_day int;
 
@@ -349,6 +359,10 @@ create index if not exists idx_splits_user         on public.expense_splits(user
 create index if not exists idx_settle_from         on public.settlements(from_user);
 create index if not exists idx_settle_to           on public.settlements(to_user);
 create index if not exists idx_notif_user_unread   on public.notifications(user_id, is_read, created_at desc);
+-- Partial: only the rows that produced an email are ever looked up this way,
+-- and on a busy project that is a small fraction of the table.
+create index if not exists idx_notif_emailed       on public.notifications(user_id, emailed_at desc)
+  where emailed_at is not null;
 
 -- ============================================================================
 --  3. SECURITY-DEFINER HELPERS
@@ -762,6 +776,15 @@ drop policy if exists notifications_update on public.notifications;
 create policy notifications_update on public.notifications
   for update to authenticated
   using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+
+-- The client marks notifications read through mark_all_notifications_read(),
+-- and never writes this table directly. So `authenticated` needs no more
+-- than is_read, and that matters now emailed_at exists: with the blanket
+-- update grant Supabase hands out, anybody could stamp their own row as
+-- already-sent and quietly suppress their own mail, or rewrite what counts
+-- as "the last one sent".
+revoke update on public.notifications from authenticated;
+grant update (is_read) on public.notifications to authenticated;
 
 drop policy if exists notifications_delete on public.notifications;
 create policy notifications_delete on public.notifications

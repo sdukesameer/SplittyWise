@@ -51,7 +51,29 @@ const WORTH_AN_EMAIL = new Set([
   'account_created',
 ]);
 
-const QUIET_MINUTES = 15;
+// There is no quiet window any more.
+//
+// It used to drop any email sent within fifteen minutes of the last one,
+// which is a blunt instrument: a settle-up reminder and somebody adding you
+// to an expense two minutes later are not the same news, and the second was
+// silently thrown away. What nobody wants is the *same* mail twice.
+//
+// So every notification now gets an email, unless it would say exactly what
+// the last one said. `notifications.emailed_at` records which rows produced
+// an email, so the previous one can be read back and compared.
+//
+// Everything the reader would see, in one string. Two notifications with the
+// same type, wording and destination produce the same email, whatever else
+// differs about the rows — and a change to any of them is a different email.
+function fingerprint(n) {
+  return [
+    n.type,
+    n.title || '',
+    n.body || '',
+    n.group_id || '',
+    n.expense_id || '',
+  ].join('\u001f');
+}
 
 // Types whose body is a "·"-joined set of facts rather than a sentence.
 const LISTED = new Set(['settle_reminder', 'month_summary']);
@@ -140,7 +162,7 @@ export default async (request) => {
 
   const who = await fetch(
     rest + '/profiles?id=eq.' + encodeURIComponent(row.user_id) +
-    '&select=email,full_name,notify_prefs,email_notify,last_email_at',
+    '&select=email,full_name,notify_prefs,email_notify',
     { headers }
   );
   if (!who.ok) return new Response('Lookup failed', { status: 502 });
@@ -154,11 +176,40 @@ export default async (request) => {
     return new Response(null, { status: 204 });
   }
 
-  if (profile.last_email_at) {
-    const since = Date.now() - new Date(profile.last_email_at).getTime();
-    if (since < QUIET_MINUTES * 60 * 1000) {
+  // What the last email to this person actually said. Ordered by when it was
+  // sent rather than when the notification was created: a reminder raised at
+  // midnight and emailed at eight is the last thing they received.
+  const before = await fetch(
+    rest + '/notifications?user_id=eq.' + encodeURIComponent(row.user_id) +
+    '&emailed_at=not.is.null&id=neq.' + encodeURIComponent(row.id) +
+    '&order=emailed_at.desc&limit=1' +
+    '&select=type,title,body,group_id,expense_id',
+    { headers }
+  );
+  if (before.ok) {
+    const last = (await before.json())[0];
+    if (last && fingerprint(last) === fingerprint(row)) {
       return new Response(null, { status: 204 });
     }
+  }
+
+  // Claim the row before sending anything. A database webhook can be
+  // delivered more than once, and two deliveries of one insert would
+  // otherwise be two identical emails — the duplicate the check above cannot
+  // catch, because it compares this row against a different one. The filter
+  // does the work: only one caller can move emailed_at off null.
+  const claim = await fetch(
+    rest + '/notifications?id=eq.' + encodeURIComponent(row.id) +
+    '&emailed_at=is.null',
+    {
+      method: 'PATCH',
+      headers: Object.assign({}, headers, { Prefer: 'return=representation' }),
+      body: JSON.stringify({ emailed_at: new Date().toISOString() }),
+    }
+  );
+  const claimed = claim.ok ? await claim.json().catch(() => []) : [];
+  if (!Array.isArray(claimed) || !claimed.length) {
+    return new Response(null, { status: 204 });
   }
 
   const appUrl = siteUrl(request);
@@ -234,13 +285,22 @@ export default async (request) => {
   });
 
   if (!sent.ok) {
+    // Put the claim back, so a retry can have another go. Otherwise a spent
+    // Brevo quota would mean this notification is never emailed at all — the
+    // row would look sent for ever.
+    await fetch(rest + '/notifications?id=eq.' + encodeURIComponent(row.id), {
+      method: 'PATCH',
+      headers: Object.assign({}, headers, { Prefer: 'return=minimal' }),
+      body: JSON.stringify({ emailed_at: null }),
+    }).catch(() => {});
+
     // Surfaced in the Netlify function log rather than silently swallowed —
     // a quota that ran out should be findable.
     return new Response(sent.reason, { status: 502 });
   }
 
-  // Stamping this only on a successful send means a failed one does not eat
-  // somebody's quiet window.
+  // A record of when the last one went out, for the console. Not a gate any
+  // more — emailed_at on the notification decides that.
   await fetch(rest + '/profiles?id=eq.' + encodeURIComponent(row.user_id), {
     method: 'PATCH',
     headers: Object.assign({}, headers, { Prefer: 'return=minimal' }),

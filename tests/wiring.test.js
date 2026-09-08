@@ -1621,6 +1621,57 @@ check('and that a reserved one reaches nobody but still gets an account',
 check('e2e asserts the inverse for its own throwaway signup',
   /a throwaway test signup wakes no admin/.test(fs.readFileSync('tests/e2e.mjs', 'utf8')));
 
+/* ---------------- 41. never the same mail twice ---------------- */
+
+// A fifteen-minute quiet window dropped everything that happened to follow
+// something else, which is not what "don't spam me" means.
+// last_email_at is still written, as a record for the console. What must be
+// gone is it being *read* to decide anything.
+check('the quiet window is gone',
+  !/QUIET_MINUTES/.test(notifyFn) &&
+  !/profile\.last_email_at/.test(notifyFn) &&
+  !/email_notify,last_email_at/.test(notifyFn));
+check('what a mail says is what decides whether it repeats',
+  /function fingerprint/.test(notifyFn) &&
+  /n\.type,[\s\S]{0,120}n\.title[\s\S]{0,120}n\.body[\s\S]{0,160}n\.expense_id/
+    .test(notifyFn));
+check('the previous one is found by when it was sent, not when it was raised',
+  /order=emailed_at\.desc&limit=1/.test(notifyFn));
+check('and a repeat is dropped before the row is even claimed',
+  (function () {
+    const fn = noComments(notifyFn);
+    return fn.indexOf('fingerprint(last) === fingerprint(row)') <
+           fn.indexOf("emailed_at=is.null");
+  })());
+
+// A Supabase webhook can be delivered more than once. The fingerprint check
+// cannot catch that: it compares this row against a different one.
+check('the row is claimed with a filter only one caller can win',
+  /'\/notifications\?id=eq\.' \+ encodeURIComponent\(row\.id\) \+\s*\n?\s*'&emailed_at=is\.null'/
+    .test(notifyFn) &&
+  /Prefer: 'return=representation'/.test(notifyFn));
+check('and nothing is sent when the claim comes back empty',
+  /if \(!Array\.isArray\(claimed\) \|\| !claimed\.length\)/.test(notifyFn));
+check('a refused send puts the claim back, so a retry can still get through',
+  /emailed_at: null/.test(notifyFn));
+
+check('the column exists and is indexed for the lookup',
+  /alter table public\.notifications add column if not exists emailed_at timestamptz;/
+    .test(schema) &&
+  /idx_notif_emailed[\s\S]{0,140}where emailed_at is not null/.test(schema));
+
+// Supabase grants a blanket UPDATE on new tables. With it, anybody could
+// stamp their own row as already-sent and quietly lose their own mail.
+check('a client may update only is_read on a notification',
+  /revoke update on public\.notifications from authenticated;/.test(schema) &&
+  /grant update \(is_read\) on public\.notifications to authenticated;/.test(schema));
+check('proved over HTTP with a real token',
+  /a client cannot mark its own notification as emailed/
+    .test(fs.readFileSync('tests/e2e.mjs', 'utf8')));
+check('and the decision itself is executed, not just read',
+  fs.existsSync('tests/notifymail.test.mjs') &&
+  /await notify\(post\(/.test(fs.readFileSync('tests/notifymail.test.mjs', 'utf8')));
+
 // Storing the itemisation is only worth anything if it reopens. It did not:
 // renderRows() writes into #scan-rows, which renderItemise() creates, so
 // opening a saved one threw on a null element before drawing a single line.

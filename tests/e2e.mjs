@@ -369,6 +369,26 @@ try {
   const markRead = await B.api.rpc('mark_all_notifications_read');
   ok('marking them read works', markRead.ok, markRead.body);
 
+  // emailed_at decides whether a mail goes out and what counts as the last
+  // one sent. Supabase grants `authenticated` a blanket UPDATE on new
+  // tables, which would let anybody stamp their own row as already-sent and
+  // quietly lose their own mail — so the grant is narrowed to is_read.
+  const ownNotif = await B.api.select('notifications?select=id&limit=1');
+  const nid = Array.isArray(ownNotif.body) && ownNotif.body[0] && ownNotif.body[0].id;
+  if (!nid) {
+    skip('a client cannot mark its own notification as emailed', 'no notification to try');
+    skip('but can still mark one read', 'no notification to try');
+  } else {
+    const stamp2 = await B.api.patch('notifications?id=eq.' + nid,
+      { emailed_at: new Date().toISOString() });
+    ok('a client cannot mark its own notification as emailed', !stamp2.ok,
+      { status: stamp2.status, body: stamp2.body });
+
+    const readIt = await B.api.patch('notifications?id=eq.' + nid, { is_read: true });
+    ok('but can still mark one read', readIt.ok,
+      { status: readIt.status, body: readIt.body });
+  }
+
   /* =================================================================== */
   section('settling up, and undoing it');
 
@@ -780,9 +800,16 @@ try {
 
   const site = process.env.SITE_URL;
   if (!site) {
+    // Every check in the branch below, or the report claims a clean run while
+    // quietly having tested four fewer things. Three of these had no skip at
+    // all: without SITE_URL they simply did not happen, and nothing said so.
     skip('signup-check answers', 'SITE_URL not set');
     skip('the email test sends', 'SITE_URL not set');
     skip('the receipt reader says whether it is configured', 'SITE_URL not set');
+    skip('the served headers allow this origin to use the microphone',
+      'SITE_URL not set');
+    skip('and still deny geolocation outright', 'SITE_URL not set');
+    skip('the admin function refuses an unsigned request', 'SITE_URL not set');
   } else {
     const chk = await fetch(site + '/.netlify/functions/signup-check', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
