@@ -385,7 +385,7 @@ marked private:
 | `covers` | One picture per group | ≤ 100 KB each |
 
 **There is deliberately no bucket for receipts.** A receipt is read — on the
-device, or by the reader in [4.9](#49-reading-receipts-optional-free) — and
+device, or by the reader in [4.9](#49-reading-receipts) — and
 the image is thrown away — what gets saved is the itemised split
 and a note, not a photograph. That is what keeps storage in the tens of
 megabytes rather than the gigabytes.
@@ -624,7 +624,7 @@ Environment variables**:
 | `EMAIL_FROM` | The sender address you verified |
 | `EMAIL_FROM_NAME` | `SplittyWise` |
 | `WEBHOOK_SECRET` | Any long random string — `openssl rand -hex 32` |
-| `GEMINI_API_KEY` | *Optional.* Reads receipt screenshots properly — see [4.9](#49-reading-receipts-optional-free). Unset, scanning falls back to on-device OCR |
+| `GEMINI_API_KEY` | *Needed for receipt scanning* — see [4.9](#49-reading-receipts). Any one of six providers will do; with none set, scanning says so instead of guessing |
 | `APP_URL` | *Optional.* Only needed for a custom domain — the function otherwise takes the site's address from the request it was called on, so a wrong or missing value cannot produce a broken link. Setting it to the example above is worse than leaving it unset |
 
 Redeploy after setting them.
@@ -748,49 +748,61 @@ implementations of one sum. `./scripts/db nets` compares them member by
 member on the real ledger, because an email that disagrees with the app is
 worse than no email.
 
-### 4.9 Reading receipts (optional, free)
+### 4.9 Reading receipts
 
-Scanning works with nothing configured: Tesseract runs in the browser, on the
-phone, and the picture never leaves it. It is character recognition, though,
-not a reader of receipts — and its English model has never been shown a **₹**,
-so it substitutes the nearest glyph it knows. On Blinkit that is a `2`, which
-turns ₹35 into 235 and a ₹469 basket into ₹53,727.
+Scanning needs **at least one vision model** configured. There is no
+on-device fallback any more, and that is deliberate: Tesseract has never been
+shown a **₹**, so it reads the symbol as a digit and loses decimal points —
+₹35 came back as 235, and ₹100.00 as ₹10,000. A total wrong by a factor of a
+hundred, saved without anyone noticing which reader produced it, is worse
+than a scanner that admits it cannot read the receipt today.
 
-`js/scan.js` detects and undoes that: if not one real currency mark survived
-anywhere and every amount in the right-hand column carries the same stray
-leading character, that character *is* the ₹. It also drops the size row under
-each item, whose amount is the struck-out MRP, and the app furniture that a
-screenshot carries — the status bar, the order number, **Rate Order**.
+Set **any one** of these and scanning works. Set several and they are tried
+in turn, so one being out of quota does not end the scan:
 
-That is a repair, not a cure. Setting one variable replaces it with a vision
-model, which reads the layout rather than the shapes:
+| Variable | Free tier | Where |
+|---|---|---|
+| `GEMINI_API_KEY` | yes | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — no card |
+| `GROQ_API_KEY` | yes | [console.groq.com/keys](https://console.groq.com/keys) |
+| `MISTRAL_API_KEY` | yes | [console.mistral.ai](https://console.mistral.ai/api-keys) |
+| `OPENROUTER_API_KEY` | yes | [openrouter.ai/keys](https://openrouter.ai/keys) — only its `:free` models are used |
+| `OPENAI_API_KEY` | no | [platform.openai.com](https://platform.openai.com/api-keys) |
+| `ANTHROPIC_API_KEY` | no | [console.anthropic.com](https://console.anthropic.com/settings/keys) |
 
-| Variable | Value |
-|---|---|
-| `GEMINI_API_KEY` | A key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Free tier — no card, no billing account |
+Gemini alone is plenty for a household. The rest are there so a spent free
+tier is an inconvenience rather than a dead scanner.
 
-The free tier is generous enough that a household scanning a few orders a day
-will not come near it, and when it *is* exhausted the scanner falls back to
-reading on the device rather than failing.
+**Model names rot.** Providers retire them, and the good free model of last
+quarter is the degraded one this quarter — `gemini-2.5-flash` started
+answering *"no longer available to new users"* while the key was perfectly
+fine. So each provider's model list is fetched live, filtered to the ones
+that can see images, and sorted smallest-capable-first then newest. Nothing
+here needs editing when a provider ships v4. `PROVIDER_MODEL` (e.g.
+`GEMINI_MODEL`) pins one by hand if you ever need to.
 
-What changes with it set:
+A provider that rate-limits is put on a cooldown so the next scan skips
+straight past it, and an account that is simply **out of credit** is told
+apart from one that is busy — waiting does not fix an empty account.
 
-- The **₹** is read as a ₹.
-- A crossed-out MRP is understood as the old price, not a second item.
-- **Several screenshots are read as one order.** A long list takes two or
-  three screens; pick them all and an item visible in two of them is counted
-  once. On-device OCR gets this too, but the model is better at spotting the
-  overlap.
-- A product thumbnail is a picture, not a word.
+Two optional knobs: `SCAN_MAX_IMAGES` (default 5) and `SCAN_TIME_BUDGET_MS`
+(default 9000 — Netlify kills a synchronous function at 10s).
 
-What changes for privacy: **the screenshots leave the phone.** They are sent
-to Google, read, and not stored by either end. The scanner says which of the
-two readers it has before you pick anything, and **Paste the order text**
-stays there as the exact, on-device path. Leave `GEMINI_API_KEY` unset and
-nothing is ever uploaded.
+**When every reader fails** the scanner says which were tried and why, counts
+down to when one is worth retrying, and offers the two routes that need no
+reader at all: **Paste the order text**, which is read exactly on the phone,
+and itemising by hand.
+
+What you give up: **the screenshots leave the phone.** They are sent to be
+read and stored by nobody. The scanner says which reader it has before you
+pick anything, and the rows carry a `read by Gemini · gemini-3.6-flash` line
+— when a scan comes out wrong, the first useful question is which model
+produced it. Pasting the text instead uploads nothing.
 
 Either way the result is a list you correct before it is applied, and it is
 saved with the expense so it can be reopened and reassigned later.
+
+`GET /.netlify/functions/scan?diagnose=1` shows every provider, whether its
+key is set, what it is cooling off from, and the exact models it would try.
 
 ### 4.10 The summary when a month ends
 
@@ -1133,7 +1145,7 @@ js/lock.js              Face ID or fingerprint on the installed app
 js/expense.js           add/edit form, splitting, one expense's page
 js/groups.js            groups list, one group's page, membership, settings
 js/settle.js            recording payments, and the plan to clear a group
-js/scan.js              receipt reading, parsing, itemised assignment
+js/scan.js              receipt reading, paste parsing, itemised assignment
 js/insights.js          hand-drawn SVG charts and CSV export
 js/search.js            expense search
 js/realtime.js          live notifications, and resync on foreground

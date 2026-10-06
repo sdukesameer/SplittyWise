@@ -49,9 +49,7 @@
 #  <script> at all, so it does not need 'unsafe-inline' there. Each allowance
 #  is something the app genuinely uses:
 #
-#    cdn.jsdelivr.net        supabase-js, and tesseract.js for receipt OCR
-#    blob: + wasm-unsafe-eval  Tesseract compiles WebAssembly in a worker
-#    unpkg / tessdata...     where tesseract.js fetches its language data
+#    cdn.jsdelivr.net        supabase-js
 #    *.supabase.co           the database, auth, and signed receipt URLs
 #    wss://*.supabase.co     realtime notifications
 #    fonts.googleapis/gstatic  the Nunito typeface
@@ -67,12 +65,11 @@
   [headers.values]
     Content-Security-Policy = """
       default-src 'self';
-      script-src 'self' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net;
-      worker-src 'self' blob:;
+      script-src 'self' https://cdn.jsdelivr.net;
       style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
       font-src 'self' https://fonts.gstatic.com;
       img-src 'self' data: blob: https://*.supabase.co;
-      connect-src 'self' blob: https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net https://unpkg.com https://tessdata.projectnaptha.com;
+      connect-src 'self' https://*.supabase.co wss://*.supabase.co;
       manifest-src 'self';
       frame-src 'none';
       object-src 'none';

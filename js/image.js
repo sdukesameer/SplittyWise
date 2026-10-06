@@ -40,7 +40,7 @@ window.SW = window.SW || {};
   SW.prepareImage = async function (file, opts) {
     opts = opts || {};
     const maxBytes = opts.maxBytes || CAP_BYTES;
-    let dim = opts.maxDim || 640;
+    let dim = opts.maxDim || opts.maxWidth || 640;
 
     if (!/^image\//.test(file.type || '')) {
       throw new Error('Pick an image file.');
@@ -64,6 +64,15 @@ window.SW = window.SW || {};
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(img, (w - side) / 2, (h - side) / 2, side, side,
                       0, 0, canvas.width, canvas.height);
+      } else if (opts.maxWidth) {
+        // A receipt screenshot is tall and narrow. Fitting the longest side
+        // squeezes the width — where the text is — down to nothing, so cap
+        // the width and let the height run; the byte cap keeps it sane.
+        const scale = Math.min(1, (opts.maxWidth * (dim / (opts.maxDim || opts.maxWidth))) / w);
+        canvas.width = Math.max(1, Math.round(w * scale));
+        canvas.height = Math.max(1, Math.round(h * scale));
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       } else {
         const scale = Math.min(1, dim / Math.max(w, h));
         canvas.width = Math.max(1, Math.round(w * scale));

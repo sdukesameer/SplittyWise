@@ -1,16 +1,21 @@
 // ---------------------------------------------------------------------------
 //  Receipt scanning — read a screenshot, then an editable itemisation
 //
-//  Two readers. Where a key is configured the screenshots go to a vision
-//  model, which understands that the right-hand column is money and that a
-//  crossed-out number is the old price. Where one is not, Tesseract reads
-//  them on the device and the parser below picks the result apart.
+//  Every reader is a vision model, which understands that the right-hand
+//  column is money and that a crossed-out number is the old price. Providers
+//  are tried in turn and the first that answers wins, so one being out of
+//  quota does not end the scan.
 //
-//  Tesseract is honest-to-goodness character recognition, not a layout model
-//  — it does not even know the ₹ glyph — so the parser is deliberately
-//  forgiving and everything either reader produces is editable before it is
-//  applied. No image is stored by either path; what gets saved is the
-//  itemisation and a note.
+//  There used to be an on-device Tesseract fallback and it was worse than
+//  nothing: character recognition has never been shown a ₹, so it reads the
+//  symbol as a digit and loses decimal points, turning ₹100.00 into ₹10,000.
+//  A total wrong by a factor of a hundred, saved without anyone noticing
+//  which reader produced it, is worse than a scanner that admits it cannot
+//  read the receipt today. When every reader fails the scanner says so.
+//
+//  SW.parseReceipt below survives because the paste path still needs it:
+//  pasted order text is read exactly, with no model and no network. No image
+//  is stored; what gets saved is the itemisation and a note.
 // ---------------------------------------------------------------------------
 
 window.SW = window.SW || {};
@@ -455,7 +460,6 @@ window.SW = window.SW || {};
   if (!SW.isConfigured) return;
 
   const esc = SW.escapeHtml;
-  const TESSERACT_SRC = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
   const CLOUD_URL = '/.netlify/functions/scan';
   const MAX_SHOTS = 5;
 
@@ -503,22 +507,30 @@ window.SW = window.SW || {};
       .catch(function () { return 'unknown'; });
   }
 
-  // Why the good reader was not the one used, when it was configured. A
-  // silent fallback is what made "the key is set but nothing uses it" so hard
-  // to see: the model name had been retired and the app said nothing.
-  let cloudNote = '';
+  // Set when every configured reader was tried and all of them failed:
+  // { message, tried: [{ label, error, retryInMs }], retryInMs }. Null when
+  // nothing is configured at all, which is a different situation.
+  let cloudFailure = null;
 
-  // Returns rows, or null if this deploy has no reader configured — in which
-  // case the caller falls back to on-device OCR rather than failing.
+  // Which provider and model produced the rows on screen, e.g.
+  // "Gemini · gemini-3.6-flash". When a scan comes out wrong, the first
+  // useful question is which reader produced it.
+  let readBy = '';
+
+  // Returns rows, or null when there is nothing to show — either no reader is
+  // configured, or every one of them was tried and failed.
   async function readInCloud(files) {
-    cloudNote = '';
+    cloudFailure = null;
+    readBy = '';
     if (cloudReader === 'no') return null;
 
     const images = [];
     for (let i = 0; i < files.length; i++) {
-      // Full-page screenshots are tall; 1600px keeps small print legible while
-      // staying well inside what a function body can carry.
-      const blob = await SW.prepareImage(files[i], { maxDim: 1600, maxBytes: 900 * 1024 });
+      // Capped on width, not the longest side: a receipt screenshot is tall
+      // and narrow, and fitting 1600 to the longest side squeezed the width —
+      // where the text is — down to 443px. Height can run as long as it likes;
+      // the byte cap keeps the upload sane.
+      const blob = await SW.prepareImage(files[i], { maxWidth: 1100, maxBytes: 900 * 1024 });
       images.push({ mime: 'image/jpeg', data: await toBase64(blob) });
     }
 
@@ -531,38 +543,29 @@ window.SW = window.SW || {};
     if (res.status === 501 || res.status === 404) { cloudReader = 'no'; return null; }
     const body = await res.json().catch(function () { return {}; });
     if (!res.ok) {
-      // Recoverable — no quota, a refusal, a model that has been retired.
-      // Fall back, but say that is what happened.
+      // Every configured reader was tried and none of them worked.
       if (body.fallback) {
-        cloudNote = body.error || 'The reader could not be used just now.';
+        cloudFailure = {
+          message: body.error || 'The reader could not be used just now.',
+          tried: Array.isArray(body.tried) ? body.tried : [],
+          retryInMs: Number(body.retryInMs) || 0,
+        };
         return null;
       }
       throw new Error(body.error || 'The reader could not read that.');
     }
     cloudReader = 'yes';
+    readBy = String(body.by || '');
     const got = Array.isArray(body.rows) ? body.rows : [];
-    // Nothing found is not an answer worth keeping: let the on-device reader
-    // have a go before telling somebody their receipt has no items in it.
     if (!got.length) {
-      cloudNote = 'Nothing was found in those, so they were read here instead.';
+      cloudFailure = {
+        message: 'No reader could find anything in those images.',
+        tried: Array.isArray(body.tried) ? body.tried : [],
+        retryInMs: 0,
+      };
       return null;
     }
     return got;
-  }
-
-  // Loaded on first use only: the OCR engine pulls several megabytes of wasm
-  // and language data, which nobody should pay for just to open the app.
-  function loadTesseract() {
-    if (window.Tesseract) return Promise.resolve();
-    return new Promise(function (resolve, reject) {
-      const tag = document.createElement('script');
-      tag.src = TESSERACT_SRC;
-      tag.onload = resolve;
-      tag.onerror = function () {
-        reject(new Error('Could not load the scanner. Check your connection.'));
-      };
-      document.head.appendChild(tag);
-    });
   }
 
   function initial(id) {
@@ -666,15 +669,16 @@ window.SW = window.SW || {};
         where.textContent = state === 'yes'
           ? 'The screenshots are sent to be read and are not stored. ' +
             'Pasting the text instead keeps them on this phone.'
-          : 'Screenshots are read on this phone and never uploaded. Pasted ' +
-            'text is read exactly, so reach for it if a scan comes out wrong.';
+          : 'No reader is set up on this deploy, so a screenshot cannot be ' +
+            'read. Paste the order text instead — that needs nothing.';
       });
     }
 
     /* ---- stage 1b: paste it instead ---- */
 
     // A Zepto or Blinkit order confirmation is selectable text. Pasting it
-    // skips OCR entirely, so nothing has to be guessed at — the same parser
+    // needs no model and no network, so nothing has to be guessed at — the
+    // same parser
     // does the work, just on characters instead of pixels.
     function renderPaste() {
       stage().innerHTML =
@@ -724,18 +728,19 @@ window.SW = window.SW || {};
             who: r.kind === 'fee' ? [] : people.slice(),
           };
         });
-        renderItemise({ merged: parsed.merged });
+        renderItemise({ merged: parsed.merged, glyph: parsed.glyph });
       });
     }
 
     /* ---- stage 2: read the images ---- */
 
-    // Two readers. The cloud one understands that the right-hand column is
-    // money and that a crossed-out number is the old price; Tesseract only
-    // knows shapes. So try the first, and quietly use the second when this
-    // deploy has no key, the free quota is spent, or the network is not
-    // there — because a scanner that refuses to scan is worse than one that
-    // needs a row corrected.
+    // One kind of reader: a vision model, tried provider by provider until
+    // one answers. There used to be an on-device Tesseract fallback and it
+    // was worse than nothing — character recognition has never been shown a
+    // ₹, so it reads the symbol as a digit and loses decimal points, turning
+    // ₹100.00 into ₹10,000. A total wrong by a factor of a hundred, saved
+    // without anyone noticing which reader produced it, is worse than a
+    // scanner that admits it cannot read the receipt today.
     async function readReceipt(files, append) {
       const many = files.length > 1;
       stage().innerHTML =
@@ -753,29 +758,34 @@ window.SW = window.SW || {};
         if (hint) hint.textContent = text;
       }
 
-      let found = null;
-      let meta = { merged: 0 };
+      // Reassurance, not measurement: the function walks a chain of providers
+      // and cannot report back mid-request. It creeps to 90% and waits there,
+      // which is honest enough — what it must not do is sit at zero while a
+      // congested free tier is worked through.
+      let crept = 0.08;
+      const creep = setInterval(function () {
+        crept = Math.min(0.9, crept + 0.06);
+        progress(crept);
+        if (crept > 0.5) say('Still going — trying the next reader.');
+      }, 1200);
 
+      let found = null;
       try {
-        progress(0.12);
+        progress(crept);
         found = await readInCloud(files);
-        if (found) { progress(1); meta.by = 'cloud'; }
       } catch (err) {
+        clearInterval(creep);
         return failed(err);
       }
+      clearInterval(creep);
 
       if (!found) {
-        try {
-          say('Reading it on this phone. The first scan downloads the reader.');
-          const parsed = await readOnDevice(files, progress, say);
-          found = parsed.rows;
-          meta.merged = parsed.merged;
-          meta.glyph = parsed.glyph;
-          meta.note = cloudNote;
-        } catch (err) {
-          return failed(err);
-        }
+        // Ask rather than assume. Dropping silently to a reader that cannot
+        // tell ₹100.00 from ₹10,000 is how a wrong total gets saved.
+        return cloudFailure ? allBusy(files, append) : unconfigured();
       }
+
+      progress(1);
 
       const fresh = found.map(function (r) {
         return {
@@ -788,6 +798,8 @@ window.SW = window.SW || {};
           who: r.kind === 'fee' ? [] : people.slice(),
         };
       });
+
+      const meta = { merged: 0, by: readBy };
 
       if (append) {
         // A second batch of screenshots of the same order: anything already
@@ -810,6 +822,11 @@ window.SW = window.SW || {};
       renderItemise(meta);
     }
 
+    function byHand() {
+      rows = [];
+      renderItemise({ merged: 0, manual: true });
+    }
+
     function failed(err) {
       stage().innerHTML =
         '<div class="scan-state">' +
@@ -822,38 +839,90 @@ window.SW = window.SW || {};
             'Itemise by hand instead</button>' +
         '</div>';
       document.getElementById('scan-retry').addEventListener('click', renderPick);
-      document.getElementById('scan-manual2').addEventListener('click', function () {
-        rows = [];
-        renderItemise({ merged: 0, manual: true });
-      });
+      document.getElementById('scan-manual2').addEventListener('click', byHand);
     }
 
-    // One worker for all of the images: loading it is the slow part, and the
-    // pages are read into a single block of text so an item split across two
-    // screenshots still has its name and its price together.
-    async function readOnDevice(files, progress, say) {
-      let worker;
-      try {
-        await loadTesseract();
-        progress(0.18);
+    /* ---- no reader configured at all ---- */
 
-        worker = await window.Tesseract.createWorker('eng', 1, {
-          logger: function (m) {
-            if (m.status === 'recognizing text') progress(0.25 + m.progress * 0.7);
-          },
-        });
+    function unconfigured() {
+      stage().innerHTML =
+        '<div class="scan-state">' +
+          '<div class="scan-art">🔌</div>' +
+          '<h3>No reader is set up</h3>' +
+          '<p>Scanning needs at least one vision model configured on the ' +
+             'server. Until then you can itemise by hand, or paste the order ' +
+             'text, which is read exactly.</p>' +
+          '<button type="button" class="btn btn-primary" id="scan-unconf-paste" ' +
+                  'style="max-width:280px">Paste the order text</button>' +
+          '<button type="button" class="btn-text" id="scan-unconf-hand">' +
+            'Itemise by hand</button>' +
+        '</div>';
+      document.getElementById('scan-unconf-paste').addEventListener('click', renderPaste);
+      document.getElementById('scan-unconf-hand').addEventListener('click', byHand);
+    }
 
-        const pages = [];
-        for (let i = 0; i < files.length; i++) {
-          if (files.length > 1) say('Reading screenshot ' + (i + 1) + ' of ' + files.length + '.');
-          const result = await worker.recognize(files[i]);
-          pages.push(result.data.text);
-        }
-        progress(1);
-        return SW.parseReceipt(pages.join('\n'));
-      } finally {
-        // Free the wasm worker either way; the image itself is never kept.
-        if (worker) { try { await worker.terminate(); } catch (e) { /* ignore */ } }
+    /* ---- every reader is busy ---- */
+
+    let retryTimer = null;
+
+    function allBusy(files, append) {
+      const failure = cloudFailure ||
+        { message: 'No reader could be used.', tried: [], retryInMs: 0 };
+      const waitFor = Math.ceil((failure.retryInMs || 0) / 1000);
+
+      const detail = (failure.tried || [])
+        .map(function (t) {
+          return esc(t.label || t.id) + ' — ' + esc(t.error || 'failed');
+        })
+        .join('<br>');
+
+      stage().innerHTML =
+        '<div class="scan-state">' +
+          '<div class="scan-art">⏳</div>' +
+          '<h3>' + esc(failure.message) + '</h3>' +
+          (detail
+            ? '<p class="hint" style="max-width:34ch;text-align:center">' +
+              detail + '</p>'
+            : '') +
+          '<p>Wait for one of them to come back, paste the order text, or ' +
+             'itemise by hand.</p>' +
+          '<button type="button" class="btn btn-primary" id="scan-retry-cloud" ' +
+                  'style="max-width:280px"' + (waitFor > 0 ? ' disabled' : '') + '>' +
+            (waitFor > 0 ? 'Try again in ' + waitFor + 's' : 'Try again') +
+          '</button>' +
+          '<button type="button" class="btn btn-ghost" id="scan-busy-paste" ' +
+                  'style="max-width:280px">Paste the order text</button>' +
+          '<button type="button" class="btn-text" id="scan-busy-hand">' +
+            'Itemise by hand</button>' +
+        '</div>';
+
+      const retry = document.getElementById('scan-retry-cloud');
+      retry.addEventListener('click', function () {
+        clearInterval(retryTimer);
+        readReceipt(files, append);
+      });
+      document.getElementById('scan-busy-paste').addEventListener('click', function () {
+        clearInterval(retryTimer);
+        renderPaste();
+      });
+      document.getElementById('scan-busy-hand').addEventListener('click', function () {
+        clearInterval(retryTimer);
+        byHand();
+      });
+
+      if (waitFor > 0) {
+        let left = waitFor;
+        clearInterval(retryTimer);
+        retryTimer = setInterval(function () {
+          // The stage is replaced wholesale on every transition, so a button
+          // that is gone means this screen is gone with it.
+          if (!document.body.contains(retry)) return clearInterval(retryTimer);
+          left--;
+          if (left > 0) { retry.textContent = 'Try again in ' + left + 's'; return; }
+          clearInterval(retryTimer);
+          retry.disabled = false;
+          retry.textContent = 'Try again';
+        }, 1000);
       }
     }
 
@@ -895,9 +964,6 @@ window.SW = window.SW || {};
             '"' + esc(meta.glyph) + '", which has been undone. Worth a glance ' +
             'down the amounts.</div>'
           : '') +
-        (meta.note
-          ? '<div class="scan-warn">' + esc(meta.note) + '</div>'
-          : '') +
         (meta.added === 0
           ? '<div class="scan-warn">Nothing new in those — every line was ' +
             'already on the list.</div>'
@@ -905,8 +971,15 @@ window.SW = window.SW || {};
             ? '<div class="scan-warn">Added ' + meta.added +
               (meta.added === 1 ? ' more line' : ' more lines') + '.</div>'
             : '') +
-        '<div class="card-head" style="display:flex;align-items:center;gap:8px">' +
-          '<span style="flex:1">Tick who is in on each line</span>' +
+        '<div class="card-head" style="display:flex;align-items:center;gap:8px;' +
+             'flex-wrap:wrap">' +
+          '<span style="flex:1 1 auto">Tick who is in on each line</span>' +
+          // When a scan comes out wrong, the first useful question is which
+          // reader produced it.
+          (meta.by
+            ? '<span style="font-weight:600;text-transform:none;letter-spacing:0;' +
+              'color:var(--muted);font-size:11.5px">read by ' + esc(meta.by) + '</span>'
+            : '') +
         '</div>' +
         '<div class="item-list" id="scan-rows"></div>' +
         '<div style="padding:10px 14px;display:flex;flex-wrap:wrap;gap:8px">' +

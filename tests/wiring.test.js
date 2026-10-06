@@ -1505,13 +1505,57 @@ check('so does one whose free quota is spent',
 check('the screen says which reader it has before anything is picked',
   /request\.method === 'GET'/.test(scanFn) && /\bready:/.test(scanFn) &&
   /function probeCloud/.test(scanJs) &&
-  /never uploaded/.test(scanJs));
+  /sent to be read and are not stored/.test(scanJs));
 check('and the function is run, not just read',
   fs.existsSync('tests/scanfn.test.mjs') &&
   /await scan\(one\(\)\)/.test(fs.readFileSync('tests/scanfn.test.mjs', 'utf8')));
 check('including that a retired model name is not a dead end',
-  /is no longer available to new users/
+  /no longer available to new users/
     .test(fs.readFileSync('tests/scanfn.test.mjs', 'utf8')));
+
+/* ---------------- 42. one kind of reader, several providers ---------------- */
+
+// On-device OCR was worse than nothing: it has never been shown a ₹, reads
+// the symbol as a digit and loses decimal points, so ₹100.00 became ₹10,000
+// — a total wrong by a hundred, saved without anyone noticing which reader
+// produced it.
+check('there is no on-device OCR left to fall back to',
+  !/Tesseract/.test(codeOnly(scanJs)) &&
+  !/tesseract/i.test(noCssComments(fs.readFileSync('netlify.toml', 'utf8'))));
+check('and the page may no longer fetch a wasm engine or its language data',
+  !/wasm-unsafe-eval|tessdata|unpkg/.test(fs.readFileSync('netlify.toml', 'utf8')));
+check('pasting the order text survives, because it needs neither',
+  /SW\.parseReceipt = function/.test(scanJs) && /function renderPaste/.test(scanJs));
+
+check('providers are tried in turn and the first that answers wins',
+  /const PROVIDERS = \[/.test(scanFn) &&
+  /for \(const provider of ready\)/.test(scanFn));
+check('six of them, free tiers included',
+  ['GEMINI_API_KEY', 'OPENAI_API_KEY', 'GROQ_API_KEY', 'MISTRAL_API_KEY',
+   'OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY'].every((k) => scanFn.includes(k)));
+check('model names are discovered live, because they rot',
+  /listModels/.test(scanFn) && /function bestFirst/.test(scanFn));
+check('and a static list is only the fallback for when discovery fails',
+  /if \(!live\) return provider\.fallback/.test(scanFn));
+check('one that rate-limits is put on a cooldown rather than re-asked',
+  /const cooldowns = new Map\(\)/.test(scanFn) && /function coolingFor/.test(scanFn));
+check('and an empty account is told apart from a busy one',
+  /OUT_OF_CREDIT/.test(scanFn) && /needsAttention/.test(scanFn));
+check('every provider honours its own Retry-After',
+  (scanFn.match(/res\.headers\.get\('retry-after'\)/g) || []).length >= 3);
+check('the chain stops before Netlify kills it',
+  /TIME_BUDGET_MS/.test(scanFn) && /function withDeadline/.test(scanFn));
+
+check('when they all fail the scanner says so instead of guessing',
+  /function allBusy/.test(scanJs) && /cloudFailure/.test(scanJs));
+check('naming which were tried and how long to wait',
+  /failure\.tried/.test(scanJs) && /Try again in ' \+ waitFor/.test(scanJs));
+check('and offering the two routes that need no reader',
+  /scan-busy-paste/.test(scanJs) && /scan-busy-hand/.test(scanJs));
+check('a deploy with no key says that, rather than pretending',
+  /function unconfigured/.test(scanJs) && /No reader is set up/.test(scanJs));
+check('and the rows say which model produced them',
+  /read by ' \+ esc\(meta\.by\)/.test(scanJs) && /by: provider\.label/.test(scanFn));
 check('and the README says where the picture goes',
   /GEMINI_API_KEY/.test(readme) && /the screenshots leave the phone/i.test(readme));
 
